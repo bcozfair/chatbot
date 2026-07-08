@@ -82,7 +82,7 @@ export const Login: React.FC = () => {
           {/* Card light header line */}
           <div className="absolute top-0 inset-x-0 h-px bg-gradient-to-r from-transparent via-slate-200 to-transparent"></div>
 
-          <form onSubmit={handleSubmit} className="space-y-6">
+          <form onSubmit={handleSubmit} autoComplete="on" className="space-y-6">
             {/* Error Alert */}
             {error && (
               <div className="flex items-center gap-3 bg-red-50 border border-red-200 p-4 rounded-xl text-red-800 text-sm">
@@ -102,6 +102,8 @@ export const Login: React.FC = () => {
                 </div>
                 <input
                   id="username-input"
+                  name="username"
+                  autoComplete="username"
                   type="text"
                   required
                   disabled={isSubmitting}
@@ -124,6 +126,8 @@ export const Login: React.FC = () => {
                 </div>
                 <input
                   id="password-input"
+                  name="password"
+                  autoComplete="current-password"
                   type={showPassword ? 'text' : 'password'}
                   required
                   disabled={isSubmitting}

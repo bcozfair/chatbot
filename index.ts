@@ -1735,6 +1735,37 @@ app.get('/api/admin/salespersons', adminAuthMiddleware, async (req: any, res: an
   }
 });
 
+// --- API Endpoint: Dashboard stats (counts for summary cards) ---
+app.get('/api/admin/stats', adminAuthMiddleware, async (req: any, res: any) => {
+  console.log(">>> GET /api/admin/stats received!");
+  try {
+    const result = await pool.query(`
+      SELECT
+        (SELECT COUNT(*) FROM quotations)             AS quotations,
+        (SELECT COUNT(*) FROM promotions)             AS promotions,
+        (SELECT COUNT(*) FROM salesperson)            AS salespersons,
+        (SELECT COUNT(*) FROM quotation_rules)        AS quotation_rules,
+        (SELECT COUNT(*) FROM product_optional_links) AS optional_links,
+        (SELECT COUNT(*) FROM product_stock_rules)    AS stock_rules,
+        (SELECT COUNT(*) FROM product_moq_rules)      AS moq_rules
+    `);
+    const row = result.rows[0];
+    // COUNT(*) returns a string in pg — convert to number
+    res.json({
+      quotations: Number(row.quotations),
+      promotions: Number(row.promotions),
+      salespersons: Number(row.salespersons),
+      quotation_rules: Number(row.quotation_rules),
+      optional_links: Number(row.optional_links),
+      stock_rules: Number(row.stock_rules),
+      moq_rules: Number(row.moq_rules),
+    });
+  } catch (err: any) {
+    console.error("GET /api/admin/stats error:", err);
+    res.status(500).json({ error: 'ไม่สามารถดึงข้อมูลสรุปได้' });
+  }
+});
+
 // --- API Endpoint: Delete Signature ---
 app.delete('/api/admin/signatures/:type/:salespersonId', adminAuthMiddleware, async (req: any, res: any) => {
   const { type, salespersonId } = req.params;

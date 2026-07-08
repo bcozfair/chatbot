@@ -21,18 +21,18 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [token, setToken] = useState<string | null>(() => {
-    return localStorage.getItem('admin_token');
+    return sessionStorage.getItem('admin_token');
   });
 
   const [user, setUser] = useState<AdminUser | null>(() => {
-    const storedUser = localStorage.getItem('admin_user');
+    const storedUser = sessionStorage.getItem('admin_user');
     if (storedUser) {
       try {
         return JSON.parse(storedUser);
       } catch (err) {
         console.error('Failed to parse stored user info:', err);
-        localStorage.removeItem('admin_token');
-        localStorage.removeItem('admin_user');
+        sessionStorage.removeItem('admin_token');
+        sessionStorage.removeItem('admin_user');
         return null;
       }
     }
@@ -44,15 +44,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const login = (newToken: string, newUser: AdminUser) => {
     setToken(newToken);
     setUser(newUser);
-    localStorage.setItem('admin_token', newToken);
-    localStorage.setItem('admin_user', JSON.stringify(newUser));
+    sessionStorage.setItem('admin_token', newToken);
+    sessionStorage.setItem('admin_user', JSON.stringify(newUser));
   };
 
   const logout = () => {
     setToken(null);
     setUser(null);
-    localStorage.removeItem('admin_token');
-    localStorage.removeItem('admin_user');
+    sessionStorage.removeItem('admin_token');
+    sessionStorage.removeItem('admin_user');
   };
 
   const isAuthenticated = !!token;

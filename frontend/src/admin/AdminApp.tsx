@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from '../context/AuthContext';
 import { Login } from './Login';
 import { Promotions } from './Promotions';
@@ -23,10 +23,21 @@ import {
   ChevronsRight,
   Menu,
   X,
+  AlertCircle,
 } from 'lucide-react';
 
 type MainTab = 'dashboard' | 'quotations' | 'salespersons' | 'promotions' | 'settings';
 type SubTab = 'quotation' | 'optional' | 'stock' | 'moq';
+
+interface AdminStats {
+  quotations: number;
+  promotions: number;
+  salespersons: number;
+  quotation_rules: number;
+  optional_links: number;
+  stock_rules: number;
+  moq_rules: number;
+}
 
 const BRAND = '#009032';
 const BRAND_SOFT = 'rgba(0, 144, 50, 0.10)';
@@ -56,12 +67,40 @@ const PAGE_TITLES: Record<MainTab, string> = {
 };
 
 function AdminContent() {
-  const { isAuthenticated, isLoading, user, logout } = useAuth();
+  const { isAuthenticated, isLoading, user, token, logout } = useAuth();
   const [activeTab, setActiveTab] = useState<MainTab>('dashboard');
   const [subTab, setSubTab] = useState<SubTab>('quotation');
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [settingsExpanded, setSettingsExpanded] = useState(true);
+  const [stats, setStats] = useState<AdminStats | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
+  const [statsError, setStatsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (activeTab !== 'dashboard' || !token) return;
+    let cancelled = false;
+    const fetchStats = async () => {
+      setStatsLoading(true);
+      setStatsError(null);
+      try {
+        const res = await fetch('/api/admin/stats', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) throw new Error('failed');
+        const data: AdminStats = await res.json();
+        if (!cancelled) setStats(data);
+      } catch {
+        if (!cancelled) setStatsError('ไม่สามารถโหลดข้อมูลสรุปได้');
+      } finally {
+        if (!cancelled) setStatsLoading(false);
+      }
+    };
+    fetchStats();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, token]);
 
   if (isLoading) {
     return (
@@ -87,6 +126,22 @@ function AdminContent() {
     setSubTab(tab);
     setMobileOpen(false);
   };
+
+  const SUMMARY_CARDS: {
+    key: keyof AdminStats;
+    label: string;
+    unit: string;
+    icon: typeof LayoutDashboard;
+    onClick: () => void;
+  }[] = [
+    { key: 'quotations', label: 'ใบเสนอราคา', unit: 'รายการ', icon: FileText, onClick: () => goTo('quotations') },
+    { key: 'promotions', label: 'โปรโมชันส่วนลด', unit: 'รายการ', icon: Tag, onClick: () => goTo('promotions') },
+    { key: 'salespersons', label: 'ลายเซ็นพนักงาน', unit: 'คน', icon: UserCheck, onClick: () => goTo('salespersons') },
+    { key: 'quotation_rules', label: 'เงื่อนไขหลัก', unit: 'รายการ', icon: Sliders, onClick: () => goToSubTab('quotation') },
+    { key: 'optional_links', label: 'สินค้าพ่วงเสริม', unit: 'รายการ', icon: Sliders, onClick: () => goToSubTab('optional') },
+    { key: 'stock_rules', label: 'ระงับเมื่อหมดสต็อก', unit: 'รายการ', icon: Sliders, onClick: () => goToSubTab('stock') },
+    { key: 'moq_rules', label: 'ขั้นต่ำสั่งซื้อ (MOQ)', unit: 'รายการ', icon: Sliders, onClick: () => goToSubTab('moq') },
+  ];
 
   const sidebarWidth = collapsed ? 76 : 264;
 
@@ -310,47 +365,48 @@ function AdminContent() {
                 </div>
               </div>
 
-              {/* Quick menu grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                <div
-                  onClick={() => goTo('quotations')}
-                  className="bg-white border border-slate-200 hover:border-[#009032]/40 rounded-2xl p-6 transition-all group cursor-pointer active:scale-[0.99] shadow-sm"
-                >
-                  <h3 className="text-base font-bold text-slate-900 mb-2" style={{ transition: 'color .15s' }}>
-                    ประวัติใบเสนอราคา
-                  </h3>
-                  <p className="text-slate-500 text-xs leading-relaxed">
-                    ตรวจสอบและส่งออก (Export) ใบเสนอราคาย้อนหลัง
-                  </p>
+              {/* Summary count cards */}
+              {statsError && (
+                <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-red-700 text-sm">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{statsError}</span>
                 </div>
-
-                <div
-                  onClick={() => goTo('promotions')}
-                  className="bg-white border border-slate-200 hover:border-[#009032]/40 rounded-2xl p-6 transition-all group cursor-pointer active:scale-[0.99] shadow-sm"
-                >
-                  <h3 className="text-base font-bold text-slate-900 mb-2">จัดการโปรโมชันส่วนลด</h3>
-                  <p className="text-slate-500 text-xs leading-relaxed">ตั้งค่าโปรโมชันและส่วนลดพิเศษสำหรับลูกค้า</p>
-                </div>
-
-                <div
-                  onClick={() => goTo('salespersons')}
-                  className="bg-white border border-slate-200 hover:border-[#009032]/40 rounded-2xl p-6 transition-all group cursor-pointer active:scale-[0.99] shadow-sm"
-                >
-                  <h3 className="text-base font-bold text-slate-900 mb-2">จัดการลายเซ็นพนักงาน</h3>
-                  <p className="text-slate-500 text-xs leading-relaxed">
-                    อัปโหลดลายเซ็นพนักงานขาย (sales) และแอดมิน (admin)
-                  </p>
-                </div>
-
-                <div
-                  onClick={() => goTo('settings')}
-                  className="bg-white border border-slate-200 hover:border-[#009032]/40 rounded-2xl p-6 transition-all group cursor-pointer active:scale-[0.99] shadow-sm"
-                >
-                  <h3 className="text-base font-bold text-slate-900 mb-2">ตั้งค่าเงื่อนไข & กฎใบเสนอราคา</h3>
-                  <p className="text-slate-500 text-xs leading-relaxed">
-                    กำหนดกฎการรับประกัน, สินค้าพ่วงเสริม, กฎสต็อกสินค้า และสั่งซื้อขั้นต่ำ (MOQ)
-                  </p>
-                </div>
+              )}
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 sm:gap-6">
+                {SUMMARY_CARDS.map(({ key, label, unit, icon: Icon, onClick }) => {
+                  const count = stats ? stats[key] : null;
+                  return (
+                    <button
+                      key={key}
+                      onClick={onClick}
+                      className="text-left bg-white border border-slate-200 hover:border-[#009032]/40 rounded-2xl p-5 transition-all group cursor-pointer active:scale-[0.99] shadow-sm flex flex-col gap-3"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div
+                          className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+                          style={{ backgroundColor: BRAND_SOFT, color: BRAND }}
+                        >
+                          <Icon className="w-5 h-5" />
+                        </div>
+                      </div>
+                      <div>
+                        <div className="flex items-baseline gap-1.5">
+                          {statsLoading || count === null ? (
+                            <span className="inline-block w-12 h-8 rounded-md bg-slate-100 animate-pulse" />
+                          ) : (
+                            <span className="text-3xl font-extrabold text-slate-900 tabular-nums">
+                              {count.toLocaleString('th-TH')}
+                            </span>
+                          )}
+                          <span className="text-xs font-medium text-slate-400">{unit}</span>
+                        </div>
+                        <h3 className="text-sm font-semibold text-slate-600 mt-1 group-hover:text-slate-900 transition-colors">
+                          {label}
+                        </h3>
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           ) : activeTab === 'promotions' ? (
