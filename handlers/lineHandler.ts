@@ -890,6 +890,57 @@ export async function handleEvent(event: any): Promise<any> {
         }
       }
 
+      // 🔎 Trigger: พิมพ์เลขที่ใบเสนอราคาล้วน ๆ (เช่น "QT-260705020") → ตอบปุ่มดาวน์โหลด PDF
+      // ใช้กับ LINE PC ที่ liff.sendMessages ใช้ไม่ได้ และใช้ขอ PDF ย้อนหลังได้ทุกเมื่อ
+      // gate เฉพาะ status 'active' เพื่อไม่ชน flow แก้ไขใบ (edit_quote_number) ที่ user พิมพ์เลขที่เช่นกัน
+      if (
+        salesperson.status === 'active' &&
+        /^\s*(?:(?:QT|QP)-[0-9]+(?:-R[0-9]+)?[\s,]*)+$/i.test(trimmedContent)
+      ) {
+        const quotationNos = trimmedContent.toUpperCase().match(/(?:QT|QP)-[0-9]+(?:-R[0-9]+)?/g) || [];
+        try {
+          const { data: quotes, error: fetchErr } = await (db.from('quotations') as any)
+            .select('id, quotation_no')
+            .in('quotation_no', quotationNos);
+          if (fetchErr) console.error("Fetch quotes by number error:", fetchErr);
+
+          if (quotes && quotes.length > 0) {
+            const reqUrl = process.env.APP_URL || '';
+            const messages: any[] = [];
+            for (const q of quotes) {
+              const quoteNo = q.quotation_no || '-';
+              const pdfLink = `${reqUrl}/download-pdf/${q.id}?openExternalBrowser=1`;
+              messages.push({
+                type: 'template',
+                altText: `ดาวน์โหลดใบเสนอราคา ${quoteNo} (PDF)`,
+                template: {
+                  type: 'buttons',
+                  text: `ดาวน์โหลดใบเสนอราคา ${quoteNo}`,
+                  actions: [
+                    {
+                      type: 'uri',
+                      label: '📥 ดาวน์โหลด PDF',
+                      uri: pdfLink
+                    }
+                  ]
+                }
+              });
+            }
+            return lineClient.replyMessage({
+              replyToken: replyToken,
+              messages: messages.slice(0, 5)
+            });
+          }
+
+          return lineClient.replyMessage({
+            replyToken: replyToken,
+            messages: [{ type: 'text', text: `❌ ไม่พบใบเสนอราคาเลขที่: ${quotationNos.join(', ')}` }]
+          });
+        } catch (err) {
+          console.error("Error processing quotation-number trigger:", err);
+        }
+      }
+
       const cleanText = content.trim().toLowerCase();
 
       if (['แก้ไข', '/edit', 'edit', 'แก้ไขข้อมูล', 'เมนูแก้ไข'].includes(cleanText)) {

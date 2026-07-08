@@ -184,13 +184,13 @@ app.get(['/liff/product-search', '/liff/product-search/product-search'], (req: a
 // --- API: สร้างใบเสนอราคาแบบร่างใหม่ ---
 app.post('/api/quotations', express.json(), async (req: any, res: any) => {
   try {
-    const { userId, customerName, items, status, customerId, contactId } = req.body;
+    const { userId, customerName, items, status, customerId, contactId, preserveDrafts } = req.body;
     if (!userId) {
       return res.status(400).json({ error: 'Missing userId' });
     }
 
     const { insertDraftQuotations } = await import('./services/quotationService.js');
-    const insertedQuotes = await insertDraftQuotations(userId, customerName || ' | ', items || [], status || 'draft', customerId, contactId);
+    const insertedQuotes = await insertDraftQuotations(userId, customerName || ' | ', items || [], status || 'draft', customerId, contactId, !!preserveDrafts);
 
     if (!insertedQuotes || insertedQuotes.length === 0) {
       return res.status(500).json({ error: 'Failed to create quotation' });
@@ -1016,6 +1016,11 @@ app.post('/api/quotation/:id/confirm', express.json(), async (req: any, res: any
 
     // Enrich ก่อนเพื่อให้ quote.items มีข้อมูลสำหรับตรวจราคาขั้นต่ำและ getQuotationNo
     const quote = await enrichQuotationData(quoteRaw);
+
+    // กันการยืนยันใบเสนอราคาที่ไม่มีสินค้า (defense-in-depth เผื่อ frontend ถูก bypass)
+    if (!quote.items || !Array.isArray(quote.items) || quote.items.length === 0) {
+      return res.status(400).json({ error: 'ไม่สามารถยืนยันใบเสนอราคาที่ไม่มีสินค้าได้' });
+    }
 
     // ตรวจสอบราคาสินค้าแต่ละรายการหลังรวมส่วนลดแล้วต้อง >= minimum_sales_price หรือตรงเงื่อนไขโปรโมชัน
     if (quote.items && Array.isArray(quote.items)) {

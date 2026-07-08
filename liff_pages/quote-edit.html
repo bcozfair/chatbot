@@ -1074,6 +1074,36 @@
       </div>
     </div>
 
+    <!-- Success Modal (หลังยืนยันสำเร็จ — ใช้ได้ทุกแพลตฟอร์ม) -->
+    <div id="successModal" class="alert-modal-overlay" style="display: none">
+      <div class="alert-modal-card">
+        <div class="alert-modal-header">
+          <span class="alert-modal-icon">✅</span>
+          <h3 class="alert-modal-title">ยืนยันใบเสนอราคาสำเร็จ</h3>
+        </div>
+        <div
+          class="alert-modal-body"
+          id="successModalBody"
+          style="color: var(--text); font-size: 13px; line-height: 1.7"
+        ></div>
+        <div
+          class="alert-modal-footer"
+          style="display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap"
+        >
+          <button
+            class="alert-modal-btn"
+            id="successModalClose"
+            style="background: var(--text-muted)"
+          >
+            ปิด
+          </button>
+          <button class="alert-modal-btn" id="successModalCopy">
+            📋 คัดลอกข้อความ
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- Main Content -->
     <div class="container" id="mainContent" style="display: none">
       <div id="quotesContainer"></div>
@@ -1184,6 +1214,123 @@
             if (e.target === modal) close(false);
           };
         });
+      }
+
+      // เปิดลิงก์ (PDF) ให้รองรับทั้งใน LINE client และเบราว์เซอร์ปกติ
+      function openExternal(url) {
+        try {
+          if (liff.isInClient() && liff.openWindow) {
+            liff.openWindow({ url, external: true });
+            return;
+          }
+        } catch (e) {}
+        window.open(url, "_blank");
+      }
+
+      // คัดลอกข้อความลง clipboard (fallback: textarea + execCommand สำหรับ webview เก่า)
+      async function copyToClipboard(text) {
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(text);
+            return true;
+          }
+        } catch (e) {}
+        try {
+          const ta = document.createElement("textarea");
+          ta.value = text;
+          ta.style.position = "fixed";
+          ta.style.opacity = "0";
+          document.body.appendChild(ta);
+          ta.select();
+          const ok = document.execCommand("copy");
+          ta.remove();
+          return ok;
+        } catch (e) {
+          return false;
+        }
+      }
+
+      // Success modal หลังยืนยัน — path ของ LINE PC / เบราว์เซอร์ (liff.sendMessages ใช้ไม่ได้)
+      // ให้ user คัดลอกข้อความ trigger ไปส่งในแชทเอง → บอท reply ปุ่ม PDF = มีประวัติในแชทเหมือนมือถือ
+      // results = [{ quotation_no, pdf_link }, ...]; triggerMessage = ข้อความกระตุ้นให้บอท reply PDF
+      function showConfirmSuccessModal(results, triggerMessage) {
+        const modal = document.getElementById("successModal");
+        const body = document.getElementById("successModalBody");
+        const btnCopy = document.getElementById("successModalCopy");
+        const btnClose = document.getElementById("successModalClose");
+        if (!modal || !body) return;
+
+        const list = (results || []).filter(Boolean);
+        const nos = list
+          .map((r) => r.quotation_no)
+          .filter(Boolean)
+          .join(", ");
+
+        // ลิงก์ดาวน์โหลด PDF ตรง — แสดงเป็นตัวเลือกเสริมเสมอ
+        const pdfLinksHtml = list
+          .filter((r) => r.pdf_link)
+          .map(
+            (r) =>
+              `<a href="#" class="success-pdf-link" data-url="${r.pdf_link}" style="display:inline-flex;align-items:center;gap:4px;margin:4px 6px 0 0;padding:6px 12px;border-radius:8px;background:var(--green-light);color:var(--green-dark);font-weight:700;font-size:12px;text-decoration:none;">📥 ${r.quotation_no || "ดาวน์โหลด PDF"}</a>`,
+          )
+          .join("");
+
+        body.innerHTML = `
+          <div style="font-weight:700;color:var(--green-dark);">เลขที่: ${nos || "-"}</div>
+          <div style="margin-top:8px;font-size:12px;color:var(--text-muted);">📋 คัดลอกข้อความ → วางส่งในแชท เพื่อรับลิงก์ PDF</div>
+          <div id="successTriggerBox" style="display:none;margin-top:6px;padding:6px 8px;background:var(--white);border:1px dashed var(--border-strong);border-radius:6px;font-size:11px;color:var(--text);white-space:pre-wrap;word-break:break-word;">${triggerMessage || ""}</div>
+          <div id="successPdfWrap" style="margin-top:10px;">${pdfLinksHtml}</div>
+        `;
+
+        // ผูก event ลิงก์ PDF
+        body.querySelectorAll(".success-pdf-link").forEach((a) => {
+          a.addEventListener("click", (e) => {
+            e.preventDefault();
+            openExternal(a.dataset.url);
+          });
+        });
+
+        const closeModal = () => {
+          modal.classList.remove("show");
+          setTimeout(() => (modal.style.display = "none"), 250);
+        };
+
+        // ปุ่ม "คัดลอกข้อความ" → copy trigger ไว้ให้ user วางส่งในแชทเอง
+        if (btnCopy) {
+          btnCopy.style.display = triggerMessage ? "" : "none";
+          btnCopy.disabled = false;
+          btnCopy.textContent = "📋 คัดลอกข้อความ";
+          btnCopy.onclick = async () => {
+            const ok = await copyToClipboard(triggerMessage);
+            if (ok) {
+              btnCopy.textContent = "✓ คัดลอกแล้ว";
+            } else {
+              // คัดลอกอัตโนมัติไม่ได้ → เผยกล่องข้อความให้ select เอง
+              btnCopy.textContent = "⚠️ คัดลอกเองจากกล่องด้านบน";
+              const box = document.getElementById("successTriggerBox");
+              if (box) {
+                box.style.display = "block";
+                const range = document.createRange();
+                range.selectNodeContents(box);
+                const sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(range);
+              }
+            }
+          };
+        }
+
+        if (btnClose) {
+          btnClose.onclick = () => {
+            try {
+              liff.closeWindow();
+            } catch (e) {}
+            closeModal();
+          };
+        }
+
+        modal.style.display = "flex";
+        setTimeout(() => modal.classList.add("show"), 10);
       }
 
       // ── Elements ──
@@ -1491,6 +1638,8 @@
 
         updateCustomerDetailsUI();
         fetchAndRenderContacts(firstQuote.customer_id, meta.contact);
+        // อัปเดตสถานะปุ่มยืนยันทันที (โดยเฉพาะกรณีจำนวนสินค้าเปลี่ยน) ก่อน fetch contacts เสร็จ
+        validateContactsAndEnableConfirm();
         checkDirty();
       }
 
@@ -1501,6 +1650,15 @@
           quote.useGlobalDiscount = shouldUseGlobalDiscount(quote);
         const isGlobalActive = quote.useGlobalDiscount;
         container.innerHTML = "";
+
+        if (quote.items.length === 0) {
+          container.innerHTML = `
+          <div class="empty-state" style="padding:24px 16px;">
+            <div class="icon">🛒</div>
+            <div class="msg">ยังไม่มีสินค้าในใบนี้<br>ค้นหาด้านล่างเพื่อเพิ่มสินค้า</div>
+          </div>`;
+          return;
+        }
 
         quote.items.forEach((item, idx) => {
           const itemTotal = calcItemTotal(item);
@@ -1731,15 +1889,10 @@
         );
         if (!confirmed) return;
         quotesData[qIdx].items.splice(iIdx, 1);
-        let quoteDeleted = false;
-        if (quotesData[qIdx].items.length === 0) {
-          cancelSingleQuote(quotesData[qIdx].id);
-          quotesData.splice(qIdx, 1);
-          originalData.splice(qIdx, 1);
-          quoteDeleted = true;
-        }
+        // ไม่ยกเลิกใบอัตโนมัติเมื่อสินค้าหมด — เก็บการ์ดไว้ในสถานะว่างให้เพิ่มสินค้ากลับได้
+        // (ใบว่างจะถูกเก็บกวาดตอนกดยืนยัน ดู confirmQuotes)
         render();
-        if (!quoteDeleted) triggerAutoSave();
+        triggerAutoSave();
       }
 
       async function cancelSingleQuote(quoteId) {
@@ -1914,16 +2067,20 @@
         const warningEl = document.getElementById("contact-warning-global");
         if (!quotesData[0]) return;
         const meta = parseCustomerMeta(quotesData[0]);
+        // ต้องมีสินค้าอย่างน้อย 1 รายการในบางใบ ถึงจะกดยืนยันได้
+        const hasAnyItems = quotesData.some(
+          (q) => q.items && q.items.length > 0,
+        );
         if (meta.revise_from) {
           if (warningEl) warningEl.style.display = "none";
           if (btnConfirm) {
-            btnConfirm.disabled = false;
-            btnConfirm.style.opacity = "1";
-            btnConfirm.style.pointerEvents = "auto";
+            btnConfirm.disabled = !hasAnyItems;
+            btnConfirm.style.opacity = hasAnyItems ? "1" : "0.5";
+            btnConfirm.style.pointerEvents = hasAnyItems ? "auto" : "none";
           }
           return;
         }
-        let allValid = true;
+        let allValid = hasAnyItems;
         if (!quotesData[0].customer_id) {
           allValid = false;
           if (warningEl) {
@@ -2125,10 +2282,36 @@
       async function addProductToQuote(prod, qIdx) {
         const targetIsTht = prod.quote_company === "THT";
 
-        let targetQIdx = quotesData.findIndex((q) => {
+        const targetQIdx = quotesData.findIndex((q) => {
           return (q.quote_company === "THT") === targetIsTht;
         });
 
+        // สร้าง item ใหม่ก่อน (ใช้ item แรกของใบเป้าหมายเพื่อ inherit ส่วนลด; ใบใหม่ = 0)
+        const stock = Number(prod.stock) || 0;
+        const refQuote = targetQIdx !== -1 ? quotesData[targetQIdx] : null;
+        const first = refQuote && refQuote.items ? refQuote.items[0] : null;
+        const newItem = {
+          product_id: prod.product_id, // ★ กุญแจหลักที่ backend ใช้คัดกรอง/validate — ห้ามหาย
+          internal_reference: prod.internal_reference || "",
+          brand: prod.brand || "",
+          product_code: prod.code,
+          model: prod.code,
+          name: prod.name,
+          quantity: 1,
+          price: prod.price,
+          discount_1: first ? first.discount_1 || 0 : 0,
+          discount_2: first ? first.discount_2 || 0 : 0,
+          production: prod.production || "",
+          stock,
+          product_sub_category: prod.category || "",
+          sales_description: prod.sales_description || "",
+        };
+        if (1 > stock)
+          showCustomAlert(
+            `ระวัง: สินค้าไม่เพียงพอ (สต็อกพร้อมส่ง: ${stock} ชิ้น, ต้องการ: 1 ชิ้น) ขาดอีก ${1 - stock} ชิ้นจะต้องรอการผลิตหรือสั่งซื้อ`,
+          );
+
+        // ── ไม่มีใบของบริษัทสินค้านี้ → แยกใบใหม่ (สร้างพร้อมสินค้าเลย + ห้ามลบ draft เดิม) ──
         if (targetQIdx === -1) {
           updateAllSaveStatus("⏳ กำลังแยกใบเสนอราคาใหม่...", "saving");
           try {
@@ -2153,18 +2336,20 @@
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                userId,
+                userId: firstQuote.user_id || userId, // ★ สร้างใบใหม่ภายใต้เจ้าของใบเดิม (salesperson ที่ valid) ไม่ใช่ผู้เปิด LIFF (กัน FK 23503)
                 customerName,
+                customerId: firstQuote.customer_id || null,
+                contactId: firstQuote.contact_id || null,
                 status: "draft",
-                items: [],
+                items: [newItem], // ★ ส่งสินค้าไปกับการสร้างเลย (กัน 500 จาก items ว่าง)
+                preserveDrafts: true, // ★ ห้ามลบ draft เดิม (ใบที่กำลังแก้อยู่)
               }),
             });
             if (!resp.ok)
               throw new Error("Failed to create new quotation on server");
 
             const newQuote = await resp.json();
-            quotesData.push(newQuote);
-            targetQIdx = quotesData.length - 1;
+            quotesData.push(newQuote); // ใบใหม่มีสินค้าอยู่แล้ว ไม่ต้อง push ซ้ำ
 
             const url = new URL(window.location);
             url.searchParams.set(
@@ -2177,35 +2362,18 @@
               "➕ แยกใบเสนอราคาใหม่สำหรับสินค้า " +
                 (targetIsTht ? "THT" : "PM"),
             );
+            render();
+            triggerAutoSave();
           } catch (err) {
             console.error("Create new quotation error:", err);
             showToast("❌ ไม่สามารถแยกใบเสนอราคาได้: " + err.message, "error");
             updateAllSaveStatus("⚠️ บันทึกไม่สำเร็จ", "error");
-            return;
           }
+          return;
         }
 
+        // ── มีใบของบริษัทนี้แล้ว → เพิ่มเข้าใบนั้น ──
         const quote = quotesData[targetQIdx];
-        const stock = Number(prod.stock) || 0;
-        const first = quote.items[0];
-        const newItem = {
-          product_code: prod.code,
-          model: prod.code,
-          name: prod.name,
-          quantity: 1,
-          price: prod.price,
-          discount_1: first ? first.discount_1 || 0 : 0,
-          discount_2: first ? first.discount_2 || 0 : 0,
-          production: prod.production || "",
-          stock,
-          product_sub_category: prod.category || "",
-          sales_description: prod.sales_description || "",
-        };
-        if (1 > stock)
-          showCustomAlert(
-            `ระวัง: สินค้าไม่เพียงพอ (สต็อกพร้อมส่ง: ${stock} ชิ้น, ต้องการ: 1 ชิ้น) ขาดอีก ${1 - stock} ชิ้นจะต้องรอการผลิตหรือสั่งซื้อ`,
-          );
-
         if (!quote.items) quote.items = [];
         quote.items.push(newItem);
         render();
@@ -2296,6 +2464,11 @@
       });
 
       async function confirmQuotes() {
+        // ต้องมีสินค้าอย่างน้อย 1 รายการ (backup เผื่อสถานะปุ่มไม่ sync)
+        if (!quotesData.some((q) => q.items && q.items.length > 0)) {
+          showCustomAlert("กรุณาเพิ่มสินค้าอย่างน้อย 1 รายการก่อนยืนยัน");
+          return;
+        }
         if (autoSaveTimeout || hasChanges) {
           if (autoSaveTimeout) clearTimeout(autoSaveTimeout);
           updateAllSaveStatus("⏳ กำลังบันทึก...", "saving");
@@ -2319,6 +2492,18 @@
         loaderScreen.style.pointerEvents = "auto";
         loaderScreen.style.display = "flex";
         try {
+          // เก็บกวาดใบที่ว่าง (เช่นเคส PM+THT ที่ล้างสินค้าไปใบหนึ่ง) ก่อนยืนยัน
+          const emptyQuotes = quotesData.filter(
+            (q) => !q.items || q.items.length === 0,
+          );
+          for (const q of emptyQuotes) {
+            await cancelSingleQuote(q.id);
+          }
+          if (emptyQuotes.length > 0) {
+            const emptyIds = new Set(emptyQuotes.map((q) => q.id));
+            quotesData = quotesData.filter((q) => !emptyIds.has(q.id));
+            originalData = originalData.filter((q) => !emptyIds.has(q.id));
+          }
           const results = [];
           for (const quote of quotesData) {
             const resp = await fetch(`/api/quotation/${quote.id}/confirm`, {
@@ -2339,25 +2524,38 @@
             .filter(Boolean)
             .join(", ");
           const triggerMessage = `📄 ยืนยันใบเสนอราคาสำเร็จ\n(เลขที่: ${quoteNos})`;
-          let messageSent = false;
-          if (liff.isInClient()) {
+
+          // ── แจ้งผล/ปิดหน้าต่าง ให้ได้ผลลัพธ์เหมือนกันทั้งมือถือ & LINE PC ──
+          const os = (() => {
+            try {
+              return liff.getOS();
+            } catch (e) {
+              return "web";
+            }
+          })();
+          const mobileInClient =
+            liff.isInClient() && (os === "ios" || os === "android");
+
+          if (mobileInClient) {
+            // มือถือใน LINE: auto ส่ง trigger (บอท reply PDF) แล้วปิดหน้าเอง
+            let sent = false;
             try {
               await liff.sendMessages([{ type: "text", text: triggerMessage }]);
-              messageSent = true;
+              sent = true;
             } catch (e) {
               console.error("sendMessages error:", e);
             }
+            if (sent) {
+              liff.closeWindow();
+              return;
+            }
+            // auto ส่งไม่ได้ → ตกไปแสดง modal (กันหน้าค้าง)
           }
-          if (messageSent) {
-          } else {
-            loaderScreen.style.display = "none";
-            btnConfirm.disabled = false;
-            btnConfirm.innerHTML = "✅ ยืนยัน";
-            showToast(
-              "⚠️ ไม่สามารถส่งข้อความเข้าแชทได้อัตโนมัติ กรุณาเปิดใหม่จาก LINE โดยตรงครับ",
-              "error",
-            );
-          }
+
+          // LINE PC / web / เบราว์เซอร์นอก (หรือมือถือที่ auto ส่งไม่ได้):
+          // แสดง modal ให้ผู้ใช้กดปุ่มส่งเข้าแชทเอง (user gesture) + มีลิงก์ PDF สำรอง
+          loaderScreen.style.display = "none";
+          showConfirmSuccessModal(results, triggerMessage);
         } catch (err) {
           console.error("Confirm error:", err);
           showToast("❌ ยืนยันไม่สำเร็จ: " + err.message, "error");

@@ -158,16 +158,20 @@ export async function insertDraftQuotations(
   itemsForDb: any[] | null,
   status: string,
   customerId?: number | null,
-  contactId?: number | null
+  contactId?: number | null,
+  preserveDrafts: boolean = false
 ): Promise<any[] | null> {
   // ลบร่างใบเสนอราคาเดิมที่ค้างอยู่ทั้งหมด ของผู้ใช้รายนี้ออกถาวรทันที
-  try {
-    await pool.query(
-      "DELETE FROM quotations WHERE user_id = $1 AND status IN ('pending_company', 'pending_contact', 'draft')",
-      [userId]
-    );
-  } catch (err) {
-    console.error("[insertDraftQuotations] Exception during deleting old drafts:", err);
+  // ยกเว้นกรณี preserveDrafts=true (เช่น การแยกใบเพิ่มระหว่างแก้ไข) ที่ต้องเก็บใบเดิมไว้
+  if (!preserveDrafts) {
+    try {
+      await pool.query(
+        "DELETE FROM quotations WHERE user_id = $1 AND status IN ('pending_company', 'pending_contact', 'draft')",
+        [userId]
+      );
+    } catch (err) {
+      console.error("[insertDraftQuotations] Exception during deleting old drafts:", err);
+    }
   }
 
   const items = itemsForDb || [];
