@@ -9,6 +9,15 @@ import { computeAdminKey, cleanAdminName } from "./services/adminService.js";
 
 
 
+// แยก sales_description เป็นบรรทัดตาม \n เดิมในข้อมูล (trim + ตัดบรรทัดว่างทิ้ง)
+function splitSalesDescriptionLines(desc: string): string[] {
+  return String(desc)
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+}
+
 export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string | null): Promise<Uint8Array> {
   const itemsList = quoteData.items || [];
   const itemSnapshots = quoteData.item_details || [];
@@ -303,8 +312,14 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
   function getItemWeight(item: any) {
     let weight = 1.0; // base row
     if (item.sales_description && item.sales_description.trim()) {
-      const descLen = item.sales_description.trim().length;
-      weight += descLen > 80 ? 1.0 : 0.5;
+      const descLines = splitSalesDescriptionLines(item.sales_description);
+      // นับบรรทัดแสดงผลจริง: บรรทัด description (font 10px) ≈ 0.4 หน่วยเทียบแถวฐาน 35px
+      // และบรรทัดยาวเกิน ~70 ตัวอักษร (ความกว้างคอลัมน์ DESCRIPTION) จะ wrap เพิ่ม
+      const visualLines = descLines.reduce(
+        (s, l) => s + Math.max(1, Math.ceil(l.length / 70)),
+        0,
+      );
+      weight += visualLines * 0.4;
     }
     if (item.remark && item.remark.trim()) {
       weight += 0.4;
@@ -388,7 +403,10 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
 
         let salesDescHtml = "";
         if (item.sales_description && item.sales_description.trim()) {
-          salesDescHtml = `<div style="color: #444; font-size: 10px; margin-top: 1px;">${item.sales_description.trim()}</div>`;
+          const descLines = splitSalesDescriptionLines(item.sales_description);
+          if (descLines.length > 0) {
+            salesDescHtml = `<div style="color: #444; font-size: 10px; margin-top: 1px;">${descLines.join("<br>")}</div>`;
+          }
         }
 
         return `
