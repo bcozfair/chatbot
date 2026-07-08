@@ -3,7 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { User, Lock, Eye, EyeOff, AlertCircle, Loader2 } from 'lucide-react';
 
 export const Login: React.FC = () => {
-  const { login } = useAuth();
+  const { login, sessionExpired } = useAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -83,6 +83,14 @@ export const Login: React.FC = () => {
           <div className="absolute top-0 inset-x-0 h-px bg-gradient-to-r from-transparent via-slate-200 to-transparent"></div>
 
           <form onSubmit={handleSubmit} autoComplete="on" className="space-y-6">
+            {/* Session Expired Notice */}
+            {sessionExpired && !error && (
+              <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 p-4 rounded-xl text-amber-800 text-sm">
+                <AlertCircle className="w-5 h-5 text-amber-500 flex-shrink-0" />
+                <span>เซสชันหมดอายุ กรุณาเข้าสู่ระบบอีกครั้ง</span>
+              </div>
+            )}
+
             {/* Error Alert */}
             {error && (
               <div className="flex items-center gap-3 bg-red-50 border border-red-200 p-4 rounded-xl text-red-800 text-sm">

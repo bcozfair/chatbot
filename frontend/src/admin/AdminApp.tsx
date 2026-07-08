@@ -266,7 +266,7 @@ function AdminContent() {
           )}
           <button
             id="admin-logout-btn"
-            onClick={logout}
+            onClick={() => logout()}
             title="ออกจากระบบ"
             aria-label="ออกจากระบบ"
             className="flex items-center justify-center w-8 h-8 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-all active:scale-[0.95] shrink-0"
