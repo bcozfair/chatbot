@@ -1,0 +1,39 @@
+{
+  "name": "myexpress",
+  "version": "1.0.0",
+  "description": "",
+  "license": "ISC",
+  "author": "",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "dev": "tsx watch index.ts",
+    "sync:products": "tsx scripts/sync/syncProducts.ts",
+    "sync:customers": "tsx scripts/sync/syncCustomers.ts",
+    "sync:saleorders": "tsx scripts/sync/syncSaleorders.ts",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@line/bot-sdk": "^11.0.0",
+    "bcryptjs": "^3.0.3",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "fuse.js": "^6.6.2",
+    "json2csv": "^6.0.0-alpha.2",
+    "jsonwebtoken": "^9.0.3",
+    "openai": "^6.38.0",
+    "pg": "^8.21.0",
+    "puppeteer": "^25.0.2",
+    "thai-baht-text": "^2.0.5"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/express": "^5.0.6",
+    "@types/json2csv": "^5.0.7",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^25.9.3",
+    "@types/pg": "^8.20.0",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  }
+}

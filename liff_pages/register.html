@@ -1,0 +1,1122 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ลงทะเบียนพนักงานขาย 🏢</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;600;700&family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
+
+  <style>
+    :root {
+      --green-dark:   #157015;
+      --green:        #1e8f1e;
+      --green-mid:    #27a827;
+      --green-light:  #e6f5e6;
+      --green-pale:   #f0faf0;
+      --white:        #ffffff;
+      --surface:      #f5f8f5;
+      --border:       #d0e8d0;
+      --border-strong:#a8cfa8;
+      --text:         #0d2b0d;
+      --text-mid:     #3a5c3a;
+      --text-muted:   #6b8f6b;
+      --text-light:   #9ab89a;
+      --danger:       #d42b2b;
+      --danger-bg:    #fff0f0;
+      --warning:      #b85c00;
+      --shadow-sm:    0 1px 4px rgba(0,60,0,0.07);
+      --shadow:       0 2px 12px rgba(0,60,0,0.10);
+      --shadow-lg:    0 8px 32px rgba(0,60,0,0.14);
+      --radius:       12px;
+      --radius-sm:    8px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    html { font-size: 16px; }
+
+    body {
+      font-family: 'Sarabun', -apple-system, sans-serif;
+      background: var(--surface);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 16px 12px 40px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ─── TOP BANNER (mimics app-header) ─── */
+    .page-banner {
+      width: 100%;
+      max-width: 520px;
+      background: var(--white);
+      border: 1.5px solid var(--border);
+      border-top: 3px solid var(--green);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      margin-bottom: 12px;
+      box-shadow: var(--shadow-sm);
+      text-align: center;
+    }
+    .page-banner h1 {
+      font-family: 'Outfit', sans-serif;
+      font-size: 17px;
+      font-weight: 700;
+      color: var(--green-dark);
+      letter-spacing: -0.2px;
+      margin-bottom: 4px;
+    }
+    .page-banner p {
+      font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.55;
+    }
+
+    /* ─── CARD ─── */
+    .container {
+      width: 100%;
+      max-width: 520px;
+      background: var(--white);
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 20px 16px;
+      animation: fadeUp 0.35s cubic-bezier(0.16,1,0.3,1);
+    }
+
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(14px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ─── SECTION TITLE ─── */
+    .section-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text-mid);
+      letter-spacing: 0.3px;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    /* ─── PROFILE FORM ─── */
+    .profile-form {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    .form-group label {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .form-group input {
+      font-family: 'Sarabun', sans-serif;
+      font-size: 15px;
+      padding: 10px 13px;
+      border: 1.5px solid var(--border-strong);
+      border-radius: var(--radius);
+      background: var(--green-pale);
+      color: var(--text);
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+      width: 100%;
+    }
+
+    .form-group input::placeholder { color: var(--text-light); }
+
+    .form-group input:focus {
+      border-color: var(--green);
+      background: var(--white);
+      box-shadow: 0 0 0 3px rgba(30,143,30,0.12);
+    }
+
+    /* ─── NAME AUTOCOMPLETE ─── */
+    .name-row {
+      position: relative;
+    }
+    .name-row input { width: 100%; }
+
+    .ac-dropdown {
+      display: none;
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0; right: 0;
+      background: var(--white);
+      border: 1.5px solid var(--border-strong);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      z-index: 200;
+      max-height: 220px;
+      overflow-y: auto;
+    }
+    .ac-dropdown.open { display: block; }
+    .ac-dropdown::-webkit-scrollbar { width: 4px; }
+    .ac-dropdown::-webkit-scrollbar-track { background: transparent; }
+    .ac-dropdown::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 99px; }
+
+    .ac-item {
+      padding: 10px 13px;
+      font-size: 14px;
+      color: var(--text);
+      cursor: pointer;
+      transition: background 0.12s;
+      border-bottom: 1px solid var(--border);
+    }
+    .ac-item:last-child { border-bottom: none; }
+    .ac-item:hover, .ac-item.highlighted { background: var(--green-light); color: var(--green-dark); }
+    .ac-item mark {
+      background: transparent;
+      color: var(--green-dark);
+      font-weight: 700;
+    }
+    .ac-empty {
+      padding: 10px 13px;
+      font-size: 13px;
+      color: var(--text-muted);
+      font-style: italic;
+    }
+
+    #suggestStatus {
+      font-size: 12px;
+      color: var(--text-muted);
+      display: none;
+      margin-top: 3px;
+    }
+
+    /* ─── DIVIDER ─── */
+    .divider {
+      border: none;
+      border-top: 1.5px solid var(--border);
+      margin: 16px 0;
+    }
+
+    /* ─── BRANCH CHIP (ในช่องเลือก มีปุ่ม × ลบได้) ─── */
+    .branch-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 5px 7px 5px 11px;
+      background: var(--green-light);
+      border: 1.5px solid var(--green-mid);
+      border-radius: 99px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--green-dark);
+    }
+    .chip-remove {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px; height: 18px;
+      flex-shrink: 0;
+      border: none;
+      border-radius: 50%;
+      background: rgba(30,143,30,0.18);
+      color: var(--green-dark);
+      font-size: 13px;
+      line-height: 1;
+      padding: 0;
+      cursor: pointer;
+      transition: background 0.12s, color 0.12s;
+    }
+    .chip-remove:hover, .chip-remove:active { background: rgba(212,43,43,0.16); color: var(--danger); }
+
+    /* ─── SELECTOR FIELD (ช่องเลือก แบบเดียวกันทั้งสาขา/แอดมิน) ─── */
+    .selector-field {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 56px;
+      padding: 12px 14px;
+      margin-bottom: 8px;
+      background: var(--green-pale);
+      border: 1.5px solid var(--border-strong);
+      border-radius: var(--radius);
+      font-family: 'Sarabun', sans-serif;
+      text-align: left;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+    }
+    .selector-field:hover  { border-color: var(--green-mid); background: var(--green-light); }
+    .selector-field:active { background: var(--green-light); }
+    .selector-field.filled { background: var(--white); border-color: var(--green-mid); }
+
+    .field-content {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+    }
+    .field-placeholder {
+      font-size: 14px;
+      color: var(--text-light);
+    }
+    .field-chevron {
+      flex-shrink: 0;
+      font-size: 22px;
+      line-height: 1;
+      color: var(--green-mid);
+      font-weight: 400;
+    }
+
+    /* chips สาขาในช่อง (display-only) */
+    .field-content .branch-chip {
+      cursor: pointer;
+      animation: none;
+    }
+
+    /* การ์ดแอดมินในช่อง */
+    .admin-meta { flex: 1; min-width: 0; }
+    .admin-meta .admin-name {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--green-dark);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .admin-meta .admin-phone {
+      font-size: 12px;
+      color: var(--text-mid);
+      font-family: 'Outfit', 'Sarabun', monospace;
+      margin-top: 2px;
+    }
+
+    /* ─── SIG BADGE ─── */
+    .sig-badge {
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 9px;
+      border-radius: 99px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .sig-badge.has  { background: rgba(30,143,30,0.14); color: var(--green-dark); }
+    .sig-badge.none { background: var(--danger-bg); color: var(--warning); }
+
+    .picker-item .admin-sub {
+      font-size: 11px;
+      color: var(--text-muted);
+      font-weight: 400;
+      margin-top: 2px;
+    }
+
+    /* ─── PICKER: search box + selected state + footer ─── */
+    .picker-search-wrap { padding: 10px 16px 6px; flex-shrink: 0; }
+    .picker-search {
+      width: 100%;
+      font-family: 'Sarabun', sans-serif;
+      font-size: 14px;
+      padding: 9px 12px;
+      border: 1.5px solid var(--border-strong);
+      border-radius: var(--radius);
+      background: var(--green-pale);
+      color: var(--text);
+      outline: none;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .picker-search:focus { border-color: var(--green); background: var(--white); }
+
+    .picker-item.selected { background: var(--green-light); color: var(--green-dark); }
+    .picker-check {
+      flex-shrink: 0;
+      width: 22px; height: 22px;
+      border-radius: 50%;
+      border: 1.5px solid var(--border-strong);
+      background: var(--white);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      color: transparent;
+      transition: background 0.12s, border-color 0.12s, color 0.12s;
+    }
+    .picker-item.selected .picker-check {
+      background: var(--green);
+      border-color: var(--green);
+      color: var(--white);
+    }
+
+    .picker-footer {
+      flex-shrink: 0;
+      padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+      border-top: 1px solid var(--border);
+    }
+    .btn-sheet-done {
+      width: 100%;
+      height: 44px;
+      border: none;
+      border-radius: var(--radius);
+      background: var(--green);
+      color: var(--white);
+      font-family: 'Sarabun', sans-serif;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .btn-sheet-done:hover, .btn-sheet-done:active { background: var(--green-dark); }
+
+    /* ─── BRANCH PICKER (bottom-sheet style on mobile) ─── */
+    .picker-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.35);
+      z-index: 300;
+      align-items: flex-end;
+    }
+    .picker-overlay.open { display: flex; }
+
+    .picker-sheet {
+      width: 100%;
+      background: var(--white);
+      border-radius: 18px 18px 0 0;
+      padding: 0 0 env(safe-area-inset-bottom, 12px);
+      max-height: 70vh;
+      display: flex;
+      flex-direction: column;
+      animation: slideUp 0.25s cubic-bezier(0.16,1,0.3,1);
+    }
+    @keyframes slideUp {
+      from { transform: translateY(100%); }
+      to   { transform: translateY(0); }
+    }
+
+    .picker-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 16px 10px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .picker-header span {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .picker-close {
+      background: none;
+      border: none;
+      font-size: 20px;
+      cursor: pointer;
+      color: var(--text-muted);
+      padding: 0 4px;
+      line-height: 1;
+    }
+
+    .picker-list {
+      overflow-y: auto;
+      flex: 1;
+      padding: 6px 0;
+    }
+    .picker-list::-webkit-scrollbar { width: 4px; }
+    .picker-list::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 99px; }
+
+    .picker-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 13px 16px;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+      cursor: pointer;
+      transition: background 0.12s;
+      border-bottom: 1px solid var(--border);
+    }
+    .picker-item:last-child { border-bottom: none; }
+    .picker-item:hover, .picker-item:active { background: var(--green-pale); }
+    .picker-no-item {
+      padding: 20px 16px;
+      font-size: 13px;
+      color: var(--text-light);
+      text-align: center;
+      font-style: italic;
+    }
+
+    /* ─── SAVE BUTTON ─── */
+    .btn-save {
+      width: 100%;
+      height: 48px;
+      border: none;
+      border-radius: var(--radius);
+      background: var(--green);
+      color: var(--white);
+      font-family: 'Sarabun', sans-serif;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      box-shadow: 0 3px 10px rgba(30,143,30,0.22);
+      transition: background 0.15s, box-shadow 0.15s;
+    }
+    .btn-save:hover  { background: var(--green-dark); box-shadow: 0 5px 14px rgba(30,143,30,0.30); }
+    .btn-save:active { background: var(--green-dark); }
+    .btn-save:disabled {
+      background: var(--text-light);
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+
+    /* ─── FOOTER ─── */
+    .footer {
+      margin-top: 16px;
+      font-size: 11px;
+      color: var(--text-light);
+      text-align: center;
+    }
+
+    /* ─── LOADER ─── */
+    .loader-screen {
+      position: fixed; inset: 0;
+      background: var(--white);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 999;
+      transition: opacity 0.35s;
+    }
+
+    .loader {
+      width: 36px; height: 36px;
+      border: 3px solid var(--green-light);
+      border-top-color: var(--green);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-bottom: 14px;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .loader-text {
+      font-size: 14px;
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Loader Screen -->
+  <div id="loaderScreen" class="loader-screen">
+    <div class="loader"></div>
+    <div class="loader-text" id="loaderText">กำลังโหลดข้อมูลระบบ LIFF...</div>
+  </div>
+
+  <!-- Banner -->
+  <div class="page-banner">
+    <h1 id="formTitle">📝 ลงทะเบียนพนักงานขาย</h1>
+    <p id="formSubtitle">กรุณากรอกข้อมูลส่วนตัวและเลือกสาขาที่รับผิดชอบสังกัดดูแล จากนั้นกดบันทึกเพื่อเสร็จสิ้นการลงทะเบียน</p>
+  </div>
+
+  <div class="container">
+
+    <!-- Profile Form -->
+    <div class="profile-form">
+      <div class="form-group">
+        <label for="inputName">👤 ชื่อพนักงานขาย <span style="color:var(--danger)">*</span></label>
+        <div class="name-row">
+          <input type="text" id="inputName" autocomplete="off" placeholder="พิมพ์ค้นหา หรือเลือกชื่อของท่าน..." required>
+          <div id="acDropdown" class="ac-dropdown" role="listbox"></div>
+        </div>
+        <small id="suggestStatus"></small>
+      </div>
+
+      <div class="form-group">
+        <label for="inputPhone">📞 เบอร์โทรศัพท์ <span style="color:var(--danger)">*</span></label>
+        <input type="text" id="inputPhone" placeholder="เช่น 081-234-5678 หรือ 0-2693-7005 ต่อ 132" maxlength="100" required>
+      </div>
+
+      <div class="form-group">
+        <label for="inputEmployeeCode">🆔 รหัสพนักงานขาย</label>
+        <input type="text" id="inputEmployeeCode" placeholder="ดึงข้อมูลจากฐานข้อมูลอัตโนมัติ" readonly>
+      </div>
+    </div>
+
+    <hr class="divider">
+
+    <!-- Branch Selection -->
+    <div class="section-title">🏢 สาขาที่ดูแล <span style="color:var(--danger)">*</span></div>
+    <div class="selector-field" id="branchField" role="button" tabindex="0">
+      <div class="field-content" id="branchFieldContent"></div>
+      <span class="field-chevron" aria-hidden="true">›</span>
+    </div>
+
+    <hr class="divider">
+
+    <!-- Admin (ผู้ดูแล) Selection -->
+    <div class="section-title">👥 แอดมินผู้ดูแล</div>
+    <button type="button" class="selector-field" id="adminField">
+      <div class="field-content" id="adminFieldContent"></div>
+      <span class="field-chevron" aria-hidden="true">›</span>
+    </button>
+
+    <!-- Branch Picker Overlay (multi-select) -->
+    <div id="pickerOverlay" class="picker-overlay" role="dialog" aria-modal="true">
+      <div class="picker-sheet">
+        <div class="picker-header">
+          <span>🏢 เลือกสาขาที่ดูแล</span>
+          <button class="picker-close" id="btnClosePicker" aria-label="ปิด">×</button>
+        </div>
+        <div class="picker-search-wrap">
+          <input type="text" id="branchSearch" class="picker-search" placeholder="พิมพ์ค้นหาชื่อสาขา..." autocomplete="off">
+        </div>
+        <div class="picker-list" id="pickerList"></div>
+        <div class="picker-footer">
+          <button type="button" class="btn-sheet-done" id="btnBranchDone">เสร็จ</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Admin Picker Overlay -->
+    <div id="adminPickerOverlay" class="picker-overlay" role="dialog" aria-modal="true">
+      <div class="picker-sheet">
+        <div class="picker-header">
+          <span>👤 เลือกแอดมินผู้ดูแล</span>
+          <button class="picker-close" id="btnCloseAdminPicker" aria-label="ปิด">×</button>
+        </div>
+        <div class="picker-search-wrap">
+          <input type="text" id="adminSearch" class="picker-search" placeholder="พิมพ์ค้นหาชื่อแอดมิน..." autocomplete="off">
+        </div>
+        <div class="picker-list" id="adminPickerList"></div>
+      </div>
+    </div>
+
+    <!-- Save -->
+    <button type="button" class="btn-save" id="btnSave" disabled>
+      <span>💾</span> บันทึกข้อมูลการลงทะเบียน
+    </button>
+
+    <div class="footer">Powered by Primus Co., Ltd.</div>
+  </div>
+
+  <!-- LIFF SDK -->
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <script>
+    let branches = [];        // เติมจาก /api/branches
+    let selectedBranches = new Set();  // เก็บชื่อสาขา (ไม่ใช้ code)
+    let userId = null;
+    let isEditingMode = false;
+
+    async function apiFetch(url, options = {}) {
+      const headers = Object.assign({}, options.headers || {}, {
+        'ngrok-skip-browser-warning': 'true'
+      });
+      const fetchOptions = Object.assign({}, options, { headers });
+      
+      const response = await fetch(url, fetchOptions);
+      if (!response.ok) {
+        throw new Error(`เชื่อมต่อไม่สำเร็จ (HTTP Status: ${response.status})`);
+      }
+      
+      const contentType = response.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        throw new Error("เซิร์ฟเวอร์ไม่ได้ส่งข้อมูลรูปแบบ JSON (คาดว่าเกิดจากปัญหาหน้าแจ้งเตือน ngrok หรือระบบมีปัญหา)");
+      }
+      return response;
+    }
+
+    const loaderScreen = document.getElementById('loaderScreen');
+    const loaderText = document.getElementById('loaderText');
+    const btnSave = document.getElementById('btnSave');
+    const inputName = document.getElementById('inputName');
+    const inputPhone = document.getElementById('inputPhone');
+    const inputEmployeeCode = document.getElementById('inputEmployeeCode');
+    const formTitle = document.getElementById('formTitle');
+    const formSubtitle = document.getElementById('formSubtitle');
+
+    // Branch field + picker events (multi-select)
+    function closeBranchPicker() {
+      document.getElementById('pickerOverlay').classList.remove('open');
+      renderBranchField();
+    }
+    document.getElementById('branchField').addEventListener('click', () => {
+      document.getElementById('branchSearch').value = '';
+      openBranchPicker('');
+    });
+    document.getElementById('branchField').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        document.getElementById('branchSearch').value = '';
+        openBranchPicker('');
+      }
+    });
+    document.getElementById('btnClosePicker').addEventListener('click', closeBranchPicker);
+    document.getElementById('btnBranchDone').addEventListener('click', closeBranchPicker);
+    document.getElementById('pickerOverlay').addEventListener('click', (e) => {
+      if (e.target === document.getElementById('pickerOverlay')) closeBranchPicker();
+    });
+    document.getElementById('branchSearch').addEventListener('input', (e) => {
+      openBranchPicker(e.target.value);
+    });
+
+    // Admin field + picker events
+    document.getElementById('adminField').addEventListener('click', () => {
+      document.getElementById('adminSearch').value = '';
+      openAdminPicker('');
+    });
+    document.getElementById('btnCloseAdminPicker').addEventListener('click', () => {
+      document.getElementById('adminPickerOverlay').classList.remove('open');
+    });
+    document.getElementById('adminPickerOverlay').addEventListener('click', (e) => {
+      if (e.target === document.getElementById('adminPickerOverlay')) {
+        document.getElementById('adminPickerOverlay').classList.remove('open');
+      }
+    });
+    document.getElementById('adminSearch').addEventListener('input', (e) => {
+      openAdminPicker(e.target.value);
+    });
+
+    // แสดงค่าที่เลือกในช่องสาขา (chips display-only หรือ placeholder)
+    function renderBranchField() {
+      const box = document.getElementById('branchFieldContent');
+      const field = document.getElementById('branchField');
+      box.innerHTML = '';
+
+      if (selectedBranches.size === 0) {
+        field.classList.remove('filled');
+        const ph = document.createElement('span');
+        ph.className = 'field-placeholder';
+        ph.textContent = 'แตะเพื่อเลือกสาขาที่ดูแล';
+        box.appendChild(ph);
+      } else {
+        field.classList.add('filled');
+        selectedBranches.forEach(name => {
+          const chip = document.createElement('span');
+          chip.className = 'branch-chip';
+          const label = document.createElement('span');
+          label.textContent = name;
+          const rm = document.createElement('button');
+          rm.type = 'button';
+          rm.className = 'chip-remove';
+          rm.setAttribute('aria-label', 'ลบ ' + name);
+          rm.textContent = '×';
+          rm.addEventListener('click', (e) => {
+            e.stopPropagation();   // กันไม่ให้เปิด bottom-sheet
+            selectedBranches.delete(name);
+            renderBranchField();
+          });
+          chip.appendChild(label);
+          chip.appendChild(rm);
+          box.appendChild(chip);
+        });
+      }
+      updateSaveButtonState();
+    }
+
+    // alias เดิม — ที่อื่นยังเรียก buildUI()
+    function buildUI() { renderBranchField(); }
+
+    // Bottom-sheet เลือกสาขาแบบ multi-select (ติ๊กหลายอัน ชีทไม่ปิด)
+    function openBranchPicker(filter) {
+      const list = document.getElementById('pickerList');
+      list.innerHTML = '';
+      const q = (filter || '').toLowerCase().trim();
+      const available = branches.filter(b => !q || b.name.toLowerCase().includes(q));
+
+      if (available.length === 0) {
+        const msg = document.createElement('div');
+        msg.className = 'picker-no-item';
+        msg.textContent = branches.length === 0 ? 'ไม่พบข้อมูลสาขา' : 'ไม่พบชื่อที่ตรงกัน';
+        list.appendChild(msg);
+      } else {
+        available.forEach(b => {
+          const isSel = selectedBranches.has(b.name);
+          const item = document.createElement('div');
+          item.className = 'picker-item' + (isSel ? ' selected' : '');
+          item.innerHTML = `<span style="flex:1;min-width:0;">${escapeHtml(b.name)}</span><span class="picker-check">✓</span>`;
+          item.addEventListener('click', () => {
+            if (selectedBranches.has(b.name)) selectedBranches.delete(b.name);
+            else selectedBranches.add(b.name);
+            openBranchPicker(filter);   // re-render คงสถานะค้นหา ชีทไม่ปิด
+          });
+          list.appendChild(item);
+        });
+      }
+      document.getElementById('pickerOverlay').classList.add('open');
+    }
+
+    function updateSaveButtonState() {
+      const nameVal = inputName.value.trim();
+      const phoneVal = inputPhone.value.trim();
+      const phoneValid = phoneVal.length >= 5;
+      btnSave.disabled = !(nameVal.length > 0 && phoneValid && selectedBranches.size > 0);
+    }
+
+    inputName.addEventListener('input', updateSaveButtonState);
+    inputPhone.addEventListener('input', updateSaveButtonState);
+    inputEmployeeCode.addEventListener('input', updateSaveButtonState);
+
+    const suggestStatus = document.getElementById('suggestStatus');
+    const acDropdown   = document.getElementById('acDropdown');
+    let salespeopleList = [];
+    let acHighlight = -1;   // keyboard navigation index
+
+    async function loadSalespeople() {
+      const response = await apiFetch('/api/salespeople');
+      salespeopleList = await response.json();
+    }
+
+    async function loadBranches() {
+      const response = await apiFetch('/api/branches');
+      branches = await response.json();  // [{ index, name }, ...]
+    }
+
+    // ─── ADMIN (ผู้ดูแล) ───
+    let adminsList = [];          // [{ name, phone, key, has_sig }]
+    let selectedAdmin = null;     // { name, phone, has_sig }
+
+    async function loadAdmins() {
+      try {
+        const response = await apiFetch('/api/admins');
+        adminsList = await response.json();
+      } catch (err) {
+        console.error('Error loading admins:', err);
+        adminsList = [];
+      }
+    }
+
+    function escapeHtml(str) {
+      return String(str || '').replace(/[&<>"']/g, c =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    // แสดงค่าที่เลือกในช่องแอดมิน (avatar + ชื่อ + เบอร์ + badge หรือ placeholder)
+    function renderAdminField() {
+      const box = document.getElementById('adminFieldContent');
+      const field = document.getElementById('adminField');
+      if (!selectedAdmin || !selectedAdmin.name) {
+        field.classList.remove('filled');
+        box.innerHTML = '<span class="field-placeholder">แตะเพื่อเลือกแอดมินผู้ดูแล</span>';
+        return;
+      }
+      field.classList.add('filled');
+      const badge = selectedAdmin.has_sig
+        ? '<span class="sig-badge has">✓ ลายเซ็น</span>'
+        : '<span class="sig-badge none">ไม่มีลายเซ็น</span>';
+      box.innerHTML = `
+        <div class="admin-meta">
+          <div class="admin-name">${escapeHtml(selectedAdmin.name)}</div>
+          ${selectedAdmin.phone ? `<div class="admin-phone">📞 ${escapeHtml(selectedAdmin.phone)}</div>` : ''}
+        </div>
+        ${badge}`;
+    }
+
+    // alias เดิม
+    function renderAdminDisplay() { renderAdminField(); }
+
+    function openAdminPicker(filter) {
+      const list = document.getElementById('adminPickerList');
+      list.innerHTML = '';
+      const q = (filter || '').toLowerCase().trim();
+      const available = adminsList.filter(a => !q || a.name.toLowerCase().includes(q));
+
+      if (available.length === 0) {
+        const msg = document.createElement('div');
+        msg.className = 'picker-no-item';
+        msg.textContent = adminsList.length === 0 ? 'ไม่พบข้อมูลแอดมิน' : 'ไม่พบชื่อที่ตรงกัน';
+        list.appendChild(msg);
+      } else {
+        available.forEach(a => {
+          const isSel = selectedAdmin && selectedAdmin.name === a.name;
+          const item = document.createElement('div');
+          item.className = 'picker-item' + (isSel ? ' selected' : '');
+          const badge = a.has_sig
+            ? '<span class="sig-badge has">✓ ลายเซ็น</span>'
+            : '<span class="sig-badge none">ไม่มีลายเซ็น</span>';
+          item.innerHTML = `
+            <div style="flex:1;min-width:0;">
+              <div>${escapeHtml(a.name)}</div>
+              ${a.phone ? `<div class="admin-sub">📞 ${escapeHtml(a.phone)}</div>` : ''}
+            </div>
+            ${badge}
+            <span class="picker-check">✓</span>`;
+          item.addEventListener('click', () => {
+            selectedAdmin = { name: a.name, phone: a.phone || '', has_sig: !!a.has_sig };
+            document.getElementById('adminPickerOverlay').classList.remove('open');
+            renderAdminField();
+          });
+          list.appendChild(item);
+        });
+      }
+      document.getElementById('adminPickerOverlay').classList.add('open');
+    }
+
+    function escapeRegex(str) {
+      return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
+    function highlightMatch(text, query) {
+      if (!query) return text;
+      const re = new RegExp(`(${escapeRegex(query)})`, 'gi');
+      return text.replace(re, '<mark>$1</mark>');
+    }
+
+    function applySelection(sp) {
+      inputName.value = sp.name;
+      inputEmployeeCode.value = sp.salesperson_id || '';
+
+      if (sp.phone) {
+        inputPhone.value = sp.phone;
+      } else {
+        inputPhone.value = '';
+      }
+
+      if (sp.branch) {
+        selectedBranches.clear();
+        const dbBranch = sp.branch.toLowerCase().trim();
+        const found = branches.find(b => b.name.toLowerCase().trim() === dbBranch)
+                   || branches.find(b => dbBranch.includes(b.name.toLowerCase().trim()) || b.name.toLowerCase().trim().includes(dbBranch));
+        if (found) selectedBranches.add(found.name);
+        buildUI();
+      }
+
+      suggestStatus.style.display = 'block';
+      suggestStatus.style.color = 'var(--green-dark)';
+      suggestStatus.innerText = '✓ ดึงข้อมูลพนักงานและสาขาดูแลอัตโนมัติสำเร็จ';
+      closeDropdown();
+      updateSaveButtonState();
+    }
+
+    function closeDropdown() {
+      acDropdown.classList.remove('open');
+      acDropdown.innerHTML = '';
+      acHighlight = -1;
+    }
+
+    function renderDropdown(query) {
+      acDropdown.innerHTML = '';
+      acHighlight = -1;
+
+      // Only show when user has typed something
+      if (!query || query.length === 0) {
+        closeDropdown();
+        return;
+      }
+
+      const matches = salespeopleList.filter(sp =>
+        sp.name.toLowerCase().includes(query.toLowerCase())
+      );
+
+      if (matches.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'ac-empty';
+        empty.textContent = 'ไม่พบชื่อที่ตรงกัน';
+        acDropdown.appendChild(empty);
+      } else {
+        matches.forEach((sp, idx) => {
+          const item = document.createElement('div');
+          item.className = 'ac-item';
+          item.setAttribute('role', 'option');
+          item.innerHTML = highlightMatch(sp.name, query);
+          item.addEventListener('mousedown', (e) => {
+            e.preventDefault();   // prevent input blur before click fires
+            applySelection(sp);
+          });
+          acDropdown.appendChild(item);
+        });
+      }
+
+      acDropdown.classList.add('open');
+    }
+
+    // Keyboard navigation
+    inputName.addEventListener('keydown', (e) => {
+      const items = acDropdown.querySelectorAll('.ac-item');
+      if (!acDropdown.classList.contains('open') || items.length === 0) return;
+
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        acHighlight = Math.min(acHighlight + 1, items.length - 1);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        acHighlight = Math.max(acHighlight - 1, 0);
+      } else if (e.key === 'Enter' && acHighlight >= 0) {
+        e.preventDefault();
+        const query = inputName.value.trim();
+        const matches = salespeopleList.filter(sp => sp.name.toLowerCase().includes(query.toLowerCase()));
+        if (matches[acHighlight]) applySelection(matches[acHighlight]);
+        return;
+      } else if (e.key === 'Escape') {
+        closeDropdown();
+        return;
+      }
+
+      items.forEach((el, i) => el.classList.toggle('highlighted', i === acHighlight));
+      if (acHighlight >= 0) items[acHighlight].scrollIntoView({ block: 'nearest' });
+    });
+
+    inputName.addEventListener('input', () => {
+      const query = inputName.value.trim();
+      renderDropdown(query);
+
+      // Clear auto-fill status when user edits away from a selected name
+      const exact = salespeopleList.find(sp => sp.name.toLowerCase() === query.toLowerCase());
+      if (!exact) {
+        suggestStatus.style.display = 'none';
+        suggestStatus.innerText = '';
+      }
+      updateSaveButtonState();
+    });
+
+    inputName.addEventListener('blur', () => {
+      // Slight delay so mousedown on item fires first
+      setTimeout(closeDropdown, 150);
+    });
+
+
+
+    btnSave.addEventListener('click', async () => {
+      const nameVal = inputName.value.trim();
+      const phoneVal = inputPhone.value.trim();
+      const employeeCodeVal = inputEmployeeCode.value.trim();
+      if (!nameVal || phoneVal.length < 5 || selectedBranches.size === 0 || !userId) return;
+
+      loaderText.innerText = 'กำลังบันทึกข้อมูลลงทะเบียน...';
+      loaderScreen.style.opacity = '1';
+      loaderScreen.style.pointerEvents = 'auto';
+      loaderScreen.style.display = 'flex';
+
+      try {
+        const branchCodes = Array.from(selectedBranches).sort().join(',');
+        const response = await apiFetch('/api/salesperson/update-branches', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId, branchCodes, name: nameVal, phone: phoneVal,
+            salespersonId: employeeCodeVal || null,
+            adminName: selectedAdmin ? selectedAdmin.name : '',
+            adminPhone: selectedAdmin ? selectedAdmin.phone : ''
+          })
+        });
+        const result = await response.json();
+        if (result.success) {
+          if (liff.isInClient()) {
+            try {
+              const triggerText = isEditingMode ? '✅ อัปเดตข้อมูลพนักงานขายสำเร็จ' : '🎉 ลงทะเบียนพนักงานขายสำเร็จ';
+              await liff.sendMessages([{ type: 'text', text: triggerText }]);
+            } catch (msgErr) {
+              console.error('Error sending message via LIFF:', msgErr);
+              const triggerText = isEditingMode ? '✅ อัปเดตข้อมูลพนักงานขายสำเร็จ' : '🎉 ลงทะเบียนพนักงานขายสำเร็จ';
+              alert('บันทึกสำเร็จเรียบร้อย! แต่เนื่องจากแอปพลิเคชันยังไม่ได้รับสิทธิ์ส่งข้อความในแชท กรุณาคัดลอกข้อความด้านล่างนี้แล้วส่งเข้าไปในแชทด้วยตนเอง เพื่ออัปเดตข้อมูลพนักงานขาย:\n\n' + triggerText);
+            }
+          }
+          loaderText.innerHTML = '<span style="color:var(--green)">✓</span> บันทึกสำเร็จแล้ว! ปิดหน้าต่างนี้ได้เลยครับ';
+          setTimeout(() => { liff.closeWindow(); }, 1200);
+        } else {
+          alert('เกิดข้อผิดพลาด: ' + (result.message || 'กรุณาลองใหม่อีกครั้ง'));
+          loaderScreen.style.display = 'none';
+        }
+      } catch (err) {
+        console.error('Error saving:', err);
+        alert('ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้: ' + err.message);
+        loaderScreen.style.display = 'none';
+      }
+    });
+
+    async function initLIFF() {
+      try {
+        let urlParams = new URLSearchParams(window.location.search);
+        let urlUserId = urlParams.get('userId');
+        await liff.init({ liffId: '__LIFF_ID__' });
+        if (!urlUserId) {
+          urlParams = new URLSearchParams(window.location.search);
+          urlUserId = urlParams.get('userId');
+        }
+        if (!urlUserId) {
+          const stateQuery = new URLSearchParams(window.location.search).get('liff.state');
+          if (stateQuery) {
+            const qIdx = stateQuery.indexOf('?');
+            if (qIdx !== -1) {
+              urlUserId = new URLSearchParams(stateQuery.substring(qIdx)).get('userId');
+            }
+          }
+        }
+        let profile = null;
+        if (!liff.isLoggedIn() && !urlUserId) { liff.login(); return; }
+        if (liff.isLoggedIn()) {
+          try { profile = await liff.getProfile(); } catch (pErr) { console.error('getProfile error:', pErr); }
+        }
+        userId = urlUserId || (profile ? profile.userId : null);
+        if (!userId) throw new Error('ไม่สามารถระบุ User ID ของคุณได้');
+
+        loaderText.innerText = 'กำลังดึงข้อมูล...';
+        await Promise.all([loadSalespeople(), loadBranches(), loadAdmins()]);
+        const response = await apiFetch(`/api/salesperson/${userId}`);
+        const spData = await response.json();
+
+        if (spData && spData.name && spData.name !== 'รอดำเนินการ') {
+          isEditingMode = true;
+          inputName.value = spData.name || '';
+          inputPhone.value = spData.phone || '';
+          inputEmployeeCode.value = spData.salesperson_id || '';
+          formTitle.innerText = '📝 ปรับปรุงข้อมูลพนักงานขาย';
+          formSubtitle.innerText = 'แก้ไขข้อมูลส่วนตัวและสาขาดูแลของคุณตามต้องการ จากนั้นกดบันทึกเพื่ออัปเดตข้อมูล';
+          btnSave.innerHTML = '<span>💾</span> บันทึกข้อมูลการแก้ไข';
+          document.title = 'ปรับปรุงข้อมูลพนักงานขาย 🏢';
+        } else {
+          isEditingMode = false;
+          formTitle.innerText = '📝 ลงทะเบียนพนักงานขาย';
+          formSubtitle.innerText = 'กรุณากรอกข้อมูลส่วนตัวและเลือกสาขาที่รับผิดชอบสังกัดดูแล จากนั้นกดบันทึกเพื่อเสร็จสิ้นการลงทะเบียน';
+          btnSave.innerHTML = '<span>💾</span> บันทึกข้อมูลการลงทะเบียน';
+          document.title = 'ลงทะเบียนพนักงานขาย 🏢';
+        }
+
+        if (spData && spData.branch_code) {
+          // branch_code เก็บเป็นชื่อสาขาคั่นด้วย comma
+          spData.branch_code.split(',').map(c => c.trim()).filter(Boolean).forEach(c => selectedBranches.add(c));
+        }
+
+        // ค่าตั้งต้นแอดมิน: จากค่าที่เคยบันทึก หรือค่าแนะนำ auto-fill (backend เติมให้ถ้ายังว่าง)
+        if (spData && spData.employee_quotations && spData.employee_quotations.trim()
+            && spData.employee_quotations.trim() !== 'ชื่อแอดมิน') {
+          const adminName = spData.employee_quotations.trim();
+          const matched = adminsList.find(a => a.name.trim() === adminName);
+          selectedAdmin = {
+            name: adminName,
+            phone: (spData.employee_quotations_phone && spData.employee_quotations_phone.trim() !== 'เบอร์โทร'
+              ? spData.employee_quotations_phone.trim()
+              : (matched ? matched.phone : '')),
+            has_sig: matched ? !!matched.has_sig : false
+          };
+        }
+        renderAdminDisplay();
+
+        buildUI();
+        loaderScreen.style.opacity = '0';
+        setTimeout(() => { loaderScreen.style.display = 'none'; }, 400);
+
+      } catch (err) {
+        console.error('LIFF initialization error:', err);
+        loaderText.innerHTML = `<span style="color:var(--danger)">⚠️ โหลดระบบผิดพลาด</span><br><small style="font-size:11px;font-weight:normal">${err.message}</small>`;
+      }
+    }
+
+    window.addEventListener('load', initLIFF);
+  </script>
+</body>
+</html>

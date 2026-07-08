@@ -1,0 +1,4 @@
+ALTER TABLE quotation_rules
+  ADD COLUMN IF NOT EXISTS quote_company VARCHAR(10) DEFAULT NULL CHECK (quote_company IN ('PM', 'THT')),
+  ADD COLUMN IF NOT EXISTS min_order_qty INTEGER DEFAULT NULL,
+  ADD COLUMN IF NOT EXISTS sale_line_warn_msg TEXT DEFAULT NULL;

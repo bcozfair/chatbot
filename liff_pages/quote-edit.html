@@ -1,0 +1,2493 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>แก้ไขใบเสนอราคา 📄</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;600;700&family=Outfit:wght@400;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+
+    <style>
+      :root {
+        --green-dark: #157015;
+        --green: #1e8f1e;
+        --green-mid: #27a827;
+        --green-light: #e6f5e6;
+        --green-pale: #f0faf0;
+        --white: #ffffff;
+        --surface: #f5f8f5;
+        --border: #d0e8d0;
+        --border-strong: #a8cfa8;
+        --text: #0d2b0d;
+        --text-mid: #3a5c3a;
+        --text-muted: #6b8f6b;
+        --text-light: #9ab89a;
+        --danger: #d42b2b;
+        --danger-bg: #fff0f0;
+        --warning: #b85c00;
+        --warning-bg: rgba(184, 92, 0, 0.08);
+        --success: #1e8f1e;
+        --success-hover: #157015;
+        --shadow-sm: 0 1px 4px rgba(0, 60, 0, 0.07);
+        --shadow: 0 2px 12px rgba(0, 60, 0, 0.1);
+        --shadow-lg: 0 8px 32px rgba(0, 60, 0, 0.14);
+        --radius: 12px;
+        --radius-sm: 8px;
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+        -webkit-tap-highlight-color: transparent;
+      }
+      html {
+        font-size: 16px;
+      }
+
+      body {
+        font-family:
+          "Sarabun",
+          -apple-system,
+          sans-serif;
+        background: var(--surface);
+        color: var(--text);
+        min-height: 100vh;
+        padding: 12px 12px 100px;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      /* ─── LOADER ─── */
+      .loader-screen {
+        position: fixed;
+        inset: 0;
+        background: var(--white);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        z-index: 999;
+        transition: opacity 0.35s;
+      }
+
+      .loader {
+        width: 36px;
+        height: 36px;
+        border: 3px solid var(--green-light);
+        border-top-color: var(--green);
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+        margin-bottom: 14px;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .loader-text {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--text-muted);
+        text-align: center;
+      }
+
+      /* ─── ANIMATIONS ─── */
+      @keyframes fadeInUp {
+        from {
+          opacity: 0;
+          transform: translateY(14px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+      @keyframes slideIn {
+        from {
+          opacity: 0;
+          transform: translateX(-8px);
+        }
+        to {
+          opacity: 1;
+          transform: translateX(0);
+        }
+      }
+
+      /* ─── CONTAINER ─── */
+      .container {
+        width: 100%;
+        max-width: 520px;
+        margin: 0 auto;
+        animation: fadeInUp 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+      }
+
+      /* ─── QUOTE CARD ─── */
+      .quote-card {
+        background: var(--white);
+        border: 1.5px solid var(--border);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow-sm);
+        margin-bottom: 10px;
+        overflow: visible;
+        animation: fadeInUp 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+      }
+
+      /* ─── CARD HEADER ─── */
+      .card-header {
+        padding: 10px 14px;
+        color: var(--white);
+        font-family: "Outfit", sans-serif;
+        font-weight: 700;
+        font-size: 13px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .card-header.pm {
+        background: linear-gradient(135deg, var(--green-dark), var(--green));
+      }
+      .card-header.tht {
+        background: linear-gradient(135deg, #9c2121, #e26868);
+      }
+
+      /* customer info header */
+      .card-header.customer-hdr {
+        background: linear-gradient(135deg, #0f2b0f, var(--green-dark));
+      }
+
+      /* ─── CARD BODY ─── */
+      .card-body {
+        padding: 10px 12px;
+      }
+
+      /* ─── INFO GRID ─── */
+      .info-grid {
+        display: grid;
+        gap: 7px;
+      }
+
+      .info-row {
+        display: flex;
+        gap: 8px;
+        align-items: flex-start;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      .info-label {
+        color: var(--text-light);
+        min-width: 90px;
+        flex-shrink: 0;
+      }
+      .info-value {
+        color: var(--text);
+        font-weight: 600;
+        word-break: break-word;
+      }
+
+      .info-note {
+        font-size: 11px;
+        color: var(--text-muted);
+        margin-top: 10px;
+        padding: 7px 11px;
+        background: var(--green-pale);
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--border);
+      }
+
+      /* ─── SECTION TITLE ─── */
+      .section-title {
+        font-weight: 700;
+        font-size: 13px;
+        color: var(--text-mid);
+        margin-bottom: 10px;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+      }
+
+      /* ══════════════════════════════════════════
+       ─── ITEM CARD — redesigned for mobile ───
+       ══════════════════════════════════════════ */
+      .item-card {
+        background: var(--white);
+        border: 1.5px solid var(--border);
+        border-radius: 10px;
+        margin-bottom: 8px;
+        overflow: hidden;
+        transition:
+          border-color 0.15s,
+          box-shadow 0.15s;
+        animation: slideIn 0.25s ease;
+      }
+      .item-card:hover {
+        border-color: var(--border-strong);
+        box-shadow: var(--shadow-sm);
+      }
+
+      /* top strip: index + code + delete button */
+      .item-top-bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 10px 6px;
+        border-bottom: 1px solid var(--border);
+        background: var(--green-pale);
+      }
+
+      .item-index {
+        font-family: "Outfit", sans-serif;
+        font-weight: 800;
+        font-size: 11px;
+        color: var(--white);
+        background: var(--green);
+        width: 20px;
+        height: 20px;
+        border-radius: 6px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      }
+
+      .item-code {
+        font-family: "Outfit", sans-serif;
+        font-weight: 700;
+        font-size: 13px;
+        color: var(--green-dark);
+        flex: 1;
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .item-stock-badge {
+        font-size: 10px;
+        font-weight: 700;
+        padding: 2px 7px;
+        border-radius: 20px;
+        white-space: nowrap;
+        flex-shrink: 0;
+      }
+      .item-stock-badge.in-stock {
+        background: rgba(30, 143, 30, 0.12);
+        color: var(--green-dark);
+      }
+      .item-stock-badge.out-of-stock {
+        background: var(--danger-bg);
+        color: var(--danger);
+      }
+
+      /* ─── ITEM BODY ─── */
+      .item-body {
+        padding: 8px 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 7px;
+      }
+
+      /* price × qty row */
+      .item-pq-row {
+        display: flex;
+        align-items: flex-end;
+        gap: 12px;
+      }
+
+      .item-pq-col {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        min-width: 0;
+      }
+      .item-pq-col.price-col {
+        flex: 1;
+      }
+      .item-pq-col.qty-col {
+        flex: 1;
+      }
+
+      .item-total-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 5px 8px;
+      }
+
+      .item-field-label {
+        font-size: 10px;
+        color: var(--text-light);
+        white-space: nowrap;
+        flex-shrink: 0;
+      }
+
+      /* total price — right side, prominent */
+      .item-total-chip {
+        font-family: "Outfit", sans-serif;
+        font-size: 14px;
+        font-weight: 800;
+        color: var(--green-dark);
+        background: var(--green-light);
+        padding: 4px 10px;
+        border-radius: 20px;
+        white-space: nowrap;
+        flex-shrink: 0;
+      }
+
+      /* discount row */
+      .item-disc-row {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        background: var(--surface);
+        border-radius: 7px;
+        padding: 5px 8px;
+      }
+
+      .disc-inputs-group {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        flex: 1;
+      }
+
+      .disc-separator {
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--text-muted);
+      }
+      .disc-unit {
+        font-size: 10px;
+        color: var(--text-muted);
+      }
+
+      .item-discount-baht-chip {
+        font-size: 10px;
+        font-weight: 700;
+        color: var(--warning);
+        background: var(--warning-bg);
+        padding: 2px 7px;
+        border-radius: 20px;
+        white-space: nowrap;
+        margin-left: auto;
+      }
+
+      /* ─── EDIT INPUTS ─── */
+      .edit-input {
+        font-family: "Outfit", sans-serif;
+        font-size: 13px;
+        font-weight: 600;
+        padding: 7px 10px;
+        border: 1.5px solid var(--border-strong);
+        border-radius: var(--radius-sm);
+        background: var(--white);
+        color: var(--text);
+        width: 100%;
+        max-width: 120px;
+        transition:
+          border-color 0.15s,
+          box-shadow 0.15s;
+        -moz-appearance: textfield;
+        appearance: textfield;
+        outline: none;
+      }
+      .edit-input::placeholder {
+        color: var(--text-light);
+      }
+      .edit-input:focus {
+        border-color: var(--green);
+        box-shadow: 0 0 0 3px rgba(30, 143, 30, 0.12);
+        background: var(--green-pale);
+      }
+      .edit-input::-webkit-outer-spin-button,
+      .edit-input::-webkit-inner-spin-button {
+        -webkit-appearance: none;
+        appearance: none;
+        margin: 0;
+      }
+
+      /* compact field sizes used inside item cards */
+      .edit-input.inp-price {
+        width: 100%;
+        min-width: 60px;
+        height: 30px;
+        padding: 0 6px;
+        font-size: 12px;
+        text-align: right;
+        border-radius: 7px;
+        max-width: none;
+      }
+      .edit-input.inp-disc {
+        width: 42px;
+        min-width: 42px;
+        height: 28px;
+        padding: 0 4px;
+        font-size: 11px;
+        text-align: center;
+        border-radius: 7px;
+        max-width: none;
+      }
+      .edit-input.inp-remark {
+        width: 100%;
+        max-width: none;
+        height: 30px;
+        padding: 0 8px;
+        font-size: 11px;
+        border-radius: 7px;
+        background: var(--white);
+        border-color: var(--border);
+      }
+      .edit-input.inp-remark:focus {
+        border-color: var(--green);
+        background: var(--green-pale);
+      }
+
+      select.edit-input {
+        background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%236b8f6b' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='m6 8 4 4 4-4'/%3E%3C/svg%3E");
+        background-position: right 10px center;
+        background-repeat: no-repeat;
+        background-size: 15px;
+        padding-right: 28px;
+        -webkit-appearance: none;
+        -moz-appearance: none;
+        appearance: none;
+        cursor: pointer;
+      }
+
+      /* ─── QTY CONTROL ─── */
+      .qty-control {
+        display: flex;
+        align-items: center;
+        background: var(--white);
+        border: 1.5px solid var(--border-strong);
+        border-radius: var(--radius-sm);
+        overflow: hidden;
+        max-width: 110px;
+      }
+      .qty-btn {
+        background: transparent;
+        border: none;
+        color: var(--green-dark);
+        font-size: 14px;
+        font-weight: 700;
+        width: 28px;
+        height: 28px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        user-select: none;
+        transition: background 0.1s;
+      }
+      .qty-btn:hover {
+        background: var(--green-light);
+      }
+      .qty-btn:active {
+        background: var(--green-light);
+      }
+
+      .qty-control .edit-input {
+        border: none;
+        border-radius: 0;
+        text-align: center;
+        width: 40px;
+        height: 28px;
+        padding: 0;
+        max-width: none;
+        box-shadow: none;
+        font-size: 13px;
+      }
+      .qty-control .edit-input:focus {
+        box-shadow: none;
+        background: transparent;
+      }
+
+      .qty-control.compact {
+        width: 100%;
+        max-width: none;
+        height: 30px;
+        border-radius: 7px;
+      }
+      .qty-control.compact .qty-btn {
+        width: 26px;
+        height: 28px;
+        font-size: 13px;
+      }
+      .qty-control.compact .edit-input {
+        flex: 1;
+        width: 100%;
+        height: 28px;
+        font-size: 12px;
+      }
+
+      /* ─── DISCOUNT GROUP (global) ─── */
+      .disc-group {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        flex: 1;
+      }
+      .disc-group .edit-input {
+        max-width: 65px;
+        text-align: center;
+      }
+      .disc-sep {
+        color: var(--text-muted);
+        font-weight: 700;
+        font-size: 13px;
+      }
+
+      /* ─── DELETE BUTTON ─── */
+      .btn-delete-item {
+        font-family: "Sarabun", sans-serif;
+        font-size: 12px;
+        font-weight: 600;
+        padding: 4px 6px;
+        border: none;
+        background: transparent;
+        color: var(--danger);
+        cursor: pointer;
+        transition: background 0.15s;
+        white-space: nowrap;
+        display: flex;
+        align-items: center;
+        gap: 3px;
+        border-radius: 5px;
+        flex-shrink: 0;
+      }
+      .btn-delete-item:hover {
+        background: var(--danger-bg);
+      }
+
+      /* ─── STOCK BADGES (legacy — kept for search dropdown) ─── */
+      .prod-stock {
+        font-weight: 600;
+        padding: 2px 6px;
+        border-radius: 6px;
+        font-size: 10px;
+      }
+      .prod-stock.in-stock {
+        background: rgba(30, 143, 30, 0.1);
+        color: var(--green-dark);
+      }
+      .prod-stock.out-of-stock {
+        background: var(--danger-bg);
+        color: var(--danger);
+      }
+
+      /* ─── TOTAL BAR ─── */
+      .total-bar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 11px 14px;
+        background: var(--green-light);
+        border-top: 1.5px solid var(--border);
+      }
+      .total-label {
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--text-mid);
+      }
+      .total-value {
+        font-family: "Outfit", sans-serif;
+        font-size: 15px;
+        font-weight: 700;
+        color: var(--green-dark);
+      }
+
+      /* ─── SAVE STATUS ─── */
+      .save-status {
+        font-size: 11px;
+        font-weight: 600;
+        padding: 3px 9px;
+        border-radius: 20px;
+        transition: all 0.25s;
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        margin-left: auto;
+      }
+      .save-status.saving {
+        background: rgba(255, 255, 255, 0.2);
+        color: #ffffff;
+        border: 1px solid rgba(255, 255, 255, 0.4);
+      }
+      .save-status.saved {
+        background: rgba(255, 255, 255, 0.35);
+        color: #ffffff;
+        border: 1px solid rgba(255, 255, 255, 0.6);
+      }
+      .save-status.error {
+        background: #d42b2b;
+        color: #ffffff;
+        border: 1px solid #ffffff;
+      }
+
+      /* ─── ADD PRODUCT SECTION ─── */
+      .add-product-section {
+        background: var(--green-pale);
+        border-radius: var(--radius-sm);
+        padding: 12px;
+        margin-top: 10px;
+        margin-bottom: 10px;
+        border: 1.5px dashed var(--border-strong);
+      }
+
+      /* ─── SEARCH DROPDOWN ─── */
+      .search-wrapper {
+        position: relative;
+        width: 100%;
+      }
+
+      .search-results-dropdown {
+        position: absolute;
+        top: calc(100% + 5px);
+        left: 0;
+        right: 0;
+        background: var(--white);
+        border: 1.5px solid var(--border-strong);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow-lg);
+        z-index: 200;
+        max-height: 200px;
+        overflow-y: auto;
+        display: none;
+      }
+      .search-results-dropdown::-webkit-scrollbar {
+        width: 4px;
+      }
+      .search-results-dropdown::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      .search-results-dropdown::-webkit-scrollbar-thumb {
+        background: var(--border-strong);
+        border-radius: 99px;
+      }
+
+      .dropdown-item {
+        padding: 9px 13px;
+        cursor: pointer;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        border-bottom: 1px solid var(--border);
+        transition: background 0.12s;
+      }
+      .dropdown-item:last-child {
+        border-bottom: none;
+      }
+      .dropdown-item:hover {
+        background: var(--green-light);
+      }
+      .dropdown-item.out-of-stock-item:hover {
+        background: transparent !important;
+      }
+
+      .dropdown-item-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+      }
+      .dropdown-item .prod-code {
+        font-family: "Outfit", sans-serif;
+        font-weight: 700;
+        font-size: 13px;
+        color: var(--green-dark);
+      }
+      .dropdown-item .prod-price {
+        font-family: "Outfit", sans-serif;
+        font-weight: 700;
+        font-size: 13px;
+        color: var(--green-dark);
+        white-space: nowrap;
+      }
+      .dropdown-item .prod-name {
+        font-size: 11px;
+        color: var(--text-muted);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      /* ─── STICKY FOOTER ─── */
+      .sticky-footer {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: var(--white);
+        border-top: 2px solid var(--green);
+        padding: 10px 14px 14px;
+        display: flex;
+        gap: 8px;
+        z-index: 100;
+        box-shadow: 0 -4px 20px rgba(0, 60, 0, 0.1);
+      }
+
+      /* ─── BUTTONS ─── */
+      .btn {
+        font-family: "Sarabun", sans-serif;
+        font-weight: 700;
+        font-size: 14px;
+        padding: 12px 14px;
+        border: none;
+        border-radius: var(--radius);
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 5px;
+        transition:
+          background 0.15s,
+          opacity 0.15s;
+        flex: 1;
+      }
+      .btn:active {
+        opacity: 0.88;
+      }
+      .btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .btn-confirm {
+        background: var(--green);
+        color: var(--white);
+        box-shadow: 0 3px 10px rgba(30, 143, 30, 0.22);
+      }
+      .btn-confirm:hover:not(:disabled) {
+        background: var(--green-dark);
+      }
+
+      .btn-cancel {
+        background: transparent;
+        color: var(--danger);
+        border: 1.5px solid var(--danger);
+      }
+      .btn-cancel:hover {
+        background: var(--danger);
+        color: var(--white);
+      }
+
+      /* ─── TOAST ─── */
+      .toast {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%) scale(0.9);
+        padding: 24px 30px;
+        border-radius: var(--radius);
+        font-size: 15px;
+        font-weight: 600;
+        z-index: 1000;
+        opacity: 0;
+        visibility: hidden;
+        transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        box-shadow: var(--shadow-lg);
+        max-width: 90%;
+        width: 400px;
+        text-align: center;
+        pointer-events: none;
+      }
+
+      .toast.show {
+        opacity: 1;
+        visibility: visible;
+        transform: translate(-50%, -50%) scale(1);
+        pointer-events: auto;
+      }
+
+      .toast.success {
+        background: var(--green);
+        color: var(--white);
+      }
+
+      .toast.error {
+        background: var(--danger);
+        color: var(--white);
+      }
+
+      .toast .toast-message {
+        margin-bottom: 16px;
+        line-height: 1.5;
+      }
+
+      .toast .toast-close-btn {
+        background: rgba(255, 255, 255, 0.25);
+        border: 1px solid rgba(255, 255, 255, 0.4);
+        color: white;
+        padding: 8px 24px;
+        border-radius: var(--radius-sm);
+        font-size: 14px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: background 0.15s;
+        font-family: "Sarabun", sans-serif;
+      }
+
+      .toast .toast-close-btn:hover {
+        background: rgba(255, 255, 255, 0.4);
+      }
+
+      .toast .toast-close-btn:active {
+        transform: scale(0.95);
+      }
+
+      /* ─── EMPTY STATE ─── */
+      .empty-state {
+        text-align: center;
+        padding: 40px 20px;
+        color: var(--text-muted);
+      }
+      .empty-state .icon {
+        font-size: 44px;
+        margin-bottom: 10px;
+        opacity: 0.5;
+      }
+      .empty-state .msg {
+        font-size: 14px;
+      }
+
+      .footer-note {
+        text-align: center;
+        font-size: 11px;
+        color: var(--text-light);
+        margin-top: 14px;
+        margin-bottom: 8px;
+      }
+
+      /* ─── REVISION BADGE ─── */
+      .revision-banner {
+        background: var(--warning-bg);
+        border: 1px solid rgba(184, 92, 0, 0.25);
+        border-radius: var(--radius-sm);
+        padding: 9px 12px;
+        margin-bottom: 14px;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--warning);
+        display: flex;
+        align-items: center;
+        gap: 7px;
+      }
+
+      /* ─── ALERT MODAL ─── */
+      .alert-modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 30, 0, 0.45);
+        backdrop-filter: blur(3px);
+        -webkit-backdrop-filter: blur(3px);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 2000;
+        opacity: 0;
+        transition: opacity 0.22s;
+      }
+      .alert-modal-overlay.show {
+        opacity: 1;
+      }
+
+      .alert-modal-card {
+        background: var(--white);
+        border: 1.5px solid var(--border);
+        border-radius: 16px;
+        box-shadow: var(--shadow-lg);
+        width: 90%;
+        max-width: 360px;
+        padding: 20px;
+        animation: alertPop 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+      }
+
+      @keyframes alertPop {
+        from {
+          transform: scale(0.88);
+          opacity: 0;
+        }
+        to {
+          transform: scale(1);
+          opacity: 1;
+        }
+      }
+
+      .alert-modal-header {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        margin-bottom: 10px;
+      }
+      .alert-modal-icon {
+        font-size: 22px;
+      }
+      .alert-modal-title {
+        font-size: 15px;
+        font-weight: 700;
+        color: var(--text);
+      }
+
+      .alert-modal-body {
+        font-size: 13px;
+        line-height: 1.6;
+        color: var(--danger);
+        margin-bottom: 16px;
+        word-break: break-word;
+      }
+
+      .alert-modal-footer {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+
+      .alert-modal-btn {
+        font-family: "Sarabun", sans-serif;
+        background: var(--green);
+        color: var(--white);
+        border: none;
+        padding: 8px 16px;
+        border-radius: var(--radius-sm);
+        font-size: 13px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: background 0.15s;
+      }
+      .alert-modal-btn:hover {
+        background: var(--green-dark);
+      }
+
+      /* ─── GLOBAL DISCOUNT CHECKBOX ─── */
+      .use-global-discount-checkbox {
+        accent-color: var(--green);
+      }
+
+      /* ─── CUSTOMER SELECTION ─── */
+      .customer-selection-box {
+        margin-bottom: 14px;
+        border-bottom: 1.5px solid var(--border);
+        padding-bottom: 14px;
+      }
+
+      /* item remark input override */
+      .item-remark-input {
+        background: var(--white) !important;
+        border-color: var(--border) !important;
+      }
+      .item-remark-input:focus {
+        border-color: var(--green) !important;
+        background: var(--green-pale) !important;
+      }
+      /* ─── SEARCH CLEAR BUTTON ─── */
+      .search-clear {
+        position: absolute;
+        right: 10px;
+        top: 50%;
+        transform: translateY(-50%);
+        background: var(--border);
+        border: none;
+        border-radius: 50%;
+        width: 24px;
+        height: 24px;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        font-size: 12px;
+        color: var(--text-mid);
+        cursor: pointer;
+        z-index: 5;
+      }
+      .search-wrapper input:not(:placeholder-shown) ~ .search-clear {
+        display: flex;
+      }
+    </style>
+  </head>
+
+  <body>
+    <!-- Loader -->
+    <div id="loaderScreen" class="loader-screen">
+      <div class="loader"></div>
+      <div class="loader-text" id="loaderText">
+        กำลังโหลดข้อมูลใบเสนอราคา...
+      </div>
+    </div>
+
+    <!-- Toast -->
+    <div id="toast" class="toast"></div>
+
+    <!-- Alert Modal -->
+    <div id="alertModal" class="alert-modal-overlay" style="display: none">
+      <div class="alert-modal-card">
+        <div class="alert-modal-header">
+          <span class="alert-modal-icon">⚠️</span>
+          <h3 class="alert-modal-title">แจ้งเตือนสินค้าพร้อมส่งไม่พอ</h3>
+        </div>
+        <div class="alert-modal-body" id="alertModalMessage">
+          ข้อความเตือน...
+        </div>
+        <div class="alert-modal-footer">
+          <button class="alert-modal-btn" id="alertModalClose">รับทราบ</button>
+        </div>
+      </div>
+    </div>
+    <!-- Confirm Modal -->
+    <div id="confirmModal" class="alert-modal-overlay" style="display: none">
+      <div class="alert-modal-card">
+        <div class="alert-modal-header">
+          <span class="alert-modal-icon" id="confirmModalIcon">❓</span>
+          <h3 class="alert-modal-title" id="confirmModalTitle">
+            ยืนยันการดำเนินการ
+          </h3>
+        </div>
+        <div
+          class="alert-modal-body"
+          id="confirmModalMessage"
+          style="color: var(--text); font-size: 13px; line-height: 1.6"
+        >
+          ข้อความยืนยัน...
+        </div>
+        <div
+          class="alert-modal-footer"
+          style="display: flex; justify-content: flex-end; gap: 8px"
+        >
+          <button
+            class="alert-modal-btn"
+            id="confirmModalCancel"
+            style="background: var(--text-muted)"
+          >
+            ยกเลิก
+          </button>
+          <button
+            class="alert-modal-btn"
+            id="confirmModalOk"
+            style="background: var(--danger)"
+          >
+            ยืนยัน
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="container" id="mainContent" style="display: none">
+      <div id="quotesContainer"></div>
+      <div class="footer-note">Powered by Primus Co., Ltd.</div>
+    </div>
+
+    <!-- Sticky Footer -->
+    <div class="sticky-footer" id="stickyFooter" style="display: none">
+      <button class="btn btn-cancel" id="btnCancel">❌ ยกเลิก</button>
+      <button class="btn btn-confirm" id="btnConfirm">✅ ยืนยัน</button>
+    </div>
+
+    <!-- LIFF SDK -->
+    <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+    <script>
+      // Override global fetch to automatically inject ngrok skip header
+      (function() {
+        const originalFetch = window.fetch;
+        window.fetch = function(url, options = {}) {
+          if (!options.headers) {
+            options.headers = {};
+          }
+          if (options.headers instanceof Headers) {
+            options.headers.set('ngrok-skip-browser-warning', 'true');
+          } else if (Array.isArray(options.headers)) {
+            options.headers.push(['ngrok-skip-browser-warning', 'true']);
+          } else {
+            options.headers['ngrok-skip-browser-warning'] = 'true';
+          }
+          return originalFetch(url, options);
+        };
+      })();
+
+      // ── State ──
+      let quotesData = [];
+      let originalData = [];
+      let globalContacts = [];
+      let userId = null;
+      let hasChanges = false;
+
+      function showCustomAlert(message) {
+        const modal = document.getElementById("alertModal");
+        const msgEl = document.getElementById("alertModalMessage");
+        const closeBtn = document.getElementById("alertModalClose");
+        if (!modal || !msgEl || !closeBtn) {
+          alert(message);
+          return;
+        }
+        msgEl.textContent = message;
+        modal.style.display = "flex";
+        setTimeout(() => modal.classList.add("show"), 10);
+        const closeModal = () => {
+          modal.classList.remove("show");
+          setTimeout(() => (modal.style.display = "none"), 250);
+        };
+        closeBtn.onclick = closeModal;
+        modal.onclick = (e) => {
+          if (e.target === modal) closeModal();
+        };
+      }
+
+      function showCustomConfirm(title, message, options = {}) {
+        return new Promise((resolve) => {
+          const modal = document.getElementById("confirmModal");
+          const iconEl = document.getElementById("confirmModalIcon");
+          const titleEl = document.getElementById("confirmModalTitle");
+          const msgEl = document.getElementById("confirmModalMessage");
+          const btnOk = document.getElementById("confirmModalOk");
+          const btnCancel = document.getElementById("confirmModalCancel");
+
+          if (!modal || !titleEl || !msgEl || !btnOk || !btnCancel) {
+            resolve(confirm(message));
+            return;
+          }
+
+          if (options.icon) iconEl.textContent = options.icon;
+          else iconEl.textContent = "❓";
+
+          titleEl.textContent = title || "ยืนยันการดำเนินการ";
+          msgEl.textContent = message;
+
+          if (options.okText) btnOk.textContent = options.okText;
+          else btnOk.textContent = "ยืนยัน";
+
+          if (options.cancelText) btnCancel.textContent = options.cancelText;
+          else btnCancel.textContent = "ยกเลิก";
+
+          if (options.isDestructive) {
+            btnOk.style.background = "var(--danger)";
+          } else {
+            btnOk.style.background = "var(--green)";
+          }
+
+          modal.style.display = "flex";
+          setTimeout(() => modal.classList.add("show"), 10);
+
+          const close = (result) => {
+            modal.classList.remove("show");
+            setTimeout(() => {
+              modal.style.display = "none";
+              resolve(result);
+            }, 250);
+          };
+
+          btnOk.onclick = () => close(true);
+          btnCancel.onclick = () => close(false);
+          modal.onclick = (e) => {
+            if (e.target === modal) close(false);
+          };
+        });
+      }
+
+      // ── Elements ──
+      const loaderScreen = document.getElementById("loaderScreen");
+      const loaderText = document.getElementById("loaderText");
+      const mainContent = document.getElementById("mainContent");
+      const quotesContainer = document.getElementById("quotesContainer");
+      const stickyFooter = document.getElementById("stickyFooter");
+      const btnConfirm = document.getElementById("btnConfirm");
+      const btnCancel = document.getElementById("btnCancel");
+      const toastEl = document.getElementById("toast");
+
+      // ── Toast ──
+      function showToast(message, type = "success") {
+        // ลบ Toast เดิมถ้ามี
+        const existingToast = document.querySelector(".toast");
+        if (existingToast && existingToast.id !== "toast") {
+          existingToast.remove();
+        }
+
+        // ซ่อน toast เดิม (id="toast") ก่อน
+        toastEl.classList.remove("show");
+        toastEl.style.display = "none";
+
+        // สร้าง Toast ใหม่
+        const toast = document.createElement("div");
+        toast.className = `toast ${type}`;
+
+        // ข้อความ
+        const msgSpan = document.createElement("div");
+        msgSpan.className = "toast-message";
+        msgSpan.textContent = message;
+        toast.appendChild(msgSpan);
+
+        // ปุ่มปิด (เฉพาะ error)
+        if (type === "error") {
+          const closeBtn = document.createElement("button");
+          closeBtn.className = "toast-close-btn";
+          closeBtn.textContent = "รับทราบ";
+          closeBtn.addEventListener("click", () => {
+            toast.classList.remove("show");
+            setTimeout(() => toast.remove(), 300);
+          });
+          toast.appendChild(closeBtn);
+        }
+
+        document.body.appendChild(toast);
+
+        // แสดง Toast
+        requestAnimationFrame(() => {
+          toast.classList.add("show");
+        });
+
+        // สำหรับ success: ปิดอัตโนมัติหลังจาก 2.5 วินาที
+        if (type === "success") {
+          setTimeout(() => {
+            toast.classList.remove("show");
+            setTimeout(() => toast.remove(), 300);
+          }, 2500);
+        }
+      }
+
+      function formatNumber(n, decimals = 0) {
+        return n.toLocaleString("en-US", {
+          minimumFractionDigits: decimals,
+          maximumFractionDigits: decimals,
+        });
+      }
+
+      function parseCustomerMeta(quote) {
+        if (!quote)
+          return {
+            company: "ลูกค้าทั่วไป",
+            contact: "-",
+            phone: "-",
+            email: "-",
+            address: "-",
+            delivery: "-",
+            revise_from: null,
+          };
+        const fullName = quote.customer_name || "";
+        const parts = fullName.split(" | ");
+        if (parts.length > 1) {
+          const company = parts[0] ? parts[0].trim() : "ลูกค้าทั่วไป";
+          const contact = parts[1] ? parts[1].trim() : "-";
+          let meta = {};
+          if (parts[2]) {
+            try {
+              meta = Object.fromEntries(new URLSearchParams(parts[2]));
+            } catch (e) {}
+          }
+          return {
+            company,
+            contact,
+            phone:
+              meta.phone ||
+              (quote.contact_phone !== undefined ? quote.contact_phone : "-"),
+            email:
+              meta.email ||
+              (quote.contact_email !== undefined ? quote.contact_email : "-"),
+            address:
+              meta.address ||
+              (quote.contact_address !== undefined
+                ? quote.contact_address
+                : "-"),
+            delivery:
+              meta.delivery ||
+              meta.address ||
+              (quote.delivery_address !== undefined
+                ? quote.delivery_address
+                : "-"),
+            revise_from: meta.revise_from || quote.revise_from || null,
+          };
+        }
+        if (quote.contact_name) {
+          return {
+            company: fullName || "ลูกค้าทั่วไป",
+            contact: quote.contact_name || "-",
+            phone: quote.contact_phone || "-",
+            email: quote.contact_email || "-",
+            address: quote.contact_address || "-",
+            delivery: quote.delivery_address || "-",
+            revise_from: quote.revise_from || null,
+          };
+        }
+        return {
+          company: fullName || "ลูกค้าทั่วไป",
+          contact: "-",
+          phone: "-",
+          email: "-",
+          address: "-",
+          delivery: "-",
+          revise_from: null,
+        };
+      }
+
+      function calcItemTotal(item) {
+        const net =
+          item.price *
+          (1 - (item.discount_1 || 0) / 100) *
+          (1 - (item.discount_2 || 0) / 100);
+        return item.quantity * net;
+      }
+      function calcQuoteTotal(quote) {
+        return quote.items.reduce((s, i) => s + calcItemTotal(i), 0);
+      }
+
+      function shouldUseGlobalDiscount(quote) {
+        if (!quote.items || quote.items.length === 0) return true;
+        const d1 = quote.items[0].discount_1 || 0;
+        const d2 = quote.items[0].discount_2 || 0;
+        for (let i = 1; i < quote.items.length; i++) {
+          if (
+            (quote.items[i].discount_1 || 0) !== d1 ||
+            (quote.items[i].discount_2 || 0) !== d2
+          )
+            return false;
+        }
+        return true;
+      }
+
+      function checkDirty() {
+        hasChanges =
+          JSON.stringify(quotesData.map((q) => q.items)) !==
+            JSON.stringify(originalData.map((q) => q.items)) ||
+          JSON.stringify(quotesData.map((q) => q.customer_name)) !==
+            JSON.stringify(originalData.map((q) => q.customer_name));
+      }
+
+      // ── Render ──
+      function render() {
+        quotesContainer.innerHTML = "";
+        if (quotesData.length === 0) {
+          quotesContainer.innerHTML = `<div class="empty-state"><div class="icon">📭</div><div class="msg">ไม่พบข้อมูลใบเสนอราคา</div></div>`;
+          return;
+        }
+
+        const firstQuote = quotesData[0];
+        const meta = parseCustomerMeta(firstQuote);
+        const isRevision = !!meta.revise_from;
+
+        let revisionIndicatorHtml = "";
+        if (isRevision) {
+          revisionIndicatorHtml = `
+          <div class="revision-banner">
+            🔄 แก้ไขใบเสนอราคาเลขที่: <b>${meta.revise_from}</b>
+          </div>`;
+        }
+
+        const custCard = document.createElement("div");
+        custCard.className = "quote-card";
+        custCard.innerHTML = `
+        <div class="card-header customer-hdr">
+          <span>🏢 ข้อมูลลูกค้า / Customer Info</span>
+        </div>
+        <div class="card-body">
+          ${revisionIndicatorHtml}
+          <div class="customer-selection-box">
+            <div class="section-title" style="font-size:13px; margin-bottom:8px;">🏢 ค้นหาและเลือกลูกค้า</div>
+            <div class="search-wrapper" style="margin-bottom:10px;">
+              <input type="text" class="edit-input company-search-input" id="company-search-global"
+                placeholder="🔍 พิมพ์ชื่อบริษัทเพื่อค้นหา..."
+                style="max-width:none; width:100%; font-size:13px; padding-right:34px;"
+                value="${meta.company !== "ลูกค้าทั่วไป" ? meta.company : ""}"
+                ${isRevision ? 'disabled style="opacity:0.6;cursor:not-allowed;pointer-events:none;background:var(--green-pale);"' : ""}>
+              <button class="search-clear" id="clear-company-global" style="${isRevision ? "display:none !important;" : ""}">✕</button>
+              <div class="search-results-dropdown company-search-dropdown" id="company-results-global"></div>
+            </div>
+            <div class="contact-selection-wrapper">
+              <div class="section-title" style="font-size:12px; margin-bottom:4px;">👤 เลือกผู้ติดต่อ</div>
+              <select class="edit-input contact-select" id="contact-select-global"
+                style="max-width:none; width:100%; font-size:13px;"
+                ${isRevision ? 'disabled style="opacity:0.6;cursor:not-allowed;pointer-events:none;background:var(--green-pale);"' : ""}>
+                <option value="">-- กำลังโหลดผู้ติดต่อ... --</option>
+              </select>
+              <div id="contact-warning-global" style="display:none; color:var(--danger); font-size:11px; font-weight:700; margin-top:4px;"></div>
+            </div>
+          </div>
+          <div class="info-grid" id="customer-details-global"></div>
+          <div class="info-note" style="margin-top:10px;">⚠️ หากพบข้อมูลผิดพลาด กรุณาติดต่อแอดมิน</div>
+        </div>
+      `;
+        quotesContainer.appendChild(custCard);
+
+        quotesData.forEach((quote, qIdx) => {
+          if (quote.useGlobalDiscount === undefined)
+            quote.useGlobalDiscount = shouldUseGlobalDiscount(quote);
+          const isGlobalActive = quote.useGlobalDiscount;
+          const isTht = quote.quote_company === "THT";
+          const label = isTht ? "Themtech (THT)" : "Primus (PM)";
+          const headerClass = isTht ? "tht" : "pm";
+          const total = calcQuoteTotal(quote);
+
+          const card = document.createElement("div");
+          card.className = "quote-card";
+          card.innerHTML = `
+          <div class="card-header ${headerClass}">
+            <span>📄 ใบเสนอราคา - ${label}</span>
+            <span class="save-status" id="save-status-${qIdx}"></span>
+          </div>
+          <div class="card-body" style="padding-top:14px;">
+            <div class="section-title">🛒 รายการสินค้า (${quote.items.length} รายการ)</div>
+            <div id="items-${qIdx}"></div>
+          </div>
+          <div class="card-body global-discount-section" style="padding-top:0; padding-bottom:4px;">
+            <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+              <input type="checkbox" id="use-global-discount-${qIdx}" class="use-global-discount-checkbox"
+                data-q="${qIdx}" ${isGlobalActive ? "checked" : ""} style="width:16px;height:16px;cursor:pointer;">
+              <label for="use-global-discount-${qIdx}" style="font-size:13px;font-weight:600;cursor:pointer;color:var(--text);user-select:none;">ใช้ส่วนลดเท่ากันทั้งหมด</label>
+              <div class="disc-group">
+                <input type="number" class="edit-input global-discount-input" min="0" max="100" step="0.1"
+                  value="${quote.items[0]?.discount_1 || 0}" data-q="${qIdx}" data-field="discount_1" placeholder="0"
+                  ${isGlobalActive ? "" : "disabled"}>
+                <span class="disc-sep">+</span>
+                <input type="number" class="edit-input global-discount-input" min="0" max="100" step="0.1"
+                  value="${quote.items[0]?.discount_2 || 0}" data-q="${qIdx}" data-field="discount_2" placeholder="0"
+                  ${isGlobalActive ? "" : "disabled"}>
+                <span style="font-size:12px;color:var(--text-muted);">%</span>
+              </div>
+            </div>
+          </div>
+          <div class="card-body" style="padding-top:0; padding-bottom:4px;">
+            <div class="add-product-section">      
+              <div class="search-wrapper">
+                <input type="text" class="edit-input add-product-input" placeholder="➕ ค้นหาสินค้าเพิ่ม..."
+                  data-q="${qIdx}" style="max-width:none; font-size:13px; width:100%; padding-right:34px;">
+                <button class="search-clear add-product-clearBtn" data-q="${qIdx}">✕</button>
+                <div class="search-results-dropdown" id="search-results-${qIdx}"></div>
+              </div>
+            </div>
+          </div>
+          <div class="total-bar">
+            <span class="total-label">💰 ยอดรวม</span>
+            <span class="total-value" id="total-${qIdx}">฿${formatNumber(total, 2)}</span>
+          </div>
+        `;
+          quotesContainer.appendChild(card);
+
+          card
+            .querySelectorAll(".global-discount-input")
+            .forEach((input) =>
+              input.addEventListener("input", onGlobalDiscountChange),
+            );
+          const checkbox = card.querySelector(".use-global-discount-checkbox");
+          if (checkbox) checkbox.addEventListener("change", onCheckboxChange);
+          const searchInput = card.querySelector(".add-product-input");
+          if (searchInput) {
+            searchInput.addEventListener("input", onSearchInput);
+            searchInput.addEventListener("focus", onSearchInput);
+          }
+
+          renderItems(qIdx);
+        });
+
+        const companySearchInput = custCard.querySelector(
+          ".company-search-input",
+        );
+        if (companySearchInput) {
+          companySearchInput.addEventListener("input", onCompanySearchInput);
+          companySearchInput.addEventListener("focus", onCompanySearchInput);
+        }
+        const contactSelect = custCard.querySelector(".contact-select");
+        if (contactSelect)
+          contactSelect.addEventListener("change", onContactSelectChange);
+
+        updateCustomerDetailsUI();
+        fetchAndRenderContacts(firstQuote.customer_id, meta.contact);
+        checkDirty();
+      }
+
+      function renderItems(qIdx) {
+        const container = document.getElementById(`items-${qIdx}`);
+        const quote = quotesData[qIdx];
+        if (quote.useGlobalDiscount === undefined)
+          quote.useGlobalDiscount = shouldUseGlobalDiscount(quote);
+        const isGlobalActive = quote.useGlobalDiscount;
+        container.innerHTML = "";
+
+        quote.items.forEach((item, idx) => {
+          const itemTotal = calcItemTotal(item);
+          const originalTotal = item.price * item.quantity;
+          const discountText = formatNumber(originalTotal - itemTotal, 2);
+          const stock = Number(item.stock) || 0;
+          const remaining = stock - item.quantity;
+          const stockClass = remaining < 0 ? "out-of-stock" : "in-stock";
+          const stockText =
+            remaining < 0
+              ? `ไม่พอคงเหลือ: ${stock} ชิ้น`
+              : `พร้อมส่ง: ${stock}`;
+
+          const itemEl = document.createElement("div");
+          itemEl.className = "item-card";
+          itemEl.innerHTML = `
+          <!-- TOP BAR: index · code · stock badge · delete -->
+          <div class="item-top-bar">
+            <span class="item-index">${idx + 1}</span>
+            <span class="item-code">${item.model || item.product_code}</span>
+            <span class="stock-warning-container">
+              <span class="item-stock-badge ${stockClass}">${stockText}</span>
+            </span>
+            <button type="button" class="btn-delete-item" data-q="${qIdx}" data-i="${idx}" title="ลบรายการ">🗑️</button>
+          </div>
+
+          <!-- BODY -->
+          <div class="item-body">
+
+            <!-- ROW 1: ราคา/หน่วย + จำนวน (2 คอลัมน์เคียงคู่กัน) -->
+            <div class="item-pq-row">
+              <div class="item-pq-col price-col">
+                <span class="item-field-label">ราคา/หน่วย</span>
+                <input type="number" class="edit-input inp-price item-price-input"
+                  min="0" step="any"
+                  value="${item.price}"
+                  data-q="${qIdx}" data-i="${idx}" data-field="price">
+              </div>
+              <div class="item-pq-col qty-col">
+                <span class="item-field-label">จำนวน</span>
+                <div class="qty-control compact">
+                  <button type="button" class="qty-btn btn-minus" data-q="${qIdx}" data-i="${idx}">−</button>
+                  <input type="number" class="edit-input qty-input" min="1"
+                    value="${item.quantity}" data-q="${qIdx}" data-i="${idx}" data-field="quantity">
+                  <button type="button" class="qty-btn btn-plus" data-q="${qIdx}" data-i="${idx}">+</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- ROW 2: ส่วนลด -->
+            <div class="item-disc-row">
+              <span class="item-field-label" style="flex-shrink:0;">ส่วนลด</span>
+              <div class="disc-inputs-group">
+                <input type="number" class="edit-input inp-disc item-discount-input"
+                  min="0" max="100" step="0.1"
+                  value="${item.discount_1 || 0}"
+                  data-q="${qIdx}" data-i="${idx}" data-field="discount_1" placeholder="0"
+                  ${isGlobalActive ? "disabled" : ""}>
+                <span class="disc-separator">+</span>
+                <input type="number" class="edit-input inp-disc item-discount-input"
+                  min="0" max="100" step="0.1"
+                  value="${item.discount_2 || 0}"
+                  data-q="${qIdx}" data-i="${idx}" data-field="discount_2" placeholder="0"
+                  ${isGlobalActive ? "disabled" : ""}>
+                <span class="disc-unit">%</span>
+              </div>
+              <span class="item-discount-baht item-discount-baht-chip">-฿${discountText}</span>
+            </div>
+
+            <!-- ROW 3: ยอดรวม -->
+            <div class="item-total-row">
+              <span class="item-field-label" style="font-weight: 600; color: var(--text-mid);">ยอดรวม</span>
+              <span class="item-total item-total-chip">฿${formatNumber(itemTotal, 2)}</span>
+            </div>
+
+            <!-- ROW 4: หมายเหตุ -->
+            <input type="text" class="edit-input inp-remark item-remark-input"
+              placeholder="📝 หมายเหตุ / รายละเอียดเพิ่มเติม..."
+              value="${item.remark || ""}"
+              data-q="${qIdx}" data-i="${idx}" data-field="remark">
+
+          </div>
+        `;
+          container.appendChild(itemEl);
+        });
+
+        container
+          .querySelectorAll(".edit-input")
+          .forEach((input) => input.addEventListener("input", onFieldChange));
+        container
+          .querySelectorAll(".btn-delete-item")
+          .forEach((btn) => btn.addEventListener("click", onDeleteItem));
+        container
+          .querySelectorAll(".btn-minus")
+          .forEach((btn) => btn.addEventListener("click", onQtyMinus));
+        container
+          .querySelectorAll(".btn-plus")
+          .forEach((btn) => btn.addEventListener("click", onQtyPlus));
+      }
+
+      function onQtyMinus(e) {
+        const input = e.currentTarget.parentNode.querySelector(".qty-input");
+        let v = parseInt(input.value) || 1;
+        if (v > 1) {
+          input.value = v - 1;
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      }
+      function onQtyPlus(e) {
+        const input = e.currentTarget.parentNode.querySelector(".qty-input");
+        let v = parseInt(input.value) || 1;
+        input.value = v + 1;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+
+      function onGlobalDiscountChange(e) {
+        const qIdx = parseInt(e.target.dataset.q);
+        const field = e.target.dataset.field;
+        let val = Math.max(0, Math.min(100, parseFloat(e.target.value) || 0));
+        quotesData[qIdx].items.forEach((item) => {
+          if (field === "discount_1") item.discount_1 = val;
+          else if (field === "discount_2") item.discount_2 = val;
+        });
+        renderItems(qIdx);
+        const totalEl = document.getElementById(`total-${qIdx}`);
+        if (totalEl)
+          totalEl.textContent = `฿${formatNumber(calcQuoteTotal(quotesData[qIdx]), 2)}`;
+        checkDirty();
+        triggerAutoSave();
+      }
+
+      function onCheckboxChange(e) {
+        const qIdx = parseInt(e.target.dataset.q);
+        const quote = quotesData[qIdx];
+        quote.useGlobalDiscount = e.target.checked;
+
+        if (e.target.checked) {
+          const d1 = quote.items[0]?.discount_1 || 0;
+          const d2 = quote.items[0]?.discount_2 || 0;
+          quote.items.forEach((item) => {
+            item.discount_1 = d1;
+            item.discount_2 = d2;
+          });
+        }
+
+        // Refactor จากเดิมที่เป็น render(); ให้กลายเป็น:
+        renderItems(qIdx);
+
+        // คอยอัปเดตสถานะการปิด/เปิดใช้งาน Input ของส่วนลดหลักประจำการ์ดนั้นๆ
+        const card = e.target.closest(".quote-card");
+        if (card) {
+          card.querySelectorAll(".global-discount-input").forEach((input) => {
+            input.disabled = !e.target.checked;
+          });
+        }
+
+        triggerAutoSave();
+      }
+
+      function onFieldChange(e) {
+        const qIdx = parseInt(e.target.dataset.q);
+        const iIdx = parseInt(e.target.dataset.i);
+        const field = e.target.dataset.field;
+        if (field === "remark") {
+          quotesData[qIdx].items[iIdx].remark = e.target.value;
+          checkDirty();
+          triggerAutoSave();
+          return;
+        }
+        let val = parseFloat(e.target.value) || 0;
+        if (field === "quantity") {
+          val = Math.max(1, Math.round(val));
+          const item = quotesData[qIdx].items[iIdx];
+          if (
+            item.quantity <= (Number(item.stock) || 0) &&
+            val > (Number(item.stock) || 0)
+          ) {
+            showCustomAlert(
+              `ระวัง: สินค้าไม่เพียงพอ (พร้อมส่ง: ${item.stock} ชิ้น, ต้องการ: ${val} ชิ้น) ขาดอีก ${val - item.stock} ชิ้นจะต้องรอการผลิตหรือสั่งซื้อ`,
+            );
+          }
+          item.quantity = val;
+        } else if (field === "price") {
+          val = Math.max(0, val);
+          quotesData[qIdx].items[iIdx].price = val;
+        } else if (field === "discount_1") {
+          val = Math.max(0, Math.min(100, val));
+          quotesData[qIdx].items[iIdx].discount_1 = val;
+        } else if (field === "discount_2") {
+          val = Math.max(0, Math.min(100, val));
+          quotesData[qIdx].items[iIdx].discount_2 = val;
+        }
+
+        const totalEl = document.getElementById(`total-${qIdx}`);
+        if (totalEl)
+          totalEl.textContent = `฿${formatNumber(calcQuoteTotal(quotesData[qIdx]), 2)}`;
+
+        const itemTotal = calcItemTotal(quotesData[qIdx].items[iIdx]);
+        const itemCard = e.target.closest(".item-card");
+        if (itemCard) {
+          const el = itemCard.querySelector(".item-total");
+          if (el) el.textContent = `฿${formatNumber(itemTotal, 2)}`;
+          const item = quotesData[qIdx].items[iIdx];
+          const discEl = itemCard.querySelector(".item-discount-baht");
+          if (discEl)
+            discEl.textContent = `-฿${formatNumber(item.price * item.quantity - itemTotal, 2)}`;
+          const stock = Number(item.stock) || 0;
+          const stockEl = itemCard.querySelector(".item-stock-badge");
+          if (stockEl) {
+            const rem = stock - item.quantity;
+            stockEl.className = `item-stock-badge ${rem < 0 ? "out-of-stock" : "in-stock"}`;
+            stockEl.textContent =
+              rem < 0 ? `ไม่พอคงเหลือ: ${stock} ชิ้น` : `พร้อมส่ง: ${stock}`;
+          }
+        }
+        checkDirty();
+        triggerAutoSave();
+      }
+
+      async function onDeleteItem(e) {
+        const qIdx = parseInt(e.target.dataset.q);
+        const iIdx = parseInt(e.target.dataset.i);
+        const item = quotesData[qIdx].items[iIdx];
+        const confirmed = await showCustomConfirm(
+          "ลบรายการสินค้า",
+          `ต้องการลบรายการ "${item.model || item.product_code}" ออกจากใบเสนอราคานี้หรือไม่?`,
+          { isDestructive: true, okText: "ลบรายการ", icon: "🗑️" },
+        );
+        if (!confirmed) return;
+        quotesData[qIdx].items.splice(iIdx, 1);
+        let quoteDeleted = false;
+        if (quotesData[qIdx].items.length === 0) {
+          cancelSingleQuote(quotesData[qIdx].id);
+          quotesData.splice(qIdx, 1);
+          originalData.splice(qIdx, 1);
+          quoteDeleted = true;
+        }
+        render();
+        if (!quoteDeleted) triggerAutoSave();
+      }
+
+      async function cancelSingleQuote(quoteId) {
+        try {
+          await fetch(`/api/quotation/${quoteId}/cancel`, { method: "POST" });
+        } catch (e) {
+          console.error("Cancel quote error:", e);
+        }
+      }
+
+      let autoSaveTimeout = null,
+        isSaving = false;
+
+      function triggerAutoSave() {
+        updateAllSaveStatus("⏳ กำลังบันทึก...", "saving");
+        hasChanges = true;
+        if (autoSaveTimeout) clearTimeout(autoSaveTimeout);
+        autoSaveTimeout = setTimeout(async () => {
+          try {
+            await silentSaveChanges();
+            updateAllSaveStatus("✓ บันทึกสำเร็จ", "saved");
+            await refetchQuotationDataSilently();
+          } catch (err) {
+            updateAllSaveStatus("⚠️ บันทึกไม่สำเร็จ", "error");
+          }
+        }, 1000);
+      }
+
+      function updateAllSaveStatus(text, cls) {
+        quotesData.forEach((_, qIdx) => {
+          const el = document.getElementById(`save-status-${qIdx}`);
+          if (el) {
+            el.textContent = text;
+            el.className = `save-status ${cls}`;
+          }
+        });
+      }
+
+      async function silentSaveChanges() {
+        isSaving = true;
+        try {
+          for (const quote of quotesData) {
+            const totalSum = calcQuoteTotal(quote);
+            const meta = parseCustomerMeta(quote);
+            const companyEl = document.getElementById("company-search-global");
+            const contactEl = document.getElementById("contact-select-global");
+            let cleanCompany = companyEl ? companyEl.value.trim() : "";
+            let cleanContact = contactEl ? contactEl.value.trim() : "";
+            if (!companyEl || !contactEl) {
+              cleanCompany = meta.company;
+              cleanContact = meta.contact;
+            }
+            if (!cleanCompany) cleanCompany = "ลูกค้าทั่วไป";
+            if (!cleanContact) cleanContact = "-";
+            const payload = { 
+              items: quote.items, 
+              total_sum: totalSum,
+              customer_id: quote.customer_id || null,
+              contact_id: quote.contact_id || null
+            };
+            payload.customer_name = meta.revise_from
+              ? `${cleanCompany} | ${cleanContact} | revise_from=${meta.revise_from}`
+              : `${cleanCompany} | ${cleanContact}`;
+            const resp = await fetch(`/api/quotation/${quote.id}`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+            if (!resp.ok) throw new Error("Network response was not ok");
+          }
+          originalData = JSON.parse(JSON.stringify(quotesData));
+          hasChanges = false;
+        } catch (err) {
+          console.error("Silent save error:", err);
+          throw err;
+        } finally {
+          isSaving = false;
+        }
+      }
+
+      function updateCustomerDetailsUI() {
+        if (!quotesData.length) return;
+        const meta = parseCustomerMeta(quotesData[0]);
+        const container = document.getElementById("customer-details-global");
+        if (!container) return;
+        container.innerHTML = `
+        <div class="info-row"><span class="info-label">🏢 บริษัท</span><span class="info-value">${meta.company}</span></div>
+        <div class="info-row"><span class="info-label">👤 ผู้ติดต่อ</span><span class="info-value">${meta.contact}</span></div>
+        <div class="info-row"><span class="info-label">📞 โทรศัพท์</span><span class="info-value">${meta.phone}</span></div>
+        <div class="info-row"><span class="info-label">📧 อีเมล</span><span class="info-value">${meta.email}</span></div>
+        <div class="info-row"><span class="info-label">🏠 ที่อยู่</span><span class="info-value">${meta.address}</span></div>
+        <div class="info-row"><span class="info-label">🚚 สถานที่ส่ง</span><span class="info-value">${meta.delivery}</span></div>
+      `;
+      }
+
+      async function fetchAndRenderContacts(customerId, selectedContactName) {
+        const selectEl = document.getElementById("contact-select-global");
+        const warningEl = document.getElementById("contact-warning-global");
+        if (!selectEl) return;
+        const meta = parseCustomerMeta(quotesData[0]);
+        const isRevision = !!meta.revise_from;
+        if (!customerId) {
+          if (isRevision && selectedContactName) {
+            selectEl.innerHTML = `<option value="${selectedContactName}" selected>${selectedContactName}</option>`;
+            if (warningEl) warningEl.style.display = "none";
+          } else {
+            selectEl.innerHTML =
+              '<option value="">-- กรุณาเลือกบริษัทก่อน --</option>';
+            if (warningEl) {
+              warningEl.textContent = "⚠️ กรุณาค้นหาและเลือกบริษัทจากระบบ";
+              warningEl.style.display = "block";
+            }
+          }
+          validateContactsAndEnableConfirm();
+          return;
+        }
+        try {
+          const resp = await fetch(`/api/customer/${customerId}/contacts`);
+          if (!resp.ok) throw new Error("Failed to fetch contacts");
+          const contacts = await resp.json();
+          globalContacts = contacts || [];
+          selectEl.innerHTML = "";
+          const defOpt = document.createElement("option");
+          defOpt.value = "";
+          defOpt.textContent = "-- เลือกผู้ติดต่อ --";
+          selectEl.appendChild(defOpt);
+          let matched = false;
+          contacts.forEach((c) => {
+            const opt = document.createElement("option");
+            opt.value = c.name;
+            opt.textContent = c.name;
+            if (c.name === selectedContactName) {
+              opt.selected = true;
+              matched = true;
+              quotesData.forEach(q => q.contact_id = c.id);
+            }
+            selectEl.appendChild(opt);
+          });
+          if (!matched && selectedContactName) {
+            const opt = document.createElement("option");
+            opt.value = selectedContactName;
+            opt.textContent = selectedContactName;
+            opt.selected = true;
+            selectEl.appendChild(opt);
+            matched = true;
+          }
+          if (contacts.length === 0 && !isRevision) {
+            selectEl.innerHTML =
+              '<option value="">-- ไม่พบข้อมูลผู้ติดต่อในระบบ --</option>';
+            if (warningEl) {
+              warningEl.textContent =
+                "⚠️ ไม่พบข้อมูลผู้ติดต่อของบริษัทนี้ในระบบ กรุณาติดต่อแอดมินเพื่อเพิ่มข้อมูล";
+              warningEl.style.display = "block";
+            }
+          } else if (warningEl) {
+            warningEl.style.display = "none";
+          }
+        } catch (err) {
+          console.error("Error fetching contacts:", err);
+          if (isRevision && selectedContactName)
+            selectEl.innerHTML = `<option value="${selectedContactName}" selected>${selectedContactName}</option>`;
+          else
+            selectEl.innerHTML =
+              '<option value="">-- เกิดข้อผิดพลาดในการโหลดผู้ติดต่อ --</option>';
+        } finally {
+          validateContactsAndEnableConfirm();
+        }
+      }
+
+      function validateContactsAndEnableConfirm() {
+        const selectEl = document.getElementById("contact-select-global");
+        const warningEl = document.getElementById("contact-warning-global");
+        if (!quotesData[0]) return;
+        const meta = parseCustomerMeta(quotesData[0]);
+        if (meta.revise_from) {
+          if (warningEl) warningEl.style.display = "none";
+          if (btnConfirm) {
+            btnConfirm.disabled = false;
+            btnConfirm.style.opacity = "1";
+            btnConfirm.style.pointerEvents = "auto";
+          }
+          return;
+        }
+        let allValid = true;
+        if (!quotesData[0].customer_id) {
+          allValid = false;
+          if (warningEl) {
+            warningEl.textContent = "⚠️ กรุณาค้นหาและเลือกบริษัทจากระบบ";
+            warningEl.style.display = "block";
+          }
+        } else {
+          const contactVal = selectEl ? selectEl.value : "";
+          if (!contactVal) {
+            allValid = false;
+            if (warningEl) {
+              warningEl.textContent =
+                selectEl && selectEl.options.length <= 1
+                  ? "⚠️ ไม่พบข้อมูลผู้ติดต่อของบริษัทนี้ในระบบ กรุณาติดต่อแอดมินเพื่อเพิ่มข้อมูล"
+                  : "⚠️ กรุณาเลือกผู้ติดต่อจากดรอปดาวน์";
+              warningEl.style.display = "block";
+            }
+          } else if (warningEl) {
+            warningEl.style.display = "none";
+          }
+        }
+        if (btnConfirm) {
+          btnConfirm.disabled = !allValid;
+          btnConfirm.style.opacity = allValid ? "1" : "0.5";
+          btnConfirm.style.pointerEvents = allValid ? "auto" : "none";
+        }
+      }
+
+      let companySearchTimeout = null;
+      function onCompanySearchInput(e) {
+        const query = e.target.value.trim();
+        const dropdown = document.getElementById("company-results-global");
+        if (!dropdown) return;
+        if (companySearchTimeout) clearTimeout(companySearchTimeout);
+        companySearchTimeout = setTimeout(async () => {
+          try {
+            const resp = await fetch(
+              `/api/customers/search?q=${encodeURIComponent(query)}&userId=${userId || ""}`,
+            );
+            if (!resp.ok) throw new Error("Search failed");
+            renderCompanySearchResults(await resp.json(), dropdown);
+          } catch (err) {
+            console.error("Company search error:", err);
+          }
+        }, 150);
+      }
+
+      function renderCompanySearchResults(customers, dropdown) {
+        dropdown.innerHTML = "";
+        if (!customers || customers.length === 0) {
+          dropdown.innerHTML =
+            '<div style="padding:10px;font-size:12px;color:var(--text-light);text-align:center;">ไม่พบข้อมูลบริษัท</div>';
+          dropdown.style.display = "block";
+          return;
+        }
+        customers.forEach((cust) => {
+          const itemEl = document.createElement("div");
+          itemEl.className = "dropdown-item";
+          itemEl.innerHTML = `
+          <div class="dropdown-item-header">
+            <span class="prod-code">${cust.display_name}</span>
+            <span class="prod-price" style="font-size:11px;color:var(--text-light);">${cust.reference || ""}</span>
+          </div>
+          `;
+          itemEl.addEventListener("click", () => {
+            selectCompanyForQuote(cust);
+            dropdown.style.display = "none";
+          });
+          dropdown.appendChild(itemEl);
+        });
+        dropdown.style.display = "block";
+      }
+
+      async function selectCompanyForQuote(cust) {
+        quotesData.forEach((quote) => {
+          quote.customer_id = cust.id;
+          quote.customer_name = `${cust.display_name} | `;
+        });
+        const searchInput = document.getElementById("company-search-global");
+        if (searchInput) searchInput.value = cust.display_name;
+        triggerAutoSave();
+        fetchAndRenderContacts(cust.id, "");
+      }
+
+      function onContactSelectChange(e) {
+        const selectVal = e.target.value;
+        const matchedContact = globalContacts.find((c) => c.name === selectVal);
+        const contactId = matchedContact ? matchedContact.id : null;
+        quotesData.forEach((quote) => {
+          const meta = parseCustomerMeta(quote);
+          quote.customer_name = `${meta.company} | ${selectVal}`;
+          quote.contact_id = contactId;
+        });
+        triggerAutoSave();
+        validateContactsAndEnableConfirm();
+      }
+
+      async function refetchQuotationDataSilently() {
+        try {
+          const quoteIds = quotesData.map((q) => q.id).join(",");
+          const resp = await fetch(
+            `/api/quotations?ids=${encodeURIComponent(quoteIds)}`,
+          );
+          if (resp.ok) {
+            const data = await resp.json();
+            data.forEach((updated) => {
+              const local = quotesData.find((q) => q.id === updated.id);
+              if (local) {
+                Object.assign(local, {
+                  customer_name: updated.customer_name,
+                  customer_id: updated.customer_id,
+                  contact_id: updated.contact_id,
+                  customer_code: updated.customer_code,
+                  customer_tax_id: updated.customer_tax_id,
+                  contact_name: updated.contact_name,
+                  contact_phone: updated.contact_phone,
+                  contact_email: updated.contact_email,
+                  contact_address: updated.contact_address,
+                  delivery_address: updated.delivery_address,
+                });
+              }
+            });
+            originalData = JSON.parse(JSON.stringify(quotesData));
+            updateCustomerDetailsUI();
+          }
+        } catch (err) {
+          console.error("Refetch error:", err);
+        }
+      }
+
+      let searchTimeout = null;
+      function onSearchInput(e) {
+        const qIdx = parseInt(e.target.dataset.q);
+        const query = e.target.value.trim();
+        const dropdown = document.getElementById(`search-results-${qIdx}`);
+        if (!dropdown) return;
+        if (!query) {
+          dropdown.innerHTML = "";
+          dropdown.style.display = "none";
+          return;
+        }
+        if (searchTimeout) clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(async () => {
+          try {
+            const resp = await fetch(
+              `/api/products/search?q=${encodeURIComponent(query)}`,
+            );
+            if (!resp.ok) throw new Error("Search failed");
+            renderSearchResults(await resp.json(), qIdx, dropdown);
+          } catch (err) {
+            console.error("Search error:", err);
+          }
+        }, 300);
+      }
+
+      function renderSearchResults(products, qIdx, dropdown) {
+        dropdown.innerHTML = "";
+        if (!products || products.length === 0) {
+          dropdown.innerHTML =
+            '<div style="padding:10px;font-size:12px;color:var(--text-light);text-align:center;">ไม่พบสินค้า</div>';
+          dropdown.style.display = "block";
+          return;
+        }
+        products.forEach((prod) => {
+          const itemEl = document.createElement("div");
+          itemEl.className = "dropdown-item";
+          const stock = Number(prod.stock) || 0;
+          itemEl.innerHTML = `
+          <div class="dropdown-item-header" style="margin-bottom:2px;">
+            <span class="prod-code">${prod.model || prod.code}</span>
+            <span class="prod-price">฿${formatNumber(prod.price, 2)}</span>
+          </div>
+          <div style="display:flex;justify-content:flex-end;align-items:center;font-size:11px;">
+            <span class="prod-stock ${stock > 0 ? "in-stock" : "out-of-stock"}">${stock > 0 ? `คงเหลือ: ${stock} ชิ้น` : "สินค้าหมด"}</span>
+          </div>`;
+
+          // 🛠️ แก้ไขลำดับการทำงานตรงนี้
+          itemEl.addEventListener("click", () => {
+            // 1. ค้นหาช่องค้นหาของการ์ดใบนี้ แล้วล้างตัวหนังสือออกให้เรียบร้อยก่อน
+            const card = dropdown.closest(".quote-card");
+            if (card) {
+              const inp = card.querySelector(".add-product-input");
+              if (inp) inp.value = "";
+            }
+
+            // 2. สั่งซ่อนและเคลียร์ HTML ในดร็อปดาวน์ทิ้งทันที
+            dropdown.style.display = "none";
+            dropdown.innerHTML = "";
+
+            // 3. ค่อยสั่งแอดสินค้า (เนื่องจากฟังก์ชันนี้จะสั่งทำลาย DOM เก่าเพื่อประกอบร่างหน้าจอใหม่)
+            addProductToQuote(prod, qIdx);
+          });
+
+          dropdown.appendChild(itemEl);
+        });
+        dropdown.style.display = "block";
+      }
+
+      async function addProductToQuote(prod, qIdx) {
+        const targetIsTht = prod.quote_company === "THT";
+
+        let targetQIdx = quotesData.findIndex((q) => {
+          return (q.quote_company === "THT") === targetIsTht;
+        });
+
+        if (targetQIdx === -1) {
+          updateAllSaveStatus("⏳ กำลังแยกใบเสนอราคาใหม่...", "saving");
+          try {
+            const firstQuote = quotesData[0];
+            const meta = parseCustomerMeta(firstQuote);
+            const companyEl = document.getElementById("company-search-global");
+            const contactEl = document.getElementById("contact-select-global");
+            let cleanCompany = companyEl ? companyEl.value.trim() : "";
+            let cleanContact = contactEl ? contactEl.value.trim() : "";
+            if (!companyEl || !contactEl) {
+              cleanCompany = meta.company;
+              cleanContact = meta.contact;
+            }
+            if (!cleanCompany) cleanCompany = "ลูกค้าทั่วไป";
+            if (!cleanContact) cleanContact = "-";
+
+            const customerName = meta.revise_from
+              ? `${cleanCompany} | ${cleanContact} | revise_from=${meta.revise_from}`
+              : `${cleanCompany} | ${cleanContact}`;
+
+            const resp = await fetch("/api/quotations", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                userId,
+                customerName,
+                status: "draft",
+                items: [],
+              }),
+            });
+            if (!resp.ok)
+              throw new Error("Failed to create new quotation on server");
+
+            const newQuote = await resp.json();
+            quotesData.push(newQuote);
+            targetQIdx = quotesData.length - 1;
+
+            const url = new URL(window.location);
+            url.searchParams.set(
+              "quoteIds",
+              quotesData.map((q) => q.id).join(","),
+            );
+            window.history.replaceState({}, "", url);
+
+            showToast(
+              "➕ แยกใบเสนอราคาใหม่สำหรับสินค้า " +
+                (targetIsTht ? "THT" : "PM"),
+            );
+          } catch (err) {
+            console.error("Create new quotation error:", err);
+            showToast("❌ ไม่สามารถแยกใบเสนอราคาได้: " + err.message, "error");
+            updateAllSaveStatus("⚠️ บันทึกไม่สำเร็จ", "error");
+            return;
+          }
+        }
+
+        const quote = quotesData[targetQIdx];
+        const stock = Number(prod.stock) || 0;
+        const first = quote.items[0];
+        const newItem = {
+          product_code: prod.code,
+          model: prod.code,
+          name: prod.name,
+          quantity: 1,
+          price: prod.price,
+          discount_1: first ? first.discount_1 || 0 : 0,
+          discount_2: first ? first.discount_2 || 0 : 0,
+          production: prod.production || "",
+          stock,
+          product_sub_category: prod.category || "",
+          sales_description: prod.sales_description || "",
+        };
+        if (1 > stock)
+          showCustomAlert(
+            `ระวัง: สินค้าไม่เพียงพอ (สต็อกพร้อมส่ง: ${stock} ชิ้น, ต้องการ: 1 ชิ้น) ขาดอีก ${1 - stock} ชิ้นจะต้องรอการผลิตหรือสั่งซื้อ`,
+          );
+
+        if (!quote.items) quote.items = [];
+        quote.items.push(newItem);
+        render();
+        triggerAutoSave();
+      }
+
+      document.addEventListener("click", (e) => {
+        // ✕ clearBtn สำหรับช่องค้นหาบริษัท
+        if (
+          e.target.id === "clear-company-global" ||
+          e.target.closest("#clear-company-global")
+        ) {
+          const companyInput = document.getElementById("company-search-global");
+          if (companyInput) {
+            companyInput.value = "";
+            companyInput.focus();
+            // อัปเดตข้อมูลลูกค้าใน state เป็นค่าว่าง/ลูกค้าทั่วไป
+            quotesData.forEach((quote) => {
+              quote.customer_id = "";
+              quote.customer_name = "ลูกค้าทั่วไป | ";
+            });
+            // สั่งปิด dropdown และอัปเดต UI รายละเอียดลูกค้า
+            const compDropdown = document.getElementById(
+              "company-results-global",
+            );
+            if (compDropdown) {
+              compDropdown.style.display = "none";
+              compDropdown.innerHTML = "";
+            }
+            // บันทึกและดึงข้อมูลติดต่อใหม่
+            triggerAutoSave();
+            fetchAndRenderContacts("", "");
+          }
+          return;
+        }
+
+        // ✕ clearBtn สำหรับช่องค้นหาสินค้า
+        if (
+          e.target.classList.contains("add-product-clearBtn") ||
+          e.target.closest(".add-product-clearBtn")
+        ) {
+          const clearBtn = e.target.classList.contains("add-product-clearBtn")
+            ? e.target
+            : e.target.closest(".add-product-clearBtn");
+          const qIdx = parseInt(clearBtn.dataset.q);
+          const card = clearBtn.closest(".quote-card");
+          if (card) {
+            const productInput = card.querySelector(".add-product-input");
+            if (productInput) {
+              productInput.value = "";
+              productInput.focus();
+            }
+          }
+          const dropdown = document.getElementById(`search-results-${qIdx}`);
+          if (dropdown) {
+            dropdown.style.display = "none";
+            dropdown.innerHTML = "";
+          }
+          return;
+        }
+
+        // 🔍 1. สำหรับดร็อปดาวน์ค้นหาสินค้า
+        // ถ้าไม่ได้คลิกที่ช่อง Input ค้นหาสินค้า และไม่ได้คลิก "ภายใน" กล่องดร็อปดาวน์ผลลัพธ์ -> ให้สั่งปิดทั้งหมด
+        if (
+          !e.target.classList.contains("add-product-input") &&
+          !e.target.closest(".search-results-dropdown")
+        ) {
+          document.querySelectorAll(".search-results-dropdown").forEach((d) => {
+            d.style.display = "none";
+            d.innerHTML = ""; // ช่วยล้างสถานะ "ไม่พบสินค้า" ที่อาจค้างอยู่ด้วย
+          });
+        }
+
+        // 🏢 2. สำหรับดร็อปดาวน์ค้นหาบริษัทลูกค้า
+        // ถ้าไม่ได้คลิกที่ช่อง Input บริษัท และไม่ได้คลิก "ภายใน" กล่องดร็อปดาวน์บริษัท -> ให้สั่งปิด
+        if (
+          !e.target.classList.contains("company-search-input") &&
+          !e.target.closest(".company-search-dropdown")
+        ) {
+          const compDropdown = document.getElementById(
+            "company-results-global",
+          );
+          if (compDropdown) {
+            compDropdown.style.display = "none";
+            compDropdown.innerHTML = "";
+          }
+        }
+      });
+
+      async function confirmQuotes() {
+        if (autoSaveTimeout || hasChanges) {
+          if (autoSaveTimeout) clearTimeout(autoSaveTimeout);
+          updateAllSaveStatus("⏳ กำลังบันทึก...", "saving");
+          try {
+            await silentSaveChanges();
+            updateAllSaveStatus("✓ บันทึกสำเร็จ", "saved");
+          } catch (err) {
+            updateAllSaveStatus("⚠️ บันทึกไม่สำเร็จ", "error");
+            showToast(
+              "❌ ไม่สามารถยืนยันได้เนื่องจากบันทึกข้อมูลล้มเหลว: " +
+                err.message,
+              "error",
+            );
+            return;
+          }
+        }
+        btnConfirm.disabled = true;
+        btnConfirm.innerHTML = "⏳ กำลังยืนยัน...";
+        loaderText.textContent = "กำลังยืนยันและออกเลขที่ใบเสนอราคา...";
+        loaderScreen.style.opacity = "1";
+        loaderScreen.style.pointerEvents = "auto";
+        loaderScreen.style.display = "flex";
+        try {
+          const results = [];
+          for (const quote of quotesData) {
+            const resp = await fetch(`/api/quotation/${quote.id}/confirm`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ userId }),
+            });
+            if (!resp.ok) {
+              const errBody = await resp.json().catch(() => ({}));
+              throw new Error(
+                errBody.error || `เซิร์ฟเวอร์ตอบกลับรหัสสถานะ: ${resp.status}`,
+              );
+            }
+            results.push(await resp.json());
+          }
+          const quoteNos = results
+            .map((r) => r.quotation_no)
+            .filter(Boolean)
+            .join(", ");
+          const triggerMessage = `📄 ยืนยันใบเสนอราคาสำเร็จ\n(เลขที่: ${quoteNos})`;
+          let messageSent = false;
+          if (liff.isInClient()) {
+            try {
+              await liff.sendMessages([{ type: "text", text: triggerMessage }]);
+              messageSent = true;
+            } catch (e) {
+              console.error("sendMessages error:", e);
+            }
+          }
+          if (messageSent) {
+          } else {
+            loaderScreen.style.display = "none";
+            btnConfirm.disabled = false;
+            btnConfirm.innerHTML = "✅ ยืนยัน";
+            showToast(
+              "⚠️ ไม่สามารถส่งข้อความเข้าแชทได้อัตโนมัติ กรุณาเปิดใหม่จาก LINE โดยตรงครับ",
+              "error",
+            );
+          }
+        } catch (err) {
+          console.error("Confirm error:", err);
+          showToast("❌ ยืนยันไม่สำเร็จ: " + err.message, "error");
+          loaderScreen.style.display = "none";
+          btnConfirm.disabled = false;
+          btnConfirm.innerHTML = "✅ ยืนยัน";
+        }
+      }
+
+      async function cancelQuotes() {
+        const confirmed = await showCustomConfirm(
+          "ยกเลิกใบเสนอราคา",
+          "ต้องการยกเลิกใบเสนอราคาทั้งหมดหรือไม่? การดำเนินการนี้ไม่สามารถย้อนกลับได้",
+          {
+            isDestructive: true,
+            okText: "ยกเลิก",
+            cancelText: "ย้อนกลับ",
+            icon: "⚠️",
+          },
+        );
+        if (!confirmed) return;
+        btnCancel.disabled = true;
+        loaderText.textContent = "กำลังยกเลิก...";
+        loaderScreen.style.opacity = "1";
+        loaderScreen.style.pointerEvents = "auto";
+        loaderScreen.style.display = "flex";
+        try {
+          for (const quote of quotesData)
+            await fetch(`/api/quotation/${quote.id}/cancel`, {
+              method: "POST",
+            });
+          if (liff.isInClient()) {
+            try {
+              await liff.sendMessages([
+                {
+                  type: "text",
+                  text: "❌ ยกเลิกการออกใบเสนอราคาเรียบร้อยแล้ว",
+                },
+              ]);
+            } catch (e) {
+              console.error("sendMessages error:", e);
+            }
+          }
+          loaderText.innerHTML =
+            '<span style="color:var(--danger)">❌</span> ยกเลิกเรียบร้อยแล้ว';
+          setTimeout(() => {
+            if (liff.isInClient()) {
+              liff.closeWindow();
+            } else {
+              window.open("", "_self", "");
+              window.close();
+            }
+          }, 1200);
+        } catch (err) {
+          console.error("Cancel error:", err);
+          showToast("❌ ยกเลิกไม่สำเร็จ", "error");
+          loaderScreen.style.display = "none";
+          btnCancel.disabled = false;
+        }
+      }
+
+      btnConfirm.addEventListener("click", confirmQuotes);
+      btnCancel.addEventListener("click", cancelQuotes);
+
+      async function initLIFF() {
+        try {
+          let urlParams = new URLSearchParams(window.location.search);
+          let quoteIds = urlParams.get("quoteIds");
+          await liff.init({ liffId: "__LIFF_ID__" });
+          if (!quoteIds) {
+            urlParams = new URLSearchParams(window.location.search);
+            quoteIds = urlParams.get("quoteIds");
+          }
+          if (!quoteIds) {
+            const stateQuery = new URLSearchParams(window.location.search).get(
+              "liff.state",
+            );
+            if (stateQuery) {
+              const qi = stateQuery.indexOf("?");
+              if (qi !== -1)
+                quoteIds = new URLSearchParams(stateQuery.substring(qi)).get(
+                  "quoteIds",
+                );
+            }
+          }
+          if (!quoteIds)
+            throw new Error("ไม่พบข้อมูลใบเสนอราคา (quoteIds missing)");
+          if (!liff.isLoggedIn()) {
+            liff.login();
+            return;
+          }
+          let urlUserId = urlParams.get("userId");
+          if (urlUserId) userId = urlUserId;
+          if (!userId) {
+            try {
+              const profile = await liff.getProfile();
+              userId = profile.userId;
+            } catch (e) {
+              console.error("getProfile error:", e);
+            }
+          }
+          loaderText.textContent = "กำลังโหลดข้อมูลใบเสนอราคา...";
+          const resp = await fetch(
+            `/api/quotations?ids=${encodeURIComponent(quoteIds)}`,
+          );
+          if (!resp.ok) throw new Error("ไม่สามารถโหลดข้อมูลได้");
+          const data = await resp.json();
+          if (!data || data.length === 0)
+            throw new Error("ไม่พบข้อมูลใบเสนอราคา");
+          const finalized = data.find(
+            (q) => q.status === "confirmed" || q.status === "cancelled",
+          );
+          if (finalized)
+            throw new Error(
+              `ใบเสนอราคานี้ได้รับการ${finalized.status === "confirmed" ? "ยืนยันและออกเอกสาร" : "ยกเลิก"}ไปแล้ว ไม่สามารถแก้ไขได้`,
+            );
+          quotesData = data;
+          originalData = JSON.parse(JSON.stringify(data));
+          mainContent.style.display = "block";
+          stickyFooter.style.display = "flex";
+          render();
+          loaderScreen.style.opacity = "0";
+          setTimeout(() => (loaderScreen.style.display = "none"), 400);
+        } catch (err) {
+          console.error("LIFF init error:", err);
+          loaderText.innerHTML = `<span style="color:var(--danger)">⚠️ โหลดระบบผิดพลาด</span><br><small style="font-size:11px;font-weight:normal">${err.message}</small>`;
+        }
+      }
+
+      window.addEventListener("load", initLIFF);
+    </script>
+  </body>
+</html>
