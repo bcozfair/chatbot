@@ -987,7 +987,7 @@ export async function updateQuotationCustomerSnapshot(
   const metaStr = parts[2] || '';
 
   const customerDetails = {
-    customer_name: finalCustomerName,
+    customer_name: companyName,
     customer_code: '',
     customer_tax_id: '',
     contact_name: contactName,
@@ -1017,8 +1017,9 @@ export async function updateQuotationCustomerSnapshot(
     if (customerId) {
       if (contactId) {
         custRes = await pool.query(
-          `SELECT c.reference, c.tax_id, c.customer_payment_terms as payment_terms, 
-                  co.phone as contact_phone, co.email as contact_email, co.invoice_street as contact_address
+          `SELECT c.reference, c.tax_id, c.customer_payment_terms as payment_terms,
+                  co.phone as contact_phone, co.email as contact_email, co.invoice_street as contact_address,
+                  co.invoice_district, co.invoice_sub_district, co.invoice_state, co.invoice_zip
            FROM customers_view c
            LEFT JOIN contacts_view co ON co.customer_id = c.id
            WHERE c.id = $1 AND co.id = $2 LIMIT 1`,
@@ -1038,8 +1039,9 @@ export async function updateQuotationCustomerSnapshot(
     // 2. Fallback: ค้นหาด้วยชื่อแบบ TRIM เพื่อป้องกันสะกดสลับแถวหรือมีช่องว่างต่อท้าย
     if (!custRes || custRes.rows.length === 0) {
       custRes = await pool.query(
-        `SELECT c.reference, c.tax_id, c.customer_payment_terms as payment_terms, 
-                co.phone as contact_phone, co.email as contact_email, co.invoice_street as contact_address
+        `SELECT c.reference, c.tax_id, c.customer_payment_terms as payment_terms,
+                co.phone as contact_phone, co.email as contact_email, co.invoice_street as contact_address,
+                co.invoice_district, co.invoice_sub_district, co.invoice_state, co.invoice_zip
          FROM customers_view c
          LEFT JOIN contacts_view co ON co.customer_id = c.id
          WHERE TRIM(c.display_name) = TRIM($1) AND TRIM(co.name) = TRIM($2) LIMIT 1`,
@@ -1059,7 +1061,14 @@ export async function updateQuotationCustomerSnapshot(
       if (row.tax_id && !customerDetails.customer_tax_id) customerDetails.customer_tax_id = row.tax_id;
       if (row.contact_phone && customerDetails.phone === '-') customerDetails.phone = row.contact_phone;
       if (row.contact_email && customerDetails.email === '-') customerDetails.email = row.contact_email;
-      if (row.contact_address && customerDetails.address === '-') customerDetails.address = row.contact_address;
+      if (row.contact_address && customerDetails.address === '-') {
+        const stateCleaned = cleanState(row.invoice_state);
+        const districtCleaned = cleanAddressField(row.invoice_district, row.invoice_state, row.invoice_zip);
+        const subDistrictCleaned = cleanAddressField(row.invoice_sub_district, row.invoice_state, row.invoice_zip);
+        const fullAddr = [row.contact_address, districtCleaned, subDistrictCleaned, stateCleaned, row.invoice_zip]
+          .map((s: any) => String(s || '').trim()).filter(Boolean).join(' ');
+        if (fullAddr) customerDetails.address = fullAddr;
+      }
       if (row.payment_terms) customerDetails.payment_terms = row.payment_terms;
     }
   } catch (err) {
@@ -1134,7 +1143,9 @@ export async function enrichQuotationData(quoteDb: any): Promise<any> {
 
   // 1. หากข้อมูล Snapshot ครบถ้วนแล้ว ให้อ่านและส่งออกได้ทันทีโดยไม่ต้อง Query ตารางหลัก
   if (customerDetails && itemDetails && employeeDetails) {
-    const companyName = customerDetails.customer_name || 'ลูกค้าทั่วไป';
+    // Snapshot ควรเก็บเฉพาะชื่อบริษัท แต่ข้อมูลเก่าอาจปนเปื้อนเป็น "company | contact" — split กันเหนียว
+    const rawCustomerName = customerDetails.customer_name || 'ลูกค้าทั่วไป';
+    const companyName = rawCustomerName.split(' | ')[0].trim() || 'ลูกค้าทั่วไป';
     const contactName = customerDetails.contact_name || '';
 
     // จัด format customer_name เก่าเพื่อส่งกลับไปให้ frontend
