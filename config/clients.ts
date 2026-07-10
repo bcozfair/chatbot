@@ -1,11 +1,8 @@
 import * as line from '@line/bot-sdk';
 import * as dotenv from 'dotenv';
 import { OpenAI } from 'openai';
-import { dbClient } from './dbClient.js';
 
 dotenv.config();
-
-export const db = dbClient;
 
 const hasDeepSeekKey = !!process.env.DEEPSEEK_API_KEY;
 

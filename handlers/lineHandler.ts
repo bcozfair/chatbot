@@ -1,5 +1,18 @@
-import { db, openai, lineClient } from '../config/clients.js';
+import { openai, lineClient } from '../config/clients.js';
 import { pool } from '../config/db.js';
+import {
+  getSalespersonByUserId,
+  insertSalesperson,
+  updateSalespersonByUserId,
+  insertMessage,
+  getRecentMessages,
+  getQuotationsByIds,
+  getQuotationsByNos,
+  getRecentConfirmedQuotations,
+  deletePendingQuotations,
+  getStaticBranches,
+  getBranchesByCodes,
+} from '../db/repositories.js';
 import { validateProductPriceWithPromotions } from '../utils/promotionValidator.js';
 import { 
   createBranchSelectionFlex, 
@@ -12,9 +25,10 @@ import {
 } from '../utils/flexTemplates.js';
 import { findProduct } from '../services/productService.js';
 import { 
-  findCustomerCandidates, 
-  findContactCandidates, 
-  formatLineLabel
+  findCustomerCandidates,
+  findContactCandidates,
+  formatLineLabel,
+  splitCustomerContact
 } from '../services/customerService.js';
 import { 
   getQuotationNo, 
@@ -42,12 +56,7 @@ export async function handleEvent(event: any): Promise<any> {
   try {
     const userId = event?.source?.userId || 'unknown';
     // ดึงข้อมูลพนักงานขายเพื่อตรวจสอบสถานะ
-    const { data: salesperson, error: spError } = await (db.from('salesperson') as any)
-      .select('*')
-      .eq('user_id', userId)
-      .maybeSingle();
-
-    if (spError) console.error("Fetch salesperson error:", spError);
+    const salesperson = await getSalespersonByUserId(userId);
 
     // 1. ตรวจสอบสถานะการลงทะเบียนพนักงานขาย
     const isRegisteringText = event.type === 'message' && event.message.type === 'text' && 
@@ -58,7 +67,7 @@ export async function handleEvent(event: any): Promise<any> {
         // ให้ส่งผ่านไปยังตัวประมวลผลข้อความด้านล่าง เพื่อยืนยันความสำเร็จ
       } else {
         if (!salesperson) {
-          await (db.from('salesperson') as any).insert({
+          await insertSalesperson({
             user_id: userId,
             name: 'รอดำเนินการ',
             status: 'pending_branch'
@@ -92,7 +101,7 @@ export async function handleEvent(event: any): Promise<any> {
             messages: [flexMsg as any]
           });
         } else if (sub === 'quotation') {
-          await (db.from('salesperson') as any).update({ status: 'edit_quote_number' }).eq('user_id', userId);
+          await updateSalespersonByUserId(userId, { status: 'edit_quote_number' });
           return lineClient.replyMessage({
             replyToken: event.replyToken,
             messages: [{ 
@@ -112,7 +121,7 @@ export async function handleEvent(event: any): Promise<any> {
           else if (field === 'phone') label = 'เบอร์โทรศัพท์';
           else if (field === 'salesperson_id') label = 'รหัสพนักงาน';
           
-          await (db.from('salesperson') as any).update({ status: `edit_field:salesperson:${field}` }).eq('user_id', userId);
+          await updateSalespersonByUserId(userId, { status: `edit_field:salesperson:${field}` });
           return lineClient.replyMessage({
             replyToken: event.replyToken,
             messages: [{
@@ -186,14 +195,14 @@ export async function handleEvent(event: any): Promise<any> {
 
           // บันทึกลง messages เพื่อเคลียร์ประวัติในบอท
           try {
-            await (db.from('messages') as any).insert([{
+            await insertMessage({
               user_id: userId,
               message_id: `postback_cancel_${Date.now()}`,
               type: 'postback',
               content: 'ยกเลิก',
               reply_token: event.replyToken,
               reply_content: '❌ ยกเลิกการออกใบเสนอราคาเรียบร้อยแล้ว'
-            }]);
+            });
           } catch (err) {
             console.error("Error logging cancel postback:", err);
           }
@@ -211,14 +220,14 @@ export async function handleEvent(event: any): Promise<any> {
 
         // บันทึกลง messages เพื่อเคลียร์ประวัติในบอท
         try {
-          await (db.from('messages') as any).insert([{
+          await insertMessage({
             user_id: userId,
             message_id: `postback_cancel_pending_${Date.now()}`,
             type: 'postback',
             content: 'ยกเลิก',
             reply_token: event.replyToken,
             reply_content: '❌ ยกเลิกการออกใบเสนอราคาเรียบร้อยแล้ว'
-          }]);
+          });
         } catch (err) {
           console.error("Error logging cancel_pending postback:", err);
         }
@@ -437,14 +446,14 @@ export async function handleEvent(event: any): Promise<any> {
 
           // บันทึกลง messages เพื่อเคลียร์ประวัติในบอท
           try {
-            await (db.from('messages') as any).insert([{
+            await insertMessage({
               user_id: userId,
               message_id: `postback_confirm_${Date.now()}`,
               type: 'postback',
               content: 'ยืนยันออกใบเสนอราคา',
               reply_token: event.replyToken,
               reply_content: `✅ ยืนยันสำเร็จ!\n📄 ใบเสนอราคาเลขที่: ${quoteNo}`
-            }]);
+            });
           } catch (err) {
             console.error("Error logging confirm postback:", err);
           }
@@ -704,14 +713,14 @@ export async function handleEvent(event: any): Promise<any> {
           };
 
           try {
-            await (db.from('messages') as any).insert([{
+            await insertMessage({
               user_id: userId,
               message_id: messageId,
               type: 'text',
               content: content,
               reply_token: replyToken,
               reply_content: 'รับทราบครับ กรุณาระบุ ชื่อลูกค้า/ผู้ติดต่อ ที่ต้องการเสนอราคาด้วยการพิมพ์หรือกดปุ่มด้านล่างเพื่อดำเนินการต่อครับ (กรอกข้อมูลลูกค้า)'
-            }]);
+            });
           } catch (dbErr) {
             console.error("Error logging draft cart message:", dbErr);
           }
@@ -761,35 +770,18 @@ export async function handleEvent(event: any): Promise<any> {
 
         try {
           let quotes: any[] | null = null;
-          let fetchErr = null;
 
           if (quoteIds.length > 0) {
             // Fetch quotation details from postgresdb using IDs
-            const res = await (db.from('quotations') as any)
-              .select('id, quotation_no')
-              .in('id', quoteIds);
-            quotes = res.data;
-            fetchErr = res.error;
+            quotes = await getQuotationsByIds(quoteIds);
           } else if (quotationNos.length > 0) {
             // Fetch quotation details from postgresdb using quotation numbers
-            const res = await (db.from('quotations') as any)
-              .select('id, quotation_no')
-              .in('quotation_no', quotationNos);
-            quotes = res.data;
-            fetchErr = res.error;
+            quotes = await getQuotationsByNos(quotationNos);
           } else {
             // Fallback: Query the latest confirmed quotations for this user in the last 1 minute
             const oneMinuteAgo = new Date(Date.now() - 60 * 1000).toISOString();
-            const res = await (db.from('quotations') as any)
-              .select('id, quotation_no')
-              .eq('user_id', userId)
-              .eq('status', 'confirmed')
-              .gte('created_at', oneMinuteAgo);
-            quotes = res.data;
-            fetchErr = res.error;
+            quotes = await getRecentConfirmedQuotations(userId, oneMinuteAgo);
           }
-
-          if (fetchErr) console.error("Fetch confirmed quotes error:", fetchErr);
 
           if (quotes && quotes.length > 0) {
             const reqUrl = process.env.APP_URL || '';
@@ -837,19 +829,14 @@ export async function handleEvent(event: any): Promise<any> {
         const isRegistering = trimmedContent === '🎉 ลงทะเบียนพนักงานขายสำเร็จ';
         try {
           // Fetch salesperson profile
-          const { data: sp, error: spErr } = await (db.from('salesperson') as any)
-            .select('*')
-            .eq('user_id', userId)
-            .maybeSingle();
-
-          if (spErr) console.error("Fetch salesperson for reply error:", spErr);
+          const sp = await getSalespersonByUserId(userId);
 
           if (sp) {
             // Fetch branch names
             const selectedCodes = sp.branch_code ? sp.branch_code.split(',').map((c: any) => c.trim()).filter(Boolean) : [];
             let branchNames = sp.branch_code || 'ไม่ได้เลือกสาขา';
             if (selectedCodes.length > 0) {
-              const { data: branches } = await (db.from('branch') as any).select('name').in('branch_code', selectedCodes);
+              const branches = getBranchesByCodes(selectedCodes);
               if (branches && branches.length > 0) {
                 branchNames = branches.map((b: any) => b.name).join(', ');
               }
@@ -899,10 +886,7 @@ export async function handleEvent(event: any): Promise<any> {
       ) {
         const quotationNos = trimmedContent.toUpperCase().match(/(?:QT|QP)-[0-9]+(?:-R[0-9]+)?/g) || [];
         try {
-          const { data: quotes, error: fetchErr } = await (db.from('quotations') as any)
-            .select('id, quotation_no')
-            .in('quotation_no', quotationNos);
-          if (fetchErr) console.error("Fetch quotes by number error:", fetchErr);
+          const quotes = await getQuotationsByNos(quotationNos);
 
           if (quotes && quotes.length > 0) {
             const reqUrl = process.env.APP_URL || '';
@@ -959,7 +943,7 @@ export async function handleEvent(event: any): Promise<any> {
         const field = salesperson.status.split(':')[2];
         
         if (val.toLowerCase() === 'ยกเลิก' || val === 'cancel') {
-          await (db.from('salesperson') as any).update({ status: 'active' }).eq('user_id', userId);
+          await updateSalespersonByUserId(userId, { status: 'active' });
           return lineClient.replyMessage({
             replyToken: replyToken,
             messages: [{ type: 'text', text: '❌ ยกเลิกการแก้ไขข้อมูลส่วนตัว' }]
@@ -969,10 +953,10 @@ export async function handleEvent(event: any): Promise<any> {
         const updates: any = {};
         updates[field] = val === '-' ? null : val;
         updates.status = 'active';
-        await (db.from('salesperson') as any).update(updates).eq('user_id', userId);
+        await updateSalespersonByUserId(userId, updates);
         
-        const { data: updatedSp } = await (db.from('salesperson') as any).select('*').eq('user_id', userId).maybeSingle();
-        const { data: branches } = await (db.from('branch') as any).select('*');
+        const updatedSp = await getSalespersonByUserId(userId);
+        const branches = getStaticBranches();
         const flexMsg = createSalespersonProfileFlex(updatedSp, branches || []);
         
         return lineClient.replyMessage({
@@ -988,7 +972,7 @@ export async function handleEvent(event: any): Promise<any> {
         let val = content.trim().toUpperCase();
         
         if (val === 'ยกเลิก' || val === 'CANCEL') {
-          await (db.from('salesperson') as any).update({ status: 'active' }).eq('user_id', userId);
+          await updateSalespersonByUserId(userId, { status: 'active' });
           return lineClient.replyMessage({
             replyToken: replyToken,
             messages: [{ type: 'text', text: '❌ ยกเลิกการแก้ไขใบเสนอราคา' }]
@@ -1068,7 +1052,7 @@ export async function handleEvent(event: any): Promise<any> {
           });
         }
         
-        await (db.from('salesperson') as any).update({ status: 'active' }).eq('user_id', userId);
+        await updateSalespersonByUserId(userId, { status: 'active' });
         
         const flexMsg = createRevisionFlex(quote.quotation_no, newQuote.id);
         return lineClient.replyMessage({
@@ -1085,14 +1069,8 @@ export async function handleEvent(event: any): Promise<any> {
       // ดึงประวัติการคุยย้อนหลังของ userId นี้
       let historyContext = "";
       try {
-        const { data: history, error: historyError } = await (db.from('messages') as any)
-          .select('content, reply_content, created_at')
-          .eq('user_id', userId)
-          .order('created_at', { ascending: false })
-          .limit(10);
-        if (historyError) {
-          console.error("Error fetching chat history:", historyError);
-        } else if (history && history.length > 0) {
+        const history = await getRecentMessages(userId, 10);
+        if (history && history.length > 0) {
           // กรองข้อมูลเฉพาะ 15 นาทีล่าสุดเพื่อไม่ให้ดึงประวัติเก่าที่ค้างมาข้ามวัน/ชั่วโมง
           const now = new Date();
           const fifteenMinutesAgo = new Date(now.getTime() - 15 * 60 * 1000);
@@ -1218,14 +1196,7 @@ export async function handleEvent(event: any): Promise<any> {
         });
       } else if (aiResult.intent === 'QUOTATION' && aiResult.quotation_data && aiResult.quotation_data.items && aiResult.quotation_data.items.length > 0) {
         // ลบรายการใบเสนอราคาเก่าที่ยังค้างอยู่ทั้งหมดออกถาวร
-        try {
-          await (db.from('quotations') as any)
-            .delete()
-            .eq('user_id', userId)
-            .in('status', ['pending_company', 'pending_contact', 'draft']);
-        } catch (e) {
-          console.error("Error deleting previous quotations:", e);
-        }
+        await deletePendingQuotations(userId);
 
         let quoteData = aiResult.quotation_data;
         let isAllValid = true;
@@ -1489,8 +1460,17 @@ export async function handleEvent(event: any): Promise<any> {
 
             if (latestStatus === 'pending_company') {
               const parts = pendingQuotes[0].customer_name.split('|');
-              const contactQuery = parts[1] ? parts[1].trim() : '';
-              const companyQuery = typedVal;
+              let contactQuery = parts[1] ? parts[1].trim() : '';
+              let companyQuery = typedVal;
+
+              // Backstop: user พิมพ์แก้มาแบบ "บ.X คุณY" บรรทัดเดียว → แยกส่วนผู้ติดต่อออก
+              if (companyQuery && !contactQuery) {
+                const split = splitCustomerContact(companyQuery);
+                if (split.contact) {
+                  companyQuery = split.customer;
+                  contactQuery = split.contact;
+                }
+              }
 
               const customerCandidates = await findCustomerCandidates(companyQuery, salesperson, contactQuery);
 
@@ -1646,16 +1626,14 @@ export async function handleEvent(event: any): Promise<any> {
       }
     }
     // 4.2 บันทึกประวัติการแชทลงฐานข้อมูล postgresdb
-    const { error } = await (db.from('messages') as any)
-      .insert([{
-        user_id: userId,
-        message_id: messageId,
-        type: messageType,
-        content: content,
-        reply_token: replyToken,
-        reply_content: botReplyText
-      }]);
-    if (error) console.error('postgresdb Insert Error:', error.message);
+    await insertMessage({
+      user_id: userId,
+      message_id: messageId,
+      type: messageType,
+      content: content,
+      reply_token: replyToken,
+      reply_content: botReplyText
+    });
     // 4.3 ส่งข้อความกลับไปหาผู้ใช้ทาง LINE
     if (customMessages) {
       return await lineClient.replyMessage({

@@ -1,5 +1,19 @@
-import { db, openai } from '../config/clients.js';
+import { openai } from '../config/clients.js';
+import { pool } from '../config/db.js';
+import {
+  searchCustomersByReferencePatterns,
+  searchCustomersByNamePatterns,
+  getContactsByCustomerId,
+  getCompanyAddressRows,
+  getContactNamesByCustomerIds,
+  getConfirmedQuotationCounts,
+  findContactsWithCustomerByName,
+} from '../db/repositories.js';
 import Fuse from 'fuse.js';
+
+// Kill-switches (safety valves — เซ็ต =1 เพื่อกลับไปใช้ pipeline เดิมเป๊ะโดยไม่ต้อง rollback code)
+const isNewSearchDisabled = () => process.env.DISABLE_NEW_SEARCH === '1';
+const isAiMatchDisabled = () => process.env.DISABLE_AI_MATCH === '1';
 
 const STOP_WORDS = new Set([
   'บริษัท', 'จำกัด', 'มหาชน', 'หจก', 'บจก', 'ห้างหุ้นส่วน', 'สำนักงานใหญ่', 'สาขา',
@@ -48,6 +62,242 @@ export function cleanContactName(name: string | null | undefined): string {
   return name
     .replace(/^(คุณ|นาย|นางสาว|นาง|นายแพทย์|แพทย์หญิง|ดร\.)/g, '')
     .trim();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Normalization core: token list เดียวใช้สร้างทั้ง SQL expression และ TS mirror
+// เพื่อให้ norm(query) เทียบกับ norm(display_name) ได้แบบ byte-identical ทั้งสองฝั่ง
+// ห้าม strip "ประเทศไทย" (แยก sibling เช่น ย่งฮง (ประเทศไทย) vs ย่งฮง เอ็นจิเนียริ่ง)
+// ห้าม strip "คุณ" (ลูกค้าบุคคล เช่น "คุณ โยธิน ปาทาน")
+// ═══════════════════════════════════════════════════════════════════════════
+const NORM_TOKENS = [
+  'ห้างหุ้นส่วนจำกัด',
+  'ห้างหุ้นส่วน',
+  'บริษัท',
+  'หจก',
+  'บจก',
+  'บ\\.',
+  'ร้าน',
+  'จำกัด',
+  'มหาชน',
+  'สำนักงานใหญ่',
+  'สาขาที่\\s*[0-9]+',
+  'สาขา\\s*[0-9]*',
+];
+const NORM_PATTERN = NORM_TOKENS.join('|');
+// ตัวอักษรที่เก็บไว้: เลข อังกฤษ ไทย — จุด/ช่องว่าง/วงเล็บ/ฯลฯ หายหมด
+const NORM_STRIP_CLASS = '[^0-9a-zA-Zก-๙]+';
+
+/** Normalize ชื่อบริษัทสำหรับเทียบข้าม จุด/ช่องว่าง/คำนำหน้า-ต่อท้าย — ใช้ทั้งฝั่ง query และฝั่งชื่อใน DB */
+export function normalizeCompanyNameTS(s: string | null | undefined): string {
+  if (!s) return '';
+  return s
+    .replace(new RegExp(NORM_PATTERN, 'g'), '')
+    .replace(new RegExp(NORM_STRIP_CLASS, 'g'), '')
+    .toLowerCase();
+}
+
+/** ลบเบอร์โทรออกจากข้อความก่อนนำไปค้นหาชื่อบริษัท (เช่น "คุณโยธิน 06-3884-0005") */
+export function stripPhoneNumbers(s: string | null | undefined): string {
+  if (!s) return '';
+  return s
+    .replace(/0\d{1,2}[-.\s]?\d{3,4}[-.\s]?\d{4}/g, ' ')
+    .replace(/(?<!\d)\d{9,10}(?!\d)/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** เทียบชื่อแบบ raw exact: lower + ยุบช่องว่างซ้ำ (รองรับ DB ที่มี double space) */
+export function collapseSpaces(s: string | null | undefined): string {
+  return (s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * แยกบรรทัด "บ.X คุณY" → { customer: "บ.X", contact: "คุณY" }
+ * backstop ของ AI prompt rule (ลูกค้า+ผู้ติดต่อพิมพ์มาบรรทัดเดียว เช่น "บ.เคยู  คุณจิตติพงษ์")
+ */
+export function splitCustomerContact(raw: string): { customer: string; contact: string | null } {
+  const trimmed = (raw || '').trim();
+  const m = trimmed.match(/^(.+?)\s+((?:คุณ|K\.\s?)[฀-๿a-zA-Z].*)$/i);
+  if (m && m[1].trim()) {
+    return { customer: m[1].trim(), contact: m[2].trim() };
+  }
+  return { customer: trimmed, contact: null };
+}
+
+/**
+ * แตกชื่อผู้ติดต่อเป็นชิ้นส่วนสำหรับเทียบ: เต็ม / ไม่มีวงเล็บ / ชื่อเล่นในวงเล็บ / คำแรก
+ * รองรับ "คุณ มิค"↔"คุณมิค" (ช่องว่างหลังคำนำหน้า), "คุณณัฐชา (พลอย)"↔"คุณพลอย" (alias),
+ * "คุณธีรศักดิ์ จัดซื้อ 098..."↔"คุณธีรศักดิ์" (ตำแหน่ง/เบอร์ต่อท้าย)
+ */
+function contactNameParts(s: string | null | undefined): string[] {
+  if (!s) return [];
+  let t = s.replace(/0\d{1,2}[-.\s]?\d{3,4}[-.\s]?\d{4}/g, ' ');
+  t = t.replace(/^\s*(คุณ|นายแพทย์|แพทย์หญิง|นางสาว|นาย|นาง|ดร\.?|K\.)\s*/i, '');
+  const aliasMatch = t.match(/\(([^)]+)\)/);
+  const noParen = t.replace(/\([^)]*\)/g, ' ').trim();
+  const firstWord = noParen.split(/\s+/)[0] || '';
+  const clean = (x: string) => x.toLowerCase().replace(/[^0-9a-zA-Zก-๙]+/g, '');
+  const parts = [clean(t), clean(noParen), aliasMatch ? clean(aliasMatch[1]) : '', clean(firstWord)];
+  return Array.from(new Set(parts.filter(p => p.length >= 2)));
+}
+
+/** เทียบชื่อผู้ติดต่อสองฝั่งด้วยชิ้นส่วนทุกคู่: exact = ชิ้นใดชิ้นหนึ่งตรงกันเป๊ะ, partial = ซ้อนกันบางส่วน */
+export function contactNamesMatch(a: string | null | undefined, b: string | null | undefined): { exact: boolean; partial: boolean } {
+  const pa = contactNameParts(a);
+  const pb = contactNameParts(b);
+  let exact = false;
+  let partial = false;
+  for (const x of pa) {
+    for (const y of pb) {
+      if (x === y) exact = true;
+      else if (x.length >= 3 && y.length >= 3 && (x.includes(y) || y.includes(x))) partial = true;
+    }
+  }
+  return { exact, partial };
+}
+
+// ═══ Trigram similarity ฝั่ง JS (สูตรเดียวกับ pg_trgm: shared / union) ═══
+function trigramsOf(s: string): Set<string> {
+  const set = new Set<string>();
+  if (!s) return set;
+  const padded = `  ${s} `;
+  for (let i = 0; i <= padded.length - 3; i++) set.add(padded.slice(i, i + 3));
+  return set;
+}
+
+function trigramSimilarity(aSet: Set<string>, bSet: Set<string>): number {
+  if (aSet.size === 0 || bSet.size === 0) return 0;
+  let shared = 0;
+  const [small, large] = aSet.size <= bSet.size ? [aSet, bSet] : [bSet, aSet];
+  for (const t of small) if (large.has(t)) shared++;
+  const union = aSet.size + bSet.size - shared;
+  return union === 0 ? 0 : shared / union;
+}
+
+// ═══ In-memory cache ของชื่อบริษัททั้งหมด (normalize + trigram set คำนวณไว้ล่วงหน้า) ═══
+// เหตุผล: การ normalize + similarity ทั้งตารางใน SQL ต่อ 1 ครั้งค้นหาช้าเกิน (วัดจริง >10s)
+// และผู้ใช้ไม่ต้องการสร้าง index → โหลด 52k แถวมาไว้ในหน่วยความจำครั้งเดียว (TTL 10 นาที
+// สอดคล้องกับข้อมูลที่เปลี่ยนเฉพาะตอน sync จาก Odoo) แล้ว match ฝั่ง JS เร็วระดับ ~100ms
+const CUSTOMER_CACHE_TTL_MS = 10 * 60 * 1000;
+let customerCache: { rows: any[]; loadedAt: number } | null = null;
+let customerCacheLoading: Promise<any[]> | null = null;
+
+async function loadCustomerSearchCache(): Promise<any[]> {
+  if (customerCache && Date.now() - customerCache.loadedAt < CUSTOMER_CACHE_TTL_MS) {
+    return customerCache.rows;
+  }
+  if (customerCacheLoading) return customerCacheLoading;
+
+  customerCacheLoading = (async () => {
+    const t0 = Date.now();
+    const { rows } = await pool.query(`
+      SELECT DISTINCT ON (company_id)
+        company_id AS id,
+        TRIM(customer_name) AS display_name,
+        TRIM(customer_reference) AS reference,
+        TRIM(customer_sale_area) AS branch_code,
+        TRIM(salesperson) AS salesperson
+      FROM customers
+      ORDER BY company_id, contact_id`);
+    const cached = rows.map((r: any) => {
+      const norm_name = normalizeCompanyNameTS(r.display_name);
+      return { ...r, norm_name, trigrams: trigramsOf(norm_name) };
+    });
+    customerCache = { rows: cached, loadedAt: Date.now() };
+    customerCacheLoading = null;
+    console.log(`[customerSearchCache] loaded ${cached.length} companies in ${Date.now() - t0}ms`);
+    return cached;
+  })();
+  return customerCacheLoading;
+}
+
+/** ล้าง cache (ใช้ในเทส/หลัง sync ข้อมูล) */
+export function clearCustomerSearchCache(): void {
+  customerCache = null;
+  customerCacheLoading = null;
+}
+
+/**
+ * searchCustomersNormalized — stage ค้นหาใหม่ (normalized + trigram)
+ * เทียบชื่อแบบ normalize สองฝั่งด้วยกติกาเดียวกัน:
+ *  - substring match ข้าม จุด/ช่องว่าง/คำนำหน้า-ต่อท้าย ("ก.แสงทอง" ↔ "ก แสงทอง", "โคราชกรุ๊ป" ↔ "โคราช กรุ๊ป")
+ *  - trigram similarity รองรับสะกดต่าง ("แมสชีนเนอรี่" ↔ "แมชชินเนอรี่")
+ * คืน rows: { id, display_name, reference, branch_code, salesperson, norm_name, max_sim, has_exact, has_substr }
+ */
+export async function searchCustomersNormalized(variants: string[]): Promise<any[]> {
+  const t0 = Date.now();
+  const queryNorms = Array.from(new Set(
+    variants.map(v => normalizeCompanyNameTS(v)).filter(n => n.length >= 2)
+  ));
+  if (queryNorms.length === 0) return [];
+
+  const queries = queryNorms.map(qn => ({ qn, trigrams: trigramsOf(qn) }));
+  const rows = await loadCustomerSearchCache();
+
+  const results: any[] = [];
+  for (const r of rows) {
+    if (!r.norm_name) continue;
+    let has_exact = false;
+    let has_substr = false;
+    let max_sim = 0;
+    let best_signal = 0; // สัญญาณรวม 0..1 = max(similarity, coverage ของ substring)
+    for (const q of queries) {
+      if (r.norm_name === q.qn) {
+        has_exact = true; has_substr = true; max_sim = 1; best_signal = 1;
+        break;
+      }
+      // substring match แบบถ่วงด้วย coverage (สัดส่วนความยาวที่ทับกัน) —
+      // ห้ามให้ variant สั้นๆ เช่น "เอเค" แจกคะแนนเต็มแก่ทุกบริษัทที่มีคำนั้น
+      if (r.norm_name.includes(q.qn)) {
+        has_substr = true;
+        best_signal = Math.max(best_signal, q.qn.length / r.norm_name.length);
+      } else if (q.qn.includes(r.norm_name) && r.norm_name.length >= 5) {
+        // reverse: คำค้นมีชื่อบริษัทอยู่ข้างใน — ต้องยาว ≥5 ตัวอักษร กันชื่อสั้นอย่าง "พีเค"/"เคส"
+        // ไป match มั่วใน query ยาวๆ (เคยทำ auto-select ผิดบริษัทมาแล้ว)
+        has_substr = true;
+        best_signal = Math.max(best_signal, r.norm_name.length / q.qn.length);
+      }
+      const sim = trigramSimilarity(r.trigrams, q.trigrams);
+      if (sim > max_sim) max_sim = sim;
+      if (sim > best_signal) best_signal = sim;
+    }
+    if (has_exact || has_substr || max_sim >= 0.30) {
+      const { trigrams, ...plain } = r;
+      results.push({ ...plain, max_sim, has_exact, has_substr, best_signal });
+    }
+  }
+
+  results.sort((a, b) =>
+    Number(b.has_exact) - Number(a.has_exact) ||
+    b.best_signal - a.best_signal
+  );
+  const limited = results.slice(0, 25);
+  console.log(`[searchCustomersNormalized] ${limited.length}/${results.length} rows in ${Date.now() - t0}ms | norms: ${JSON.stringify(queryNorms)}`);
+  return limited;
+}
+
+/**
+ * แปลงผล searchCustomersNormalized เป็น score (ต่ำ = ดี):
+ * norm-exact = 0.005 (ไม่ใช่ 0.0 — record ชื่อซ้ำกันจะ norm-exact พร้อมกันหลายแถว
+ * ให้ evidence boost ขั้นถัดไปเป็นคนชี้ตัวจริงเป็น 0.0), ที่เหลือไล่ตาม best_signal → 0.02..0.33
+ * มีแค่ตัวที่ evidence ชี้ขาด/AI ยืนยัน เท่านั้นที่ได้ 0.0 แล้วผ่าน auto-select gate (top<=0.05, gap>0.05)
+ */
+function normRowScore(row: any): number {
+  if (row.has_exact) return 0.005;
+  const signal = Math.min(Math.max(Number(row.best_signal) || 0, 0), 0.99);
+  return 0.02 + (1 - signal) * 0.31;
+}
+
+function normRowToCandidate(row: any): any {
+  return {
+    id: row.id,
+    display_name: row.display_name,
+    reference: row.reference,
+    branch_code: row.branch_code,
+    salesperson: row.salesperson,
+    cleanName: cleanCompanyName(row.display_name),
+  };
 }
 
 export function formatLineLabel(text: string | null | undefined): string {
@@ -170,13 +420,7 @@ export async function findCustomerCandidates(customerQuery: string, salesperson:
   // --- Step A: ถ้ารู้รหัส Reference ลองค้นจากรหัสก่อนเป็นอันดับแรก (Fast-path) ---
   if (referenceCodes.size > 0) {
     const refArray = Array.from(referenceCodes).filter(Boolean);
-    const filterParts = refArray.map(ref => `reference.ilike.%${ref}%`);
-    const refQuery: any = (db.from('customers') as any)
-      .select('id, display_name, reference, branch_code, salesperson')
-      .or(filterParts.join(','));
-
-    const { data: refData, error: refError } = await refQuery.limit(30);
-    if (refError) console.error("Ref query error:", refError);
+    const refData = await searchCustomersByReferencePatterns(refArray, 30);
 
     if (refData && refData.length > 0) {
       console.log(`[findCustomerCandidates] Found ${refData.length} candidates by reference codes (Fast-path)!`);
@@ -220,13 +464,51 @@ export async function findCustomerCandidates(customerQuery: string, salesperson:
     }
   }
 
+  // --- Step B0 (ใหม่): ค้นหาแบบ normalized + trigram ก่อน (additive — ไม่แทนที่ flow เดิม) ---
+  // เก็บผลไว้ merge เข้า resultsMap ตอนท้าย; ถ้าเจอชื่อตรงเป๊ะบริษัทเดียว → เลือกเลยไม่ต้องเรียก AI
+  let normRows: any[] = [];
+  const normVariantSet = new Set<string>();
+  // แยก "บ.X คุณY" ที่พิมพ์มาบรรทัดเดียว: ใช้ส่วนบริษัทค้นหา และถ้าไม่มี contactQuery ให้ใช้ส่วน คุณY เป็นหลักฐาน
+  let inferredContact = '';
+  const customerLines = rawLines.map(l => {
+    const { customer, contact } = splitCustomerContact(l);
+    if (contact && !inferredContact) inferredContact = contact;
+    return customer;
+  });
+  const effectiveContactQuery = (contactQuery || '').trim() || inferredContact;
+  if (!isNewSearchDisabled()) {
+    // ใช้เฉพาะส่วนบริษัทเป็น variant ค้นหา (ถ้า split ไม่เกิด customerLines[i] = ทั้งบรรทัดอยู่แล้ว) —
+    // บรรทัดที่มี "คุณY" ปนจะสร้าง match ขยะจนเบียดตัวจริงหลุด limit
+    const initialVariants: string[] = [];
+    for (const line of customerLines) {
+      const noPhone = stripPhoneNumbers(line);
+      initialVariants.push(line, noPhone, cleanCompanyName(noPhone));
+      initialVariants.push(...buildDotInitialVariants(noPhone));
+    }
+    normRows = await searchCustomersNormalized(initialVariants);
+    initialVariants.forEach(v => { const n = normalizeCompanyNameTS(v); if (n) normVariantSet.add(n); });
+
+    // Exact short-circuit: user พิมพ์ชื่อเต็มตรงเป๊ะกับ DB (เทียบแบบยุบช่องว่าง) และไม่มีบริษัทพี่น้อง
+    // ที่ชื่อ normalize แล้วเหมือนกัน (กัน auto-pick record ซ้ำ/legacy เช่น ย่งฮง มี 2 record)
+    // → พิสูจน์ได้ 100% เลือกเลย ประหยัด AI call ทั้งสองจุด — เคสกำกวมปล่อยให้ AI ตัดสินพร้อม evidence
+    const rawExactRows = normRows.filter(r =>
+      rawLines.some(l => collapseSpaces(l) === collapseSpaces(r.display_name))
+    );
+    const normExactCount = normRows.filter(r => r.has_exact).length;
+    if (rawExactRows.length === 1 && normExactCount <= 1) {
+      const chosen = { item: normRowToCandidate(rawExactRows[0]), score: 0.0 };
+      console.log(`[findCustomerCandidates] ✅ Raw-exact short-circuit: "${chosen.item.display_name}"`);
+      return [chosen];
+    }
+  }
+
   // --- Step B: ถ้าไม่พบรหัส Reference หรือหาจากรหัสไม่เจอ ค่อยค้นหาด้วยชื่อ ---
   const nameTerms = new Set<string>();
   const cleanedLines: string[] = [];
 
   // --- Pre-Search AI Normalizer (สกัดชื่อแกนกลางของบริษัทก่อนค้นหาจริง) ---
   let aiExtractedName = '';
-  if (customerQuery) {
+  if (customerQuery && !isAiMatchDisabled()) {
     try {
       console.log(`[findCustomerCandidates] Invoking AI (Pre-Search) to extract Core Name from: "${customerQuery.replace(/\n/g, ' ')}"`);
       const response = await openai.chat.completions.create({
@@ -267,6 +549,21 @@ export async function findCustomerCandidates(customerQuery: string, salesperson:
     }
   }
 
+  // ค้นหา normalized เพิ่มด้วยชื่อที่ AI สกัดได้ (เฉพาะเมื่อเป็น variant ใหม่ที่ยังไม่เคยค้น)
+  if (!isNewSearchDisabled() && aiExtractedName) {
+    const aiNorm = normalizeCompanyNameTS(aiExtractedName);
+    if (aiNorm && !normVariantSet.has(aiNorm)) {
+      normVariantSet.add(aiNorm);
+      const extraRows = await searchCustomersNormalized([aiExtractedName]);
+      const byId = new Map(normRows.map((r: any) => [r.id, r]));
+      for (const r of extraRows) {
+        const ex = byId.get(r.id);
+        if (!ex || normRowScore(r) < normRowScore(ex)) byId.set(r.id, r);
+      }
+      normRows = Array.from(byId.values());
+    }
+  }
+
   for (const line of rawLines) {
     const cleanLine = cleanCompanyName(line);
     if (cleanLine) {
@@ -300,37 +597,21 @@ export async function findCustomerCandidates(customerQuery: string, salesperson:
 
   // 1. Query by cleaned lines (phrases match display_name — NO branch_code filter)
   if (cleanedLines.length > 0) {
-    const filterParts = cleanedLines.map(line => `display_name.ilike.%${line}%`);
-    const phraseQuery: any = (db.from('customers') as any)
-      .select('id, display_name, reference, branch_code, salesperson')
-      .or(filterParts.join(','));
-
-    const { data: phraseData, error: phraseError } = await phraseQuery.limit(30);
-    if (phraseError) console.error("Phrase query error:", phraseError);
-    console.log('[findCustomerCandidates] phraseData count:', phraseData?.length);
-    if (phraseData) {
-      phraseData.forEach((c: any) => dbCustomersMap.set(c.id, c));
-    }
+    const phraseData = await searchCustomersByNamePatterns(cleanedLines, 30);
+    console.log('[findCustomerCandidates] phraseData count:', phraseData.length);
+    phraseData.forEach((c: any) => dbCustomersMap.set(c.id, c));
   }
 
   // 2. Query by individual name terms (words match display_name — NO branch_code filter)
   if (nameTerms.size > 0) {
     const nameArray = Array.from(nameTerms).filter(Boolean);
-    const filterParts = nameArray.map(term => `display_name.ilike.%${term}%`);
-    const nameQuery: any = (db.from('customers') as any)
-      .select('id, display_name, reference, branch_code, salesperson')
-      .or(filterParts.join(','));
-
-    const { data: nameData, error: nameError } = await nameQuery.limit(50);
-    if (nameError) console.error("Name query error:", nameError);
-    console.log('[findCustomerCandidates] nameData count:', nameData?.length);
-    if (nameData) {
-      nameData.forEach((c: any) => {
-        if (!dbCustomersMap.has(c.id)) {
-          dbCustomersMap.set(c.id, c);
-        }
-      });
-    }
+    const nameData = await searchCustomersByNamePatterns(nameArray, 50);
+    console.log('[findCustomerCandidates] nameData count:', nameData.length);
+    nameData.forEach((c: any) => {
+      if (!dbCustomersMap.has(c.id)) {
+        dbCustomersMap.set(c.id, c);
+      }
+    });
   }
 
   const dbCustomers = Array.from(dbCustomersMap.values());
@@ -412,68 +693,164 @@ export async function findCustomerCandidates(customerQuery: string, salesperson:
     }
   }
 
+  // Merge ผลจาก stage ค้นหาใหม่ (B0) เข้า resultsMap ด้วย min(score) —
+  // candidate จาก flow เดิมอยู่ครบทุกตัว stage ใหม่ทำได้แค่เพิ่ม/ปรับ score ให้ดีขึ้น
+  if (!isNewSearchDisabled()) {
+    for (const row of normRows) {
+      const score = normRowScore(row);
+      const existing = resultsMap.get(row.id);
+      if (!existing || existing.score > score) {
+        resultsMap.set(row.id, { item: normRowToCandidate(row), score });
+      }
+    }
+  }
+
   console.log('[findCustomerCandidates] Final results before AI check:', Array.from(resultsMap.values()).map(r => `${r.item.display_name} (score: ${r.score})`));
 
+  // Pool กว้าง 40 ตัวสำหรับคำนวณ evidence ก่อนคัดเหลือ 8 —
+  // กันเคสที่ตัวถูก (เช่น พีเคยู กับ query "เคยู") สัญญาณชื่ออ่อนแต่ผู้ติดต่อตรง หลุดจากการ slice ก่อนเวลา
+  // (evidence ถูก: contacts 1 query + เทียบใน memory — pool กว้างไม่มีผลต่อ latency อย่างมีนัย)
   let finalCandidates = Array.from(resultsMap.values())
     .sort((a, b) => (a.score ?? 0) - (b.score ?? 0))
-    .slice(0, 8);
+    .slice(0, 40);
 
-  // AI Matching logic:
-  // If there are multiple candidates and we have a customerQuery, use AI to select the best one
-  if (finalCandidates.length > 1 && customerQuery) {
-    try {
-      // ดึงรายชื่อผู้ติดต่อผูกร่วมกับ Candidates แต่ละตัวเพื่อความแม่นยำ
-      for (const c of finalCandidates) {
-        const { data: contactsData } = await (db.from('contacts') as any)
-          .select('name')
-          .eq('customer_id', c.item.id);
-        c.contacts = contactsData ? contactsData.map((co: any) => co.name) : [];
+  // ═══ Evidence stage: คำนวณหลักฐานเชิงข้อเท็จจริงต่อ candidate (deterministic) ═══
+  if (finalCandidates.length > 0) {
+    const normRowById = new Map(normRows.map((r: any) => [r.id, r]));
+    const evidenceQueries = Array.from(normVariantSet).map(qn => ({ qn, trigrams: trigramsOf(qn) }));
+    const ids = finalCandidates.map(c => c.item.id);
+
+    // 1) ผู้ติดต่อของทุก candidate — query เดียว (แทน loop ต่อ candidate แบบเดิม)
+    const contactsByCustomer = new Map<any, string[]>();
+    const contactRows = await getContactNamesByCustomerIds(ids);
+    for (const r of contactRows) {
+      if (!contactsByCustomer.has(r.customer_id)) contactsByCustomer.set(r.customer_id, []);
+      contactsByCustomer.get(r.customer_id)!.push(r.name);
+    }
+
+    // 2) ประวัติใบเสนอราคาที่เคยยืนยันจริงของแต่ละบริษัท
+    const confirmedCounts = await getConfirmedQuotationCounts(ids);
+
+    for (const c of finalCandidates) {
+      const dn = c.item.display_name || '';
+      const row = normRowById.get(c.item.id);
+      const normName = row ? row.norm_name : normalizeCompanyNameTS(dn);
+      let sim = row ? Number(row.max_sim) || 0 : 0;
+      if (!row && evidenceQueries.length > 0) {
+        const tg = trigramsOf(normName);
+        for (const q of evidenceQueries) sim = Math.max(sim, trigramSimilarity(tg, q.trigrams));
       }
+      // แยกระดับ exact: raw = พิมพ์ตรงทั้งบรรทัดรวมวงเล็บ/สาขา (แยก record ซ้ำอย่าง ย่งฮง 2 แถวได้)
+      // norm = ตรงเมื่อตัดคำนำหน้า/สาขา/วงเล็บ (record ซ้ำจะ norm-exact พร้อมกันหลายตัว)
+      const isExactRaw = rawLines.some(l => collapseSpaces(l) === collapseSpaces(dn));
+      const isExactNorm = normName !== '' && normVariantSet.has(normName);
+      const isExact = isExactRaw || isExactNorm;
+      const allContacts = contactsByCustomer.get(c.item.id) || [];
+      const matchedContacts = effectiveContactQuery
+        ? allContacts.filter(n => contactNamesMatch(effectiveContactQuery, n).exact)
+        : [];
+      const partialContacts = effectiveContactQuery && matchedContacts.length === 0
+        ? allContacts.filter(n => contactNamesMatch(effectiveContactQuery, n).partial)
+        : [];
+      const salespersonMatch = !!(salesperson?.name && c.item.salesperson &&
+        String(c.item.salesperson).includes(String(salesperson.name)));
+      c.evidence = {
+        isExact,
+        isExactRaw,
+        isExactNorm,
+        sim,
+        matchedContacts,
+        partialContacts,
+        totalContacts: allContacts.length,
+        sampleContacts: allContacts.slice(0, 5),
+        salespersonMatch,
+        confirmedCount: confirmedCounts.get(c.item.id) || 0,
+      };
+      c.contacts = allContacts;
+    }
 
-      // ── Log ข้อมูลที่ส่งให้ AI ─────────────────────────────────────────
+    // ═══ Deterministic evidence boost: หลักฐานชี้ขาดได้เพียงตัวเดียว → ดันขึ้นอันดับ 1 ═══
+    // ต้องทำก่อน slice 8 ไม่งั้นตัวถูกที่สัญญาณชื่ออ่อน (เช่น พีเคยู กับ query "เคยู") โดนตัดทิ้งก่อน
+    // ลำดับความแข็งของหลักฐาน: raw-exact (รวมสาขา/วงเล็บ) > norm-exact > contact ตรง
+    // boost เป็น 0.0 โดยไม่ penalty ตัวอื่น → ยังไม่ auto-select (gap แคบ) แต่ขึ้นอันดับ 1 ของ picker/AI
+    const rawExacts = finalCandidates.filter(c => c.evidence.isExactRaw);
+    const normExacts = finalCandidates.filter(c => c.evidence.isExactNorm);
+    const exactContacts = finalCandidates.filter(c => c.evidence.matchedContacts.length > 0);
+    if (rawExacts.length === 1) {
+      rawExacts[0].score = 0.0;
+    } else if (rawExacts.length === 0 && normExacts.length === 1) {
+      normExacts[0].score = 0.0;
+    } else if (exactContacts.length === 1) {
+      // contact ชี้ขาดได้แม้มี record ชื่อซ้ำหลายตัว (เช่น ย่งฮง 2 แถว — ผู้ติดต่ออยู่แถวเดียว)
+      exactContacts[0].score = 0.0;
+    }
+    finalCandidates.sort((a, b) => (a.score ?? 0) - (b.score ?? 0));
+
+    // ═══ คัดกรองรายชื่อ: ตัดตัวที่สัญญาณต่ำและไม่มี evidence อื่นเลย ═══
+    const curated = finalCandidates.filter(c =>
+      (c.score ?? 1) <= 0.32 || c.evidence.isExact || c.evidence.matchedContacts.length > 0);
+    if (curated.length > 0) finalCandidates = curated;
+    finalCandidates = finalCandidates.slice(0, 8);
+  }
+
+  // ═══ AI selection: ผู้ตัดสินหลักเมื่อกำกวม — เห็น evidence ครบทุก candidate ใน prompt ═══
+  let aiDecided = false;
+  if (finalCandidates.length > 1 && customerQuery && !isAiMatchDisabled()) {
+    try {
       console.log(`[AI-Customer] ══════════════════════════════════════`);
       console.log(`[AI-Customer] customerQuery : "${customerQuery}"`);
-      console.log(`[AI-Customer] contactQuery  : "${contactQuery || '-'}"`);
-      console.log(`[AI-Customer] candidates (${finalCandidates.length}):`);
+      console.log(`[AI-Customer] contactQuery  : "${effectiveContactQuery || '-'}"`);
       finalCandidates.forEach((c, i) => {
-        console.log(`  ${i + 1}. "${c.item.display_name}" | ref: ${c.item.reference || '-'} | contacts: [${(c.contacts || []).join(', ')}]`);
+        const e = c.evidence || {};
+        console.log(`  ${i + 1}. "${c.item.display_name}" | exact:${e.isExact ? 'Y' : 'N'} sim:${Math.round((e.sim || 0) * 100)}% contact:[${(e.matchedContacts || []).join(',')}] confirmed:${e.confirmedCount || 0}`);
       });
+
+      const evidenceLines = finalCandidates.map((c, i) => {
+        const e = c.evidence || {};
+        const contactInfo = e.matchedContacts?.length
+          ? `ผู้ติดต่อในระบบที่ตรงกับในแชท: [${e.matchedContacts.join(', ')}] ✓`
+          : e.partialContacts?.length
+            ? `ผู้ติดต่อในระบบที่ใกล้เคียง: [${e.partialContacts.join(', ')}]`
+            : `ผู้ติดต่อที่ตรง: ไม่มี (บริษัทนี้มีผู้ติดต่อ ${e.totalContacts ?? 0} คน${e.sampleContacts?.length ? ` เช่น ${e.sampleContacts.join(', ')}` : ''})`;
+        const exactLabel = e.isExactRaw
+          ? 'ตรงเป๊ะทั้งบรรทัดรวมสาขา/วงเล็บ ✓✓'
+          : e.isExactNorm ? 'ตรงเมื่อไม่นับคำนำหน้า/สาขา/วงเล็บ ✓' : 'ไม่';
+        return `${i + 1}. "${c.item.display_name}" | รหัสลูกค้า: ${c.item.reference || '-'}
+   - ชื่อตรงกับที่เซลส์พิมพ์: ${exactLabel} | ความคล้ายของชื่อ: ${Math.round((e.sim || 0) * 100)}%
+   - ${contactInfo}
+   - เซลส์เจ้าของลูกค้าตรงกับผู้ส่งข้อความ: ${e.salespersonMatch ? 'ใช่ ✓' : 'ไม่'} | เคยออกใบเสนอราคายืนยันแล้ว: ${e.confirmedCount || 0} ครั้ง`;
+      }).join('\n');
 
       const response = await openai.chat.completions.create({
         model: 'deepseek-chat',
         messages: [
           {
             role: 'user',
-            content: `คุณคือผู้เชี่ยวชาญการวิเคราะห์ชื่อลูกค้าจากข้อความแชท (Customer Matcher)
-งานของคุณคือจับคู่ข้อความคำสั่งซื้อ/เสนอราคา (Quotation Chat) กับรายการชื่อบริษัทในระบบให้ถูกต้อง
+            content: `คุณคือผู้เชี่ยวชาญจับคู่ชื่อลูกค้าจากข้อความแชทของเซลส์ กับบริษัทในระบบ (Customer Matcher)
 
-ข้อความแชทจากลูกค้า:
+ข้อความแชทจากเซลส์:
 "${customerQuery}"
 
-ชื่อผู้ติดต่อที่เซลส์ระบุในแชท: "${contactQuery || '-'}"
+ชื่อผู้ติดต่อที่เซลส์ระบุ: "${effectiveContactQuery || '-'}"
 
-รายการชื่อบริษัทที่เป็นตัวเลือก (Candidates):
-${finalCandidates.map((c, i) => `${i + 1}. ชื่อบริษัท: "${c.item.display_name}" | รหัสลูกค้า: "${c.item.reference || '-'}" | ผู้ติดต่อในระบบของบริษัทนี้: [${(c.contacts || []).join(', ')}]`).join('\n')}
+ตัวเลือกบริษัท พร้อมหลักฐานที่ระบบตรวจสอบมาแล้ว (ข้อเท็จจริง ไม่ใช่การเดา):
+${evidenceLines}
 
-กติกาการเลือก (ต้องปฏิบัติตามลำดับเคร่งครัด):
+กติกาการชั่งน้ำหนักหลักฐาน (เรียงตามความสำคัญ):
+1. "ตรงเป๊ะทั้งบรรทัดรวมสาขา/วงเล็บ ✓✓" คือหลักฐานแข็งแรงที่สุด — ถ้ามีตัวเดียว ให้เลือกตัวนั้น
+   (ระวัง record ชื่อซ้ำ: ถ้าหลายตัว "ตรงเมื่อไม่นับสาขา/วงเล็บ ✓" พร้อมกัน ให้ใช้ผู้ติดต่อ/สาขาที่เซลส์ระบุชี้ขาด)
+2. "ผู้ติดต่อในระบบที่ตรงกับในแชท" แข็งแรงมาก — เซลส์มักพิมพ์ชื่อบริษัทย่อๆ แต่ชื่อผู้ติดต่อชี้บริษัทที่ถูกได้แม่นยำ
+3. ความคล้ายของชื่อ (%) สูงกว่าอย่างมีนัยสำคัญ + ประวัติเคยออกใบเสนอราคา ช่วยยืนยัน
+4. ระวัง: บริษัทชื่อคล้ายกันอาจเป็นคนละนิติบุคคล (เช่น "ย่งฮง (ประเทศไทย)" ≠ "ย่งฮง เอ็นจิเนียริ่ง") — ห้ามเลือกข้ามถ้าหลักฐานผู้ติดต่อ/ชื่อเป๊ะชี้อีกตัว
+5. ถ้าหลักฐานขัดแย้งกันหรือไม่มีตัวไหนเด่นชัด → choice: 0 (ให้ user เลือกเอง ปลอดภัยกว่าเดา)
 
-1. ตรวจสอบชื่อผู้ติดต่อก่อน (สำคัญที่สุด):
-   - เปรียบเทียบชื่อผู้ติดต่อในแชท กับ "ผู้ติดต่อในระบบ" ของแต่ละบริษัท
-   - หากชื่อผู้ติดต่อตรงหรือใกล้เคียงกับบริษัทใดบริษัทหนึ่งอย่างชัดเจน → เลือกบริษัทนั้น
-   - หากชื่อผู้ติดต่อ **ไม่ตรงกับผู้ติดต่อในระบบของบริษัทใดเลย** → ตอบ 0 ทันที ห้ามเดา
+ตอบเป็น JSON เท่านั้น:
+{"choice": <1-${finalCandidates.length} หรือ 0>, "confidence": "<high|medium|low>", "reason": "<สั้นๆ>"}
 
-2. หากไม่มีชื่อผู้ติดต่อในแชท ให้วิเคราะห์ชื่อบริษัทแทน:
-   - หากในแชทระบุคำว่า "สำนักงานใหญ่", "hq", "headquarter", "สนญ" ให้มองหาตัวเลือกที่เป็นสำนักงานใหญ่
-   - หากในแชทระบุสาขา (เช่น สาขา 1, สาขา ชลบุรี) ให้มองหาตัวเลือกที่เป็นสาขาที่ตรงกัน
-   - หากชื่อบริษัทคลุมเครือ ไม่มีข้อมูลแยกแยะได้ → ตอบ 0
-
-3. ตอบเป็น JSON รูปแบบนี้เท่านั้น ห้ามเพิ่มข้อความอื่น:
-   {"choice": <ตัวเลข 1-${finalCandidates.length} หรือ 0>, "reason": "<อธิบายสั้นๆ ว่าเลือกเพราะอะไร หรือทำไมถึงตอบ 0>"}
-
-⚠️ ข้อห้ามเด็ดขาด:
-- ห้ามเดาว่าผู้ติดต่อ "น่าจะอยู่ในกลุ่ม" ของบริษัทใด
-- ห้ามเลือกบริษัทที่มีผู้ติดต่อมากที่สุดโดยไม่มีการ match ที่แท้จริง
-- ถ้าไม่มีหลักฐานชัดเจน ให้ตอบ 0 เสมอ`
+ความหมาย confidence:
+- high = หลักฐานชี้ชัดตัวเดียว (ชื่อเป๊ะ หรือผู้ติดต่อตรง) → ระบบจะเลือกให้อัตโนมัติ
+- medium = ค่อนข้างแน่ใจแต่มีตัวลุ้นอื่น
+- low = ไม่แน่ใจ (ระบบจะให้ user เลือกเอง)`
           }
         ]
       });
@@ -481,38 +858,35 @@ ${finalCandidates.map((c, i) => `${i + 1}. ชื่อบริษัท: "${c.
       const rawAnswer = (response.choices[0].message.content || '').trim();
       console.log(`[AI-Customer] RAW response : ${rawAnswer}`);
 
-      // Parse JSON response พร้อม fallback
-      let answer = '0';
+      let choice = 0;
+      let confidence = 'low';
       try {
         const jsonMatch = rawAnswer.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
           const parsed = JSON.parse(jsonMatch[0]);
-          answer = String(parsed.choice ?? 0);
-          console.log(`[AI-Customer] CHOICE : ${answer}`);
+          choice = parseInt(String(parsed.choice ?? 0), 10) || 0;
+          confidence = String(parsed.confidence || 'medium').toLowerCase();
+          console.log(`[AI-Customer] CHOICE : ${choice} | CONFIDENCE : ${confidence}`);
           console.log(`[AI-Customer] REASON : ${parsed.reason || '-'}`);
-        } else {
-          answer = rawAnswer.replace(/\D/g, '') || '0';
-          console.log(`[AI-Customer] CHOICE (no-json fallback): ${answer}`);
         }
       } catch {
-        answer = rawAnswer.replace(/\D/g, '') || '0';
-        console.log(`[AI-Customer] CHOICE (parse-error fallback): ${answer}`);
+        console.log('[AI-Customer] parse error — treat as choice 0');
       }
       console.log(`[AI-Customer] ══════════════════════════════════════`);
-      const idx = parseInt(answer, 10) - 1;
 
-      if (idx >= 0 && idx < finalCandidates.length) {
-        const chosenCandidate = finalCandidates[idx];
-        console.log(`[AI-Customer] ✅ chosen: ${chosenCandidate.item.display_name}`);
-        
+      const idx = choice - 1;
+      if (idx >= 0 && idx < finalCandidates.length && confidence !== 'low') {
+        aiDecided = true;
+        const chosen = finalCandidates[idx];
+        console.log(`[AI-Customer] ✅ chosen: ${chosen.item.display_name} (${confidence})`);
         finalCandidates.forEach((c, index) => {
           if (index === idx) {
-            c.score = 0.0;
-          } else {
-            // ปรับคะแนนตัวเลือกอื่นๆ ให้อ่อนลง (penalty)
-            if (c.score === undefined || c.score <= 0.2) {
-              c.score = 0.3;
-            }
+            // high → 0.0 ผ่าน auto-select gate; medium → 0.04 (ขึ้นอันดับ 1 แต่ไม่บังคับ auto)
+            c.score = confidence === 'high' ? 0.0 : Math.min(c.score ?? 0.04, 0.04);
+          } else if (confidence === 'high' && !c.evidence?.isExact && !(c.evidence?.matchedContacts?.length > 0)) {
+            // penalty เฉพาะเมื่อ AI มั่นใจสูง และตัวนั้นไม่มีหลักฐาน deterministic แข็ง (ชื่อเป๊ะ/ผู้ติดต่อตรง)
+            // ถ้า penalty ตอน medium จะไปถ่าง gap จน auto-select ทั้งที่ AI เองยังไม่แน่ใจ (เคยพลาดเคสสาขาโคราช)
+            c.score = Math.max(c.score ?? 0.3, 0.3);
           }
         });
       }
@@ -521,7 +895,15 @@ ${finalCandidates.map((c, i) => `${i + 1}. ชื่อบริษัท: "${c.
     }
   }
 
-  finalCandidates.sort((a, b) => (a.score ?? 0) - (b.score ?? 0));
+  // (deterministic evidence boost ทำไปแล้วก่อน slice — ที่นี่ไม่ต้อง fallback ซ้ำ)
+
+  // Sort สุดท้าย: score ต่ำก่อน; คะแนนเท่ากัน (เช่น record ชื่อซ้ำได้ 0.0 คู่กัน) ให้ตัวที่หลักฐานแข็งกว่าขึ้นก่อน
+  const evidenceWeight = (c: any) =>
+    (c.evidence?.isExactRaw ? 4 : 0) +
+    ((c.evidence?.matchedContacts?.length ?? 0) > 0 ? 2 : 0) +
+    (c.evidence?.isExactNorm ? 1 : 0);
+  finalCandidates.sort((a, b) =>
+    ((a.score ?? 0) - (b.score ?? 0)) || (evidenceWeight(b) - evidenceWeight(a)));
   console.log('[findCustomerCandidates] Final results after AI check:', finalCandidates.map(r => `${r.item.display_name} (score: ${r.score})`));
 
   return finalCandidates;
@@ -562,20 +944,15 @@ export async function findContactCandidates(customerId: any, contactQuery: strin
 
   const cleaned = cleanContactNameExtra(contactQuery);
 
-  const { data: dbContacts, error } = await (db.from('contacts') as any)
-    .select('id, name, mobile, phone, email, invoice_street, invoice_district, invoice_sub_district, invoice_state, invoice_zip')
-    .eq('customer_id', customerId);
+  const dbContacts = await getContactsByCustomerId(customerId);
 
-  if (error || !dbContacts || dbContacts.length === 0) {
+  if (!dbContacts || dbContacts.length === 0) {
     return [];
   }
 
   // Fetch company default address once
   let companyDefaultAddr: any = null;
-  const { data: companyRows } = await (db.from('customers_raw') as any)
-    .select('invoice_street, invoice_district, invoice_sub_district, invoice_state, invoice_zip')
-    .eq('company_id', customerId)
-    .order('contact_id', { ascending: true });
+  const companyRows = await getCompanyAddressRows(customerId);
 
   if (companyRows && companyRows.length > 0) {
     companyDefaultAddr = companyRows.find((r: any) => r.invoice_street && r.invoice_street.trim()) || 
@@ -654,6 +1031,23 @@ export async function findContactCandidates(customerId: any, contactQuery: strin
     return contactsWithAddr.map((c: any) => ({ item: c, score: 0 }));
   }
 
+  // 2.5 Deterministic pre-pass: เทียบแบบ normalize (ช่องว่างหลังคำนำหน้า / ชื่อเล่นในวงเล็บ / ตำแหน่งต่อท้าย)
+  // "คุณ มิค"↔"คุณมิค" exact→0.0, "คุณณัฐชา (พลอย)"↔"คุณพลอย" exact ผ่าน alias→0.0, ซ้อนบางส่วน→0.1
+  // hit แล้ว return เลย (ผ่าน auto-confirm threshold <0.45 เดิมใน resolveContactFlow) ไม่ hit → Fuse เดิม
+  const prePass = candidates
+    .map((c: any) => {
+      const m = contactNamesMatch(contactQuery, c.name || '');
+      if (m.exact) return { item: c, score: 0.0 };
+      if (m.partial) return { item: c, score: 0.1 };
+      return null;
+    })
+    .filter(Boolean) as any[];
+  if (prePass.length > 0) {
+    prePass.sort((a, b) => a.score - b.score);
+    console.log(`[findContactCandidates] deterministic pre-pass hit: ${prePass.map(p => `${p.item.name} (${p.score})`).join(', ')}`);
+    return prePass;
+  }
+
   const fuse = new (Fuse as any)(candidates, {
     keys: ['cleanName', 'name'],
     threshold: 0.5,
@@ -670,21 +1064,14 @@ export async function findCustomerByContactName(contactQuery: string, salesperso
   const cleaned = cleanContactName(contactQuery);
   if (!cleaned) return [];
 
-  let query: any = (db.from('contacts') as any)
-    .select('name, customer_id, customers!inner(id, display_name, salesperson, branch_code)')
-    .ilike('name', `%${cleaned}%`);
-
+  let branchCodes: string[] | null = null;
   if (salesperson && salesperson.branch_code) {
-    const branchCodes = salesperson.branch_code.split(',').map((c: any) => c.trim()).filter(Boolean);
-    if (branchCodes.length > 0) {
-      query = query.in('customers.branch_code', branchCodes);
-    }
+    const codes = salesperson.branch_code.split(',').map((c: any) => c.trim()).filter(Boolean);
+    if (codes.length > 0) branchCodes = codes;
   }
 
-  const { data: dbContacts, error } = await query.limit(50);
-
-  if (error || !dbContacts) {
-    console.error("Find customer by contact name error:", error);
+  const dbContacts = await findContactsWithCustomerByName(cleaned, branchCodes, 50);
+  if (!dbContacts || dbContacts.length === 0) {
     return [];
   }
 

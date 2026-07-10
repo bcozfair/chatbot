@@ -1,0 +1,382 @@
+[
+  {
+    "id": "pin-1-dot-initial",
+    "source": "pinned",
+    "note": "cluster 1: จุดย่อตัวเดียว (7 msgs fail)",
+    "customerQuery": "บริษัท ก.แสงทอง",
+    "contactQuery": "คุณก้อย",
+    "expected": "บริษัท ก.แสงทอง เอ็นจิเนียริ่ง จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "pin-2-spelling",
+    "source": "pinned",
+    "note": "cluster 2: สะกดต่าง แมส/แมช (6 msgs fail)",
+    "customerQuery": "บ.เอ.เค.พลาสติกแมสชีนเนอรี่",
+    "contactQuery": "คุณอั๋น",
+    "expected": "บริษัท เอ.เค.พลาสติกแมชชินเนอรี่ จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "pin-3-spacing",
+    "source": "pinned",
+    "note": "cluster 3: เว้นวรรคต่าง",
+    "customerQuery": "โคราชกรุ๊ป",
+    "contactQuery": "คุณรจนา",
+    "expected": "บริษัท โคราช กรุ๊ป วิศวกรรม จำกัด (สาขาที่ 00002)"
+  },
+  {
+    "id": "pin-4-person-phone",
+    "source": "pinned",
+    "note": "cluster 4: ลูกค้าบุคคล+เบอร์ (5 msgs fail)",
+    "customerQuery": "คุณโยธิน 06-3884-0005",
+    "contactQuery": "",
+    "expected": "คุณ โยธิน  ปาทาน"
+  },
+  {
+    "id": "pin-5a-contact-ku-jittipong",
+    "source": "pinned",
+    "note": "cluster 5: contact ชี้ขาด",
+    "customerQuery": "บ.เคยู",
+    "contactQuery": "คุณจิตติพงษ์",
+    "expected": "บริษัท เคยู พลัส จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "pin-5b-contact-ku-thanet",
+    "source": "pinned",
+    "note": "cluster 5: เคยเลือกผิดเป็นสยามเคยู",
+    "customerQuery": "บ.เคยู",
+    "contactQuery": "คุณธเนศ",
+    "expected": "บริษัท พีเคยู อินเตอร์เนชั่นแนล เทคโนโลยี จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "pin-5c-contact-ku-chao",
+    "source": "pinned",
+    "note": "cluster 5: contact ชี้ขาด",
+    "customerQuery": "บ.เคยู",
+    "contactQuery": "คุณเชาว์",
+    "expected": "บริษัท เคยู ดีแม็ค จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "pin-6-exact-typed",
+    "source": "pinned",
+    "note": "cluster 6: พิมพ์ตรงเป๊ะแต่ AI เคยเลือกผิด",
+    "customerQuery": "บริษัท ย่งฮง (ประเทศไทย) จำกัด (สำนักงานใหญ่)",
+    "contactQuery": "คุณธนกร",
+    "expected": "บริษัท ย่งฮง (ประเทศไทย) จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "pin-9-ref-fastpath",
+    "source": "pinned",
+    "note": "regression: reference fast-path ต้องยังทำงาน",
+    "customerQuery": "A/35871 บ.ถิรเดช",
+    "contactQuery": "คุณถิรเดช",
+    "expected": "ห้างหุ้นส่วนจำกัด ถิรเดช โอภาสวัฒนกุล (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-29",
+    "source": "mined",
+    "customerQuery": "บริษัท สามชัย สตีล อินดัสทรี จำกัด",
+    "contactQuery": "",
+    "expected": "บริษัท สามชัย สตีล อินดัสทรี จำกัด (มหาชน) สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-66",
+    "source": "mined",
+    "customerQuery": "บริษัท เอส.วี.เอส การไฟฟ้า",
+    "contactQuery": "คุณกวง",
+    "expected": "บริษัท เอส.วี.เอส.การไฟฟ้า จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-68",
+    "source": "mined",
+    "customerQuery": "บริษัท สหสงวนไชยเซลส์ แอนด์ เซอร์วิส จำกัด",
+    "contactQuery": "",
+    "expected": "บริษัท สหสงวนไชยเซลส์ แอนด์ เซอร์วิส จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-72",
+    "source": "mined",
+    "customerQuery": "บริษัท วีทีซี แมคคานิค ซิสเต็มส์ จำกัด (สำนักงานใหญ่)",
+    "contactQuery": "คุณธีรศักดิ์  จัดซื้อ 0986699626",
+    "expected": "บริษัท วีทีซี แมคคานิค ซิสเต็มส์ จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-85",
+    "source": "mined",
+    "customerQuery": "บ.ถิรเดช",
+    "contactQuery": "คุณถิรเดช",
+    "expected": "ห้างหุ้นส่วนจำกัด ถิรเดช โอภาสวัฒนกุล (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-88",
+    "source": "mined",
+    "customerQuery": "บ.เอ.เค.พลาสติกแมสชีนเนอรี่",
+    "contactQuery": "คุณอั๋น",
+    "expected": "บริษัท เอ.เค.พลาสติกแมชชินเนอรี่ จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-90",
+    "source": "mined",
+    "customerQuery": "บริษัท โลหะกิจรุ่งเจริญทรัพย์ จำกัด(บางกระเจ้า)",
+    "contactQuery": "",
+    "expected": "บริษัท โลหะกิจรุ่งเจริญทรัพย์ จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-97",
+    "source": "mined",
+    "customerQuery": "บ.เคยู พลัส คุณจิตติพงษ์  A011495",
+    "contactQuery": "",
+    "expected": "บริษัท เคยู พลัส จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-132",
+    "source": "mined",
+    "customerQuery": "บ.เคยู  คุณจิตติพงษ์",
+    "contactQuery": "",
+    "expected": "บริษัท เคยู พลัส จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-144",
+    "source": "mined",
+    "customerQuery": "บ.เคยู คุณจิตติพง",
+    "contactQuery": "",
+    "expected": "บริษัท เคยู พลัส จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-146",
+    "source": "mined",
+    "customerQuery": "บ.เคยู คุณเชาว์",
+    "contactQuery": "",
+    "expected": "บริษัท เคยู ดีแม็ค จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-148",
+    "source": "mined",
+    "customerQuery": "บ.พีเคยู คุณธเนศ",
+    "contactQuery": "",
+    "expected": "บริษัท พีเคยู อินเตอร์เนชั่นแนล เทคโนโลยี จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-149",
+    "source": "mined",
+    "customerQuery": "บ.เคยู คุณแก้ม",
+    "contactQuery": "",
+    "expected": "บริษัท พีเคยู อินเตอร์เนชั่นแนล เทคโนโลยี จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-150",
+    "source": "mined",
+    "customerQuery": "บ.เคยู คุณธเนศ",
+    "contactQuery": "",
+    "expected": "บริษัท พีเคยู อินเตอร์เนชั่นแนล เทคโนโลยี จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-173",
+    "source": "mined",
+    "customerQuery": "บริษัท สหสงวนไชยเซลส์",
+    "contactQuery": "",
+    "expected": "บริษัท สหสงวนไชยเซลส์ แอนด์ เซอร์วิส จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-174",
+    "source": "mined",
+    "customerQuery": "บริษัท วีทีซี แมคคานิค",
+    "contactQuery": "คุณธีรศักดิ์  จัดซื้อ 0986699626",
+    "expected": "บริษัท วีทีซี แมคคานิค ซิสเต็มส์ จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-175",
+    "source": "mined",
+    "customerQuery": "บริษัท โลหะกิจรุ่งเจริญทรัพย์",
+    "contactQuery": "",
+    "expected": "บริษัท โลหะกิจรุ่งเจริญทรัพย์ จำกัด (สาขาที่ 00002)"
+  },
+  {
+    "id": "mined-178",
+    "source": "mined",
+    "customerQuery": "บริษัท เอส.วี.เอส",
+    "contactQuery": "คุณกวง",
+    "expected": "บริษัท เอส.วี.เอส.การไฟฟ้า จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-183",
+    "source": "mined",
+    "customerQuery": "บ.เคยู พลัส คุณจิตติพงษ์",
+    "contactQuery": "",
+    "expected": "บริษัท เคยู พลัส จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-196",
+    "source": "mined",
+    "customerQuery": "บริษัท ย่งฮง (ประเทศไทย) จำกัด (สำนักงานใหญ่)",
+    "contactQuery": "คุณธนกร  088-0082290 เจ้าของ",
+    "expected": "บริษัท ย่งฮง (ประเทศไทย) จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-198",
+    "source": "mined",
+    "customerQuery": "บริษัท เอส.วี.เอส",
+    "contactQuery": "",
+    "expected": "บริษัท เอส.วี.เอส.การไฟฟ้า จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-221",
+    "source": "mined",
+    "customerQuery": "บริษัท ฮิโรมิทซึ เทคโนอาร์ท",
+    "contactQuery": "คุณปุ้ย",
+    "expected": "บริษัท ฮิโรมิทซึ เทคโนอาร์ท (ประเทศไทย) จำกัด"
+  },
+  {
+    "id": "mined-304",
+    "source": "mined",
+    "customerQuery": "บ.ทราโฟ แอนด์ ฟิลเตอร์",
+    "contactQuery": "",
+    "expected": "บริษัท ทราโฟ แอนด์ ฟิลเตอร์ จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-308",
+    "source": "mined",
+    "customerQuery": "บ.ศุภนุช เอ็นเตอร์ไพรส์",
+    "contactQuery": "คุณบุญมี",
+    "expected": "บริษัท ศุภนุช เอ็นเตอร์ไพรส์ จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-309",
+    "source": "mined",
+    "customerQuery": "หจก.เอ แอนด์ ที เมดิคอลซายด์",
+    "contactQuery": "คุณโหน่ง",
+    "expected": "ห้างหุ้นส่วนจำกัด เอ แอนด์ ที เมดิคอลซายด์ (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-311",
+    "source": "mined",
+    "customerQuery": "บ.เอ.เบสท์ อินเตอร์โปรดักส์",
+    "contactQuery": "คุณอัฐพล",
+    "expected": "บริษัท เอ.เบสท์ อินเตอร์ โปรดักส์ จำกัด (สาขาที่ 00001)"
+  },
+  {
+    "id": "mined-313",
+    "source": "mined",
+    "customerQuery": "บริษัท วิกเกอร์ปิกเม้นท์ จำกัด",
+    "contactQuery": "คุณสุเมธี",
+    "expected": "บริษัท วิกเกอร์ปิกเม้นท์ จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-323",
+    "source": "mined",
+    "customerQuery": "บ.วิฑูรย์เอ็นจิเนียริ่ง แอนด์ เทรดดิ้ง",
+    "contactQuery": "คุณวิมัย",
+    "expected": "บริษัท วิฑูรย์เอ็นจิเนียริ่ง แอนด์ เทรดดิ้ง จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-325",
+    "source": "mined",
+    "customerQuery": "บ. เมมเบอร์เทค",
+    "contactQuery": "คุณฝน",
+    "expected": "บริษัท เมมเบอร์เทค จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-333",
+    "source": "mined",
+    "customerQuery": "บ.ไทย สพิริท อินดัสทรี่",
+    "contactQuery": "คุณ วิทยา",
+    "expected": "บริษัท ไทย สพิริท อินดัสทรี จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-334",
+    "source": "mined",
+    "customerQuery": "บริษัท อินเตอร์เฟสคอม จำกัด",
+    "contactQuery": "คุณดีม",
+    "expected": "บริษัท อินเตอร์เฟสคอม จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-336",
+    "source": "mined",
+    "customerQuery": "บริษัท ไต้หวัน เมทัล พรีซิชั่น (ไทยแลนด์) จำกัด สำนักงานใหญ่",
+    "contactQuery": "",
+    "expected": "บริษัท ไต้หวัน เมทัล พรีซิชั่น (ไทยแลนด์) จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-341",
+    "source": "mined",
+    "customerQuery": "บริษัท ฟอร์จูนเนท เพาเวอร์ จำกัด (สำนักงานใหญ่)",
+    "contactQuery": "คุณ มิค",
+    "expected": "บริษัท ฟอร์จูนเนท เพาเวอร์ จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-348",
+    "source": "mined",
+    "customerQuery": "บ. อาเจ ไทย",
+    "contactQuery": "คุณวันชัย",
+    "expected": "บริษัท อาเจไทย จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-349",
+    "source": "mined",
+    "customerQuery": "บริษัทไฮโดร เอนจิเนียร์ โปรดักส์",
+    "contactQuery": "คุณ เอนก",
+    "expected": "บริษัท ไฮโดร เอ็นจิเนีย โปรดักส์ จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-357",
+    "source": "mined",
+    "customerQuery": "บริษัท เอ็มซี อีควิปเม้นท์ เทรดดิ้ง จำกัด",
+    "contactQuery": "คุณวิชัย พลเดช",
+    "expected": "บริษัท เอ็มซี อีควิปเม้นท์ เทรดดิ้ง จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-366",
+    "source": "mined",
+    "customerQuery": "บริษัท พีแอลเค สวิชต์บอร์ด",
+    "contactQuery": "คุณ ศิริวิมล",
+    "expected": "บริษัท พีแอลเค สวิตช์บอร์ด จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-370",
+    "source": "mined",
+    "customerQuery": "บริษัท กิสโค จำกัด (สำนักงานใหญ่)",
+    "contactQuery": "คุณธนวัฒน์",
+    "expected": "บริษัท กิสโค จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-374",
+    "source": "mined",
+    "customerQuery": "บ.เอสเอสดับเบิลยูกรู๊ป",
+    "contactQuery": "คุณยุทธจักร",
+    "expected": "บริษัท เอส เอส ดับเบิลยู กรุ๊ป จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-376",
+    "source": "mined",
+    "customerQuery": "บ.วิค คุณตู่",
+    "contactQuery": "",
+    "expected": "บริษัท วิค จำกัด (มหาชน) (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-377",
+    "source": "mined",
+    "customerQuery": "บริษัท ทีไอซี โมดูลา",
+    "contactQuery": "คุณ กุ้ง",
+    "expected": "บริษัท ที ไอ ซี โมดูลาร์ ซีสเต็ม จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-380",
+    "source": "mined",
+    "customerQuery": "เสนอราคา บ. อาเจ ไทย คุณวันชัย 1. TIM-94N-AB-220 1 Pcs.",
+    "contactQuery": "",
+    "expected": "บริษัท อาเจไทย จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-418",
+    "source": "mined",
+    "customerQuery": "เสนอราคา บริษัท โออีเอ็ม  อิเล็คตริคอล คุณปราโมทย์",
+    "contactQuery": "",
+    "expected": "บริษัท โออีเอ็ม อิเล็คตริคอล จำกัด (สำนักงานใหญ่)"
+  },
+  {
+    "id": "mined-430",
+    "source": "mined",
+    "customerQuery": "บริษัท ก.แสงทอง",
+    "contactQuery": "คุณก้อย",
+    "expected": "บริษัท ก.แสงทอง เอ็นจิเนียริ่ง จำกัด (สำนักงานใหญ่)"
+  }
+]

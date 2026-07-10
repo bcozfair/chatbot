@@ -1,4 +1,3 @@
-import { db } from '../config/clients.js';
 import { openai } from '../config/clients.js';
 import { pool } from '../config/db.js'; 
 

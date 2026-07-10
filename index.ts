@@ -5,8 +5,21 @@ import path from 'path';
 import fs from 'fs';
 dotenv.config();
 
-import { db, lineConfig, lineClient } from './config/clients.js';
-import { getBranches } from './config/dbClient.js';
+import { lineConfig, lineClient } from './config/clients.js';
+import {
+  searchCustomersAdmin,
+  getContactsByCustomerId,
+  getCompanyAddressRows,
+  deletePendingQuotations,
+  getCustomerBranchesBySalesperson,
+  listSalespeopleFromOrders,
+  getSalespersonByUserId,
+  insertSalesperson,
+  updateSalespersonByUserId,
+  getLatestEmployeeQuotations,
+  getBranchesByCodes,
+  getBranches,
+} from './db/repositories.js';
 import { getQuotationNo, cancelOldRevision, enrichQuotationData } from './services/quotationService.js';
 import { handleEvent } from './handlers/lineHandler.js';
 import { generateQuotationPDF, closePdfBrowser } from './pdfGenerator.js';
@@ -458,21 +471,8 @@ app.get('/api/customers/search', async (req: any, res: any) => {
   try {
     const q = req.query.q || '';
 
-    let queryBuilder = (db.from('customers') as any)
-      .select('id, display_name, reference, branch_code, salesperson');
-
-    if (q.trim()) {
-      // Wrap query in escaped double quotes to handle commas and other special characters
-      queryBuilder = queryBuilder.or(`display_name.ilike."%${q}%",reference.ilike."%${q}%"`);
-    }
-
-    const { data, error } = await queryBuilder.limit(30);
-
-    if (error) {
-      console.error("Customer search error:", error);
-      return res.status(500).json({ error: error.message });
-    }
-    res.json(data || []);
+    const data = await searchCustomersAdmin(String(q), 30);
+    res.json(data);
   } catch (err: any) {
     console.error("API GET customers search error:", err);
     res.status(500).json({ error: err.message });
@@ -482,16 +482,9 @@ app.get('/api/customers/search', async (req: any, res: any) => {
 // --- API: ดึงรายชื่อผู้ติดต่อตาม ID ลูกค้า ---
 app.get('/api/customer/:id/contacts', async (req: any, res: any) => {
   try {
-    const { data, error } = await (db.from('contacts') as any)
-      .select('id, name, mobile, phone, email, invoice_street, invoice_district, invoice_sub_district, invoice_state, invoice_zip')
-      .eq('customer_id', req.params.id);
+    const data = await getContactsByCustomerId(req.params.id);
 
-    if (error) {
-      console.error("Contacts fetch error:", error);
-      return res.status(500).json({ error: error.message });
-    }
-
-    let formatted = [];
+    let formatted: any[] = [];
     if (data) {
       const cleanState = (s: any) => String(s || '').replace(/\s*\(.*/, '').split(/\s+/)[0].trim();
       const cleanAddressField = (fieldVal: any, rawState: any, zip: any) => {
@@ -514,10 +507,7 @@ app.get('/api/customer/:id/contacts', async (req: any, res: any) => {
 
       // Fetch company default address once
       let companyDefaultAddr = null;
-      const { data: companyRows } = await (db.from('customers_raw') as any)
-        .select('invoice_street, invoice_district, invoice_sub_district, invoice_state, invoice_zip')
-        .eq('company_id', req.params.id)
-        .order('contact_id', { ascending: true });
+      const companyRows = await getCompanyAddressRows(req.params.id);
 
       if (companyRows && companyRows.length > 0) {
         companyDefaultAddr = companyRows.find((r: any) => r.invoice_street && r.invoice_street.trim()) || 
@@ -573,10 +563,7 @@ app.post('/api/quotation/draft-cart', express.json(), async (req: any, res: any)
     }
 
     // 1. ลบรายการใบเสนอราคาเก่าที่ยังค้างอยู่ทั้งหมดออกถาวร
-    await (db.from('quotations') as any)
-      .delete()
-      .eq('user_id', userId)
-      .in('status', ['pending_company', 'pending_contact', 'draft']);
+    await deletePendingQuotations(userId);
 
     // 2. ตรวจสอบข้อมูลสินค้าและเตรียมนำข้อมูลที่ถูกต้องบันทึก
     const itemsForDb = [];
@@ -1214,14 +1201,7 @@ app.get('/api/salesperson/suggest-branches', async (req: any, res: any) => {
     if (!name.trim()) return res.json([]);
 
     const cleanName = name.trim();
-    const { data, error } = await (db.from('customers') as any)
-      .select('branch_code, salesperson')
-      .ilike('salesperson', `%${cleanName}%`);
-
-    if (error) {
-      console.error("Suggest branches error:", error);
-      return res.status(500).json({ error: error.message });
-    }
+    const data = await getCustomerBranchesBySalesperson(cleanName);
 
     // การกรองแบบเข้มงวด (Strict filtering) ในระดับ JS
     const cleanInput = cleanName.toLowerCase()
@@ -1250,12 +1230,8 @@ app.get('/api/salesperson/suggest-branches', async (req: any, res: any) => {
 // --- API Endpoint ดึงรายชื่อพนักงานขายทั้งหมดจากฐานข้อมูล ---
 app.get('/api/salespeople', async (req: any, res: any) => {
   try {
-    const { data, error } = await (db.from('salespeople') as any).select('*');
-    if (error) {
-      console.error("Fetch salespeople list error:", error);
-      return res.status(500).json({ error: error.message });
-    }
-    res.json(data || []);
+    const data = await listSalespeopleFromOrders();
+    res.json(data);
   } catch (err: any) {
     console.error("API GET salespeople error:", err);
     res.status(500).json({ error: err.message });
@@ -1322,16 +1298,7 @@ app.get('/api/admins', async (req: any, res: any) => {
 app.get('/api/salesperson/:userId', async (req: any, res: any) => {
   try {
     const userId = req.params.userId;
-    const { data, error } = await (db.from('salesperson') as any)
-      .select('*')
-      .eq('user_id', userId)
-      .maybeSingle();
-
-    if (error) {
-      console.error("Fetch salesperson error:", error);
-      return res.status(500).json({ error: error.message });
-    }
-
+    const data = await getSalespersonByUserId(userId);
     const result = data || {};
 
     // ค่าตั้งต้นแอดมิน (เหมือนช่องสาขา): ถ้ายังไม่เคยเลือก/บันทึกไว้
@@ -1341,13 +1308,7 @@ app.get('/api/salesperson/:userId', async (req: any, res: any) => {
       const empCodeInt = parseInt(String(result.salesperson_id), 10);
       if (!isNaN(empCodeInt)) {
         try {
-          const { data: orderData } = await (db.from('sale_orders') as any)
-            .select('employee_quotations, employee_quotations_phone')
-            .eq('salesperson_id', empCodeInt)
-            .not('employee_quotations', 'is', null)
-            .order('order_date', { ascending: false })
-            .limit(1)
-            .maybeSingle();
+          const orderData = await getLatestEmployeeQuotations(empCodeInt);
           if (orderData && orderData.employee_quotations && orderData.employee_quotations.trim()) {
             // clean ชื่อ (ตัด (PM)/(THT)) ให้ prefill ตรงกับรายการใน dropdown /api/admins
             result.employee_quotations = cleanAdminName(orderData.employee_quotations);
@@ -1378,15 +1339,7 @@ app.post('/api/salesperson/update-branches', express.json(), async (req: any, re
     }
 
     // 1. ดึงข้อมูลพนักงานเพื่อดูสถานะปัจจุบัน
-    const { data: sp, error: fetchError } = await (db.from('salesperson') as any)
-      .select('status, name, phone, salesperson_id')
-      .eq('user_id', userId)
-      .maybeSingle();
-
-    if (fetchError) {
-      console.error("Fetch salesperson status error:", fetchError);
-      return res.status(500).json({ success: false, message: fetchError.message });
-    }
+    const sp = await getSalespersonByUserId(userId);
 
     // 2. ข้อมูลพนักงานและบันทึกข้อมูล
     let nextStatus = 'active';
@@ -1415,19 +1368,14 @@ app.post('/api/salesperson/update-branches', express.json(), async (req: any, re
     if (isNew) {
       updateData.user_id = userId;
       if (!updateData.name) updateData.name = 'รอดำเนินการ';
-      const { error: insertError } = await (db.from('salesperson') as any)
-        .insert(updateData);
-      if (insertError) {
-        console.error("Insert salesperson error:", insertError);
-        return res.status(500).json({ success: false, message: insertError.message });
+      const inserted = await insertSalesperson(updateData);
+      if (!inserted) {
+        return res.status(500).json({ success: false, message: 'insert salesperson failed' });
       }
     } else {
-      const { error: updateError } = await (db.from('salesperson') as any)
-        .update(updateData)
-        .eq('user_id', userId);
-      if (updateError) {
-        console.error("Update salesperson error:", updateError);
-        return res.status(500).json({ success: false, message: updateError.message });
+      const updated = await updateSalespersonByUserId(userId, updateData);
+      if (!updated) {
+        return res.status(500).json({ success: false, message: 'update salesperson failed' });
       }
     }
 
@@ -1436,7 +1384,7 @@ app.post('/api/salesperson/update-branches', express.json(), async (req: any, re
     let branchNames = branchCodes || 'ไม่ได้เลือกสาขา';
     if (selectedCodes.length > 0) {
       try {
-        const { data: branches } = await (db.from('branch') as any).select('name').in('branch_code', selectedCodes);
+        const branches = getBranchesByCodes(selectedCodes);
         if (branches && branches.length > 0) {
           branchNames = branches.map((b: any) => b.name).join(', ');
         }

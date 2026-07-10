@@ -1,11 +1,12 @@
-import { db } from '../config/clients.js';
 import { pool, type DbExecutor } from '../config/db.js';
-import { 
-  findCustomerCandidates, 
-  findContactCandidates, 
+import { getCustomerByDisplayName, getFirstContact, getCompanyAddressRows } from '../db/repositories.js';
+import {
+  findCustomerCandidates,
+  findContactCandidates,
   findCustomerByContactName,
   formatLineLabel,
-  cleanContactName
+  cleanContactName,
+  splitCustomerContact
 } from './customerService.js';
 import { 
   createListFlexMessage, 
@@ -734,8 +735,19 @@ export async function processQuotationRequest(userId: string, rawCustomerQuery: 
     return { text: errorText.trim() };
   }
 
-  const cleanCust = String(rawCustomerQuery || '').trim();
-  const cleanCont = String(rawContactQuery || '').trim();
+  let cleanCust = String(rawCustomerQuery || '').trim();
+  let cleanCont = String(rawContactQuery || '').trim();
+
+  // Backstop: ลูกค้า+ผู้ติดต่อพิมพ์มาบรรทัด/ก้อนเดียว เช่น "บ.เคยู  คุณจิตติพงษ์" —
+  // แยกส่วน คุณY ออกเป็น contact เฉพาะเมื่อยังไม่มี contact query (AI prompt rule 14 เป็นด่านแรก นี่คือด่านกันเหนียว)
+  if (cleanCust && !cleanCont) {
+    const split = splitCustomerContact(cleanCust);
+    if (split.contact) {
+      console.log(`[processQuotationRequest] split same-line customer/contact: "${split.customer}" + "${split.contact}"`);
+      cleanCust = split.customer;
+      cleanCont = split.contact;
+    }
+  }
 
   if (!cleanCust && !cleanCont) {
     return { text: "รบกวนระบุชื่อบริษัท/ลูกค้า และชื่อผู้ติดต่อด้วยครับ 🏢👤" };
@@ -1282,11 +1294,7 @@ export async function enrichQuotationData(quoteDb: any): Promise<any> {
 
   if (companyName && companyName !== 'ลูกค้าทั่วไป') {
     try {
-      const { data: custData } = await (db.from('customers') as any)
-        .select('id, reference, tax_id, phone, email, customer_payment_terms')
-        .eq('display_name', companyName)
-        .limit(1)
-        .maybeSingle();
+      const custData = await getCustomerByDisplayName(companyName);
 
       if (custData) {
         customerId = custData.id;
@@ -1294,16 +1302,7 @@ export async function enrichQuotationData(quoteDb: any): Promise<any> {
         customerTaxId = custData.tax_id || '';
         paymentTerms = custData.customer_payment_terms || '';
 
-        let contactQueryBuilder = (db.from('contacts') as any)
-          .select('*')
-          .eq('customer_id', custData.id);
-
-        if (contactNameQuery && contactNameQuery !== '') {
-          contactQueryBuilder = contactQueryBuilder.eq('name', contactNameQuery);
-        }
-
-        const { data: contactList } = await contactQueryBuilder.limit(1);
-        const contactData = contactList && contactList.length > 0 ? contactList[0] : null;
+        const contactData = await getFirstContact(custData.id, contactNameQuery || null);
 
         if (contactData) {
           contactName = contactData.name || '';
@@ -1312,10 +1311,7 @@ export async function enrichQuotationData(quoteDb: any): Promise<any> {
           let target = contactData;
 
           if (!hasAddr) {
-            const { data: companyRows } = await (db.from('customers_raw') as any)
-              .select('invoice_street, invoice_district, invoice_sub_district, invoice_state, invoice_zip')
-              .eq('company_id', custData.id)
-              .order('contact_id', { ascending: true });
+            const companyRows = await getCompanyAddressRows(custData.id);
 
             if (companyRows && companyRows.length > 0) {
               target = companyRows.find((r: any) => r.invoice_street && r.invoice_street.trim()) || 
