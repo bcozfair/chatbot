@@ -1,23 +1,19 @@
 import { pool } from '../config/db.js';
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 async function runMigration() {
   const client = await pool.connect();
   try {
     const sqlFile = process.argv[2];
-    let sqlPath: string;
-    
-    if (sqlFile) {
-      sqlPath = path.resolve(process.cwd(), sqlFile);
-    } else {
-      sqlPath = path.join(__dirname, '../migrations/add_warranty_unit_to_quotation_rules.sql');
+    if (!sqlFile) {
+      throw new Error(
+        'ต้องระบุไฟล์ SQL: tsx scripts/runMigration.ts <path/to/file.sql>\n' +
+        'ตั้ง DB ใหม่ตั้งแต่ศูนย์: tsx scripts/runMigration.ts migrations/schema.sql'
+      );
     }
-    
+    const sqlPath = path.resolve(process.cwd(), sqlFile);
+
     console.log(`Reading SQL migration from: ${sqlPath}`);
     if (!fs.existsSync(sqlPath)) {
       throw new Error(`Migration file not found at: ${sqlPath}`);
