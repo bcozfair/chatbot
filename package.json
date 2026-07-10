@@ -8,6 +8,9 @@
   "main": "index.js",
   "scripts": {
     "dev": "tsx watch index.ts",
+    "dev:web": "npm --prefix frontend run dev",
+    "dev:ngrok": "ngrok http 3011 --log=stdout",
+    "dev:all": "concurrently -n api,web,ngrok -c blue,magenta,yellow --kill-others \"npm:dev\" \"npm:dev:web\" \"npm:dev:ngrok\"",
     "db:dump": "tsx scripts/dbDump.ts",
     "db:dump:nosync": "tsx scripts/dbDump.ts --no-sync",
     "db:restore": "tsx scripts/dbRestore.ts",
@@ -36,6 +39,7 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^25.9.3",
     "@types/pg": "^8.20.0",
+    "concurrently": "^10.0.3",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3"
   }
