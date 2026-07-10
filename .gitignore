@@ -11,3 +11,7 @@ node_modules
 
 # Local dev tooling binaries
 ngrok.exe
+
+# Database dumps — มี PII ลูกค้าและ password hash ห้าม commit
+backup/
+*.dump

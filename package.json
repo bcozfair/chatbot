@@ -8,6 +8,9 @@
   "main": "index.js",
   "scripts": {
     "dev": "tsx watch index.ts",
+    "db:dump": "tsx scripts/dbDump.ts",
+    "db:dump:nosync": "tsx scripts/dbDump.ts --no-sync",
+    "db:restore": "tsx scripts/dbRestore.ts",
     "sync:products": "tsx scripts/sync/syncProducts.ts",
     "sync:customers": "tsx scripts/sync/syncCustomers.ts",
     "sync:saleorders": "tsx scripts/sync/syncSaleorders.ts",
