@@ -7,7 +7,52 @@ import { pool } from "./config/db.js";
 import { resolveQuoteCompany } from "./services/quotationService.js";
 import { computeAdminKey, cleanAdminName } from "./services/adminService.js";
 
+// ใช้ Chrome ตัวเดียวร่วมกันทุก request แทนการ launch ใหม่ทุกครั้ง
+// เดิม: launch ต่อ request และ browser.close() ไม่อยู่ใน finally -> error หนึ่งครั้ง = Chrome ค้าง 1 ตัว สะสมจน RAM หมด
+let browserPromise: Promise<import("puppeteer").Browser> | null = null;
 
+async function getBrowser(): Promise<import("puppeteer").Browser> {
+  if (browserPromise) {
+    try {
+      const existing = await browserPromise;
+      if (existing.connected) return existing;
+    } catch {
+      // launch รอบก่อนล้มเหลว — ตกไป launch ใหม่ด้านล่าง
+    }
+    browserPromise = null;
+  }
+
+  browserPromise = puppeteer
+    .launch({
+      headless: "new" as any,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    })
+    .catch((err) => {
+      // ถ้า launch พัง ต้องล้าง promise ทิ้ง ไม่งั้นทุก request ถัดไปจะได้ error เดิมค้างตลอด
+      browserPromise = null;
+      throw err;
+    });
+
+  const browser = await browserPromise;
+  // Chrome ตายเอง (เช่นถูก OOM killer) -> ล้าง cache ให้ request ถัดไป launch ใหม่
+  browser.once("disconnected", () => {
+    browserPromise = null;
+  });
+  return browser;
+}
+
+/** ปิด Chrome ที่ใช้ร่วมกัน (สำหรับ graceful shutdown / เทสต์) */
+export async function closePdfBrowser(): Promise<void> {
+  const current = browserPromise;
+  browserPromise = null;
+  if (!current) return;
+  try {
+    const browser = await current;
+    await browser.close();
+  } catch (err) {
+    console.error("[pdfGenerator] ปิด browser ไม่สำเร็จ:", err);
+  }
+}
 
 // แยก sales_description เป็นบรรทัดตาม \n เดิมในข้อมูล (trim + ตัดบรรทัดว่างทิ้ง)
 function splitSalesDescriptionLines(desc: string): string[] {
@@ -950,17 +995,17 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
 
   const finalHtml = htmlContent;
 
-  const browser = await puppeteer.launch({
-    headless: "new" as any,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
+  const browser = await getBrowser();
   const page = await browser.newPage();
-  await page.setContent(finalHtml, { waitUntil: "networkidle0" as any });
-  const pdfBuffer = await page.pdf({
-    format: "A4",
-    printBackground: true,
-    margin: { top: "0", bottom: "0", left: "0", right: "0" },
-  });
-  await browser.close();
-  return pdfBuffer;
+  try {
+    await page.setContent(finalHtml, { waitUntil: "networkidle0" as any });
+    return await page.pdf({
+      format: "A4",
+      printBackground: true,
+      margin: { top: "0", bottom: "0", left: "0", right: "0" },
+    });
+  } finally {
+    // ปิด page เสมอแม้เกิด error ระหว่าง setContent/pdf — ไม่ปิด browser เพราะใช้ร่วมกัน
+    await page.close().catch((err) => console.error("[pdfGenerator] ปิด page ไม่สำเร็จ:", err));
+  }
 }

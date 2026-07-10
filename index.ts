@@ -9,7 +9,7 @@ import { db, lineConfig, lineClient } from './config/clients.js';
 import { getBranches } from './config/dbClient.js';
 import { getQuotationNo, cancelOldRevision, enrichQuotationData } from './services/quotationService.js';
 import { handleEvent } from './handlers/lineHandler.js';
-import { generateQuotationPDF } from './pdfGenerator.js';
+import { generateQuotationPDF, closePdfBrowser } from './pdfGenerator.js';
 import { Parser } from 'json2csv';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
@@ -18,6 +18,9 @@ import { getJwtSecret } from './config/jwt.js';
 import { adminAuthMiddleware } from './config/auth.js';
 import { validateProductPriceWithPromotions } from './utils/promotionValidator.js';
 import { computeAdminKey, cleanAdminName } from './services/adminService.js';
+
+// ตรวจ JWT_SECRET ตั้งแต่ boot — ถ้าขาด ให้ล้มทันทีแทนที่จะไปพังตอนแอดมิน login ครั้งแรก
+getJwtSecret();
 
 const app = express();
 
@@ -1497,8 +1500,10 @@ app.get('/download-pdf/:quoteId', async (req: any, res: any) => {
     // Enrich ก่อนเพื่อให้ items มีข้อมูลสำหรับ resolveQuoteCompany ใน getQuotationNo และ pdfGenerator
     const enrichedQuote = await enrichQuotationData(quoteDb);
 
-    // ดึงหรือเจนเลขที่ใบเสนอราคา (ต้อง enrich ก่อนเพราะ getQuotationNo ใช้ enrichedQuote.items)
-    const quoteNo = enrichedQuote.quotation_no || await getQuotationNo(enrichedQuote);
+    // ใบที่ยังไม่ยืนยันจะยังไม่มีเลขที่ — แสดง DRAFT แทนการเจนเลขชั่วคราวที่ไม่ถูกบันทึก
+    // (ถ้าเจนที่นี่ โหลดซ้ำจะได้คนละเลข และอาจชนกับเลขของใบที่ยืนยันจริงทีหลัง)
+    // เลขจริงออกที่จุด confirm เท่านั้น
+    const quoteNo = enrichedQuote.quotation_no || 'DRAFT';
 
     // ดึงข้อมูลพนักงานขาย (Salesperson) เพื่อนำชื่อและเบอร์โทรไปใส่ใน PDF
     let salespersonName = '';
@@ -2824,6 +2829,15 @@ app.delete('/api/admin/moq-rules/:internal_reference', adminAuthMiddleware, asyn
 });
 
 const port = process.env.PORT || 3011;
-app.listen(port, () => {
+const server = app.listen(port, () => {
   console.log(`listening on ${port}`);
 });
+
+// ปิด Chrome ที่ pdfGenerator ใช้ร่วมกัน ไม่งั้นจะค้างเป็น process กำพร้าทุกครั้งที่ restart
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.once(signal, () => {
+    console.log(`\n[shutdown] ได้รับ ${signal} — กำลังปิดอย่างสุภาพ`);
+    server.close();
+    closePdfBrowser().finally(() => process.exit(0));
+  });
+}

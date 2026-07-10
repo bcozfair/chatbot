@@ -11,13 +11,8 @@ export function getJwtSecret(): string {
 
   const secret = process.env.JWT_SECRET;
 
+  // ไม่มี fallback secret ในทุก NODE_ENV — secret ที่เขียนไว้ในโค้ดแปลว่าใครก็ปลอม token แอดมินได้
   if (!secret) {
-    const isDev = process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test';
-    if (isDev) {
-      console.warn('[JWT] WARNING: JWT_SECRET not set. Using insecure fallback for development.');
-      _jwtSecret = 'dev-only-insecure-change-me';
-      return _jwtSecret;
-    }
     throw new Error('[JWT] FATAL: JWT_SECRET environment variable is not set. Server cannot start.');
   }
 
