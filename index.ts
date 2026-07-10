@@ -9,6 +9,7 @@ import { lineConfig, lineClient } from './config/clients.js';
 import {
   searchCustomersAdmin,
   getContactsByCustomerId,
+  getContactById,
   getCompanyAddressRows,
   deletePendingQuotations,
   getCustomerBranchesBySalesperson,
@@ -921,16 +922,23 @@ app.put('/api/quotation/:id', express.json(), async (req: any, res: any) => {
               return filtered.join(' ');
             };
 
-            const stateCleaned = cleanState(custData.invoice_state);
-            const districtCleaned = cleanAddressField(custData.invoice_district, custData.invoice_state, custData.invoice_zip);
-            const subDistrictCleaned = cleanAddressField(custData.invoice_sub_district, custData.invoice_state, custData.invoice_zip);
+            // ที่อยู่ใช้ contacts_view เป็นหลัก เพราะ view เติมอำเภอ/ตำบลที่ขาดจาก sale_orders ล่าสุดให้
+            let addrSrc: any = custData;
+            if (custData.contact_id) {
+              const viewContact = await getContactById(custData.contact_id);
+              if (viewContact) addrSrc = viewContact;
+            }
+
+            const stateCleaned = cleanState(addrSrc.invoice_state);
+            const districtCleaned = cleanAddressField(addrSrc.invoice_district, addrSrc.invoice_state, addrSrc.invoice_zip);
+            const subDistrictCleaned = cleanAddressField(addrSrc.invoice_sub_district, addrSrc.invoice_state, addrSrc.invoice_zip);
 
             const addr = [
-              custData.invoice_street,
+              addrSrc.invoice_street,
               districtCleaned,
               subDistrictCleaned,
               stateCleaned,
-              custData.invoice_zip
+              addrSrc.invoice_zip
             ].map(s => String(s || '').trim()).filter(Boolean).join(' ');
 
             contactAddress = addr || '';
