@@ -79,7 +79,9 @@ function buildDotInitialVariants(rawText: string): string[] {
   // ❌ เดิม: /(?:[\u0E00-\u0E7Fa-zA-Z]\.){2,}/ ← ต้องติดกัน (ไม่ work กับ Thai syllable เช่น เอ.เค.)
   // ✅ ใหม่: นับ occurrences ทั้งหมด ≥ 2
   const dotMatches = rawText.match(/[\u0E00-\u0E7Fa-zA-Z]\./g);
-  if (!dotMatches || dotMatches.length < 2) return [];
+  // ≥ 1 → รองรับทั้ง single-initial ("ก.แสงทอง") และ multi-initial ("เอ.เค.")
+  // เดิมใช้ ≥ 2 ทำให้ single-initial ถูกค้นด้วย space ("ก แสงทอง") แล้วไม่เจอ record ที่เก็บเป็น dot
+  if (!dotMatches || dotMatches.length < 1) return [];
 
   // ลบคำนำหน้า/ท้าย แต่คงจุดระหว่าง initials ไว้
   const stripped = rawText
