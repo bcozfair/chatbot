@@ -1,5 +1,5 @@
 import { db } from '../config/clients.js';
-import { pool } from '../config/db.js';
+import { pool, type DbExecutor } from '../config/db.js';
 import { 
   findCustomerCandidates, 
   findContactCandidates, 
@@ -33,10 +33,10 @@ const cleanAddressField = (fieldVal: any, rawState: any, zip: any) => {
   return filtered.join(' ');
 };
 
-export async function getNextRevisionNo(baseQuoteNo: string): Promise<string> {
+export async function getNextRevisionNo(baseQuoteNo: string, executor: DbExecutor = pool): Promise<string> {
   let data: any[] = [];
   try {
-    const res = await pool.query(
+    const res = await executor.query(
       "SELECT quotation_no FROM quotations WHERE quotation_no IS NOT NULL AND quotation_no ILIKE $1",
       [`${baseQuoteNo}-%`]
     );
@@ -64,7 +64,7 @@ export async function getNextRevisionNo(baseQuoteNo: string): Promise<string> {
   return `${baseQuoteNo}-${nextRevStr}`;
 }
 
-export async function getQuotationNo(quoteData: any): Promise<string> {
+export async function getQuotationNo(quoteData: any, executor: DbExecutor = pool): Promise<string> {
   if (!quoteData || !quoteData.created_at) {
     return "QP-XXXX05000";
   }
@@ -77,7 +77,9 @@ export async function getQuotationNo(quoteData: any): Promise<string> {
       try {
         const meta = Object.fromEntries(new URLSearchParams(parts[2]));
         reviseFrom = meta.revise_from || null;
-      } catch (err) {}
+      } catch (err) {
+        console.warn(`[getQuotationNo] parse metadata ไม่สำเร็จ (quote id=${quoteData.id}) meta="${parts[2]}"`, err);
+      }
     }
   }
   
@@ -87,13 +89,13 @@ export async function getQuotationNo(quoteData: any): Promise<string> {
     if (match) {
       baseQuoteNo = match[1];
     }
-    return await getNextRevisionNo(baseQuoteNo);
+    return await getNextRevisionNo(baseQuoteNo, executor);
   }
-  
+
   let isThemtech = false;
   if (quoteData.items && quoteData.items.length > 0) {
     const firstItem = quoteData.items[0];
-    const company = await resolveQuoteCompany(firstItem);
+    const company = await resolveQuoteCompany(firstItem, executor);
     isThemtech = (company === 'THT');
   }
   const prefix = isThemtech ? 'QT' : 'QP';
@@ -107,10 +109,10 @@ export async function getQuotationNo(quoteData: any): Promise<string> {
   // ดึงรายการในเดือนนี้ที่มีรหัส quotation_no แล้วของแบรนด์นี้เท่านั้น
   let monthQuotes: any[] = [];
   try {
-    const res = await pool.query(
-      `SELECT id, quotation_no FROM quotations 
-       WHERE status <> 'draft' AND quotation_no IS NOT NULL AND quotation_no ILIKE $1 
-         AND created_at >= $2 AND created_at < $3 
+    const res = await executor.query(
+      `SELECT id, quotation_no FROM quotations
+       WHERE status <> 'draft' AND quotation_no IS NOT NULL AND quotation_no ILIKE $1
+         AND created_at >= $2 AND created_at < $3
        ORDER BY created_at ASC, id ASC`,
       [`${prefix}-%`, startOfMonth, endOfMonth]
     );
@@ -127,10 +129,10 @@ export async function getQuotationNo(quoteData: any): Promise<string> {
   return `${prefix}-${datePart}05${sequenceStr}`;
 }
 
-export async function resolveQuoteCompany(item: any): Promise<'PM' | 'THT'> {
+export async function resolveQuoteCompany(item: any, executor: DbExecutor = pool): Promise<'PM' | 'THT'> {
   let companyRules: any[] = [];
   try {
-    const rulesRes = await pool.query('SELECT * FROM quotation_rules WHERE quote_company IS NOT NULL');
+    const rulesRes = await executor.query('SELECT * FROM quotation_rules WHERE quote_company IS NOT NULL');
     companyRules = rulesRes.rows || [];
   } catch (err) {
     console.error('Error fetching quotation rules for company resolution:', err);
@@ -138,7 +140,7 @@ export async function resolveQuoteCompany(item: any): Promise<'PM' | 'THT'> {
 
   const code = item.product_code || item.model || item.code;
   if (code && companyRules.length > 0) {
-    const prod = await getProductInfo(code);
+    const prod = await getProductInfo(code, executor);
     if (prod) {
       const rule = matchRuleWithProduct(prod, companyRules);
       if (rule) {
@@ -235,7 +237,9 @@ export async function insertDraftQuotations(
       try {
         customMeta = Object.fromEntries(new URLSearchParams(customMetaStr));
         reviseFrom = customMeta.revise_from || null;
-      } catch (err) {}
+      } catch (err) {
+        console.warn(`[insertDraftQuotations] parse metadata ไม่สำเร็จ (userId=${userId}) meta="${customMetaStr}"`, err);
+      }
     }
   }
 
@@ -379,7 +383,9 @@ export async function insertDraftQuotations(
           [code]
         );
         dbProduct = prodRes.rows[0];
-      } catch (err) {}
+      } catch (err) {
+        console.warn(`[quotationService] ดึงข้อมูลสินค้าไม่สำเร็จ (model="${code}") — ใช้ค่าจาก item แทน`, err);
+      }
 
       const finalInternalRef = dbProduct?.internal_reference || code;
       const finalProductId = dbProduct?.product_id || item.product_id || null;
@@ -513,9 +519,9 @@ export async function insertDraftQuotations(
 /**
  * ค้นหาข้อมูลสินค้าจากรหัสสินค้า (Product Code)
  */
-export async function getProductInfo(code: string): Promise<any> {
+export async function getProductInfo(code: string, executor: DbExecutor = pool): Promise<any> {
   try {
-    const { rows } = await pool.query(`
+    const { rows } = await executor.query(`
       SELECT 
         model AS code, 
         name, 
@@ -1007,7 +1013,9 @@ export async function updateQuotationCustomerSnapshot(
       customerDetails.address = params.get('address') || '-';
       customerDetails.customer_tax_id = params.get('tax_id') || '';
       customerDetails.revise_from = params.get('revise_from') as any || null;
-    } catch (e) {}
+    } catch (e) {
+      console.warn(`[updateQuotationCustomerSnapshot] parse metadata ไม่สำเร็จ meta="${metaStr}"`, e);
+    }
   }
 
   try {
@@ -1105,28 +1113,37 @@ export async function updateQuotationCustomerSnapshot(
   return await Promise.all(enrichPromises);
 }
 
-export async function cancelOldRevision(customerName: string): Promise<void> {
+export async function cancelOldRevision(customerName: string, executor: DbExecutor = pool): Promise<void> {
+  // เมื่อถูกเรียกภายใน transaction (executor เป็น client) ต้องโยน error ออกไปให้ caller rollback
+  // ไม่งั้น transaction จะ commit ทั้งที่ยกเลิกใบเก่าไม่สำเร็จ
+  const inTransaction = executor !== pool;
+
   if (!customerName || !customerName.includes(' | ')) return;
   const parts = customerName.split(' | ');
-  if (parts[2]) {
-    try {
-      const meta = Object.fromEntries(new URLSearchParams(parts[2]));
-      const reviseFrom = meta.revise_from || null;
-      if (reviseFrom) {
-        console.log(`[cancelOldRevision] Attempting to cancel old quotation with quotation_no: ${reviseFrom}`);
-        try {
-          await pool.query(
-            "UPDATE quotations SET status = 'cancelled' WHERE quotation_no = $1",
-            [reviseFrom]
-          );
-          console.log(`[cancelOldRevision] Successfully cancelled old quotation: ${reviseFrom}`);
-        } catch (err) {
-          console.error(`[cancelOldRevision] Error cancelling old quotation ${reviseFrom}:`, err);
-        }
-      }
-    } catch (err) {
-      console.error("[cancelOldRevision] Error parsing customer metadata for cancellation:", err);
-    }
+  if (!parts[2]) return;
+
+  let reviseFrom: string | null = null;
+  try {
+    const meta = Object.fromEntries(new URLSearchParams(parts[2]));
+    reviseFrom = meta.revise_from || null;
+  } catch (err) {
+    console.error("[cancelOldRevision] Error parsing customer metadata for cancellation:", err);
+    if (inTransaction) throw err;
+    return;
+  }
+
+  if (!reviseFrom) return;
+
+  console.log(`[cancelOldRevision] Attempting to cancel old quotation with quotation_no: ${reviseFrom}`);
+  try {
+    await executor.query(
+      "UPDATE quotations SET status = 'cancelled' WHERE quotation_no = $1",
+      [reviseFrom]
+    );
+    console.log(`[cancelOldRevision] Successfully cancelled old quotation: ${reviseFrom}`);
+  } catch (err) {
+    console.error(`[cancelOldRevision] Error cancelling old quotation ${reviseFrom}:`, err);
+    if (inTransaction) throw err;
   }
 }
 

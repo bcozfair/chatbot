@@ -8,3 +8,6 @@ node_modules
 # Logs / OS
 *.log
 .DS_Store
+
+# Local dev tooling binaries
+ngrok.exe

@@ -735,7 +735,9 @@ app.put('/api/quotation/:id', express.json(), async (req: any, res: any) => {
           [code]
         );
         dbProduct = prodRes.rows[0];
-      } catch (err) {}
+      } catch (err) {
+        console.warn(`[PUT /api/quotation/:id] ดึงข้อมูลสินค้าไม่สำเร็จ (model="${code}") — ใช้ค่าจาก item แทน`, err);
+      }
 
       const finalInternalRef = dbProduct?.internal_reference || code;
       const finalProductId = dbProduct?.product_id || item.product_id || null;
@@ -820,7 +822,9 @@ app.put('/api/quotation/:id', express.json(), async (req: any, res: any) => {
           try {
             customMeta = Object.fromEntries(new URLSearchParams(customMetaStr));
             reviseFrom = customMeta.revise_from || null;
-          } catch (err) {}
+          } catch (err) {
+            console.warn(`[PUT /api/quotation/:id] parse metadata ไม่สำเร็จ meta="${customMetaStr}"`, err);
+          }
         }
       }
 
