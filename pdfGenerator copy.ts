@@ -5,6 +5,7 @@ import fs from "fs";
 import path from "path";
 import { pool } from "./config/db.js";
 import { resolveQuoteCompany } from "./services/quotationService.js";
+import { computeAdminKey, cleanAdminName } from "./services/adminService.js";
 
 // ใช้ Chrome ตัวเดียวร่วมกันทุก request แทนการ launch ใหม่ทุกครั้ง
 // เดิม: launch ต่อ request และ browser.close() ไม่อยู่ใน finally -> error หนึ่งครั้ง = Chrome ค้าง 1 ตัว สะสมจน RAM หมด
@@ -283,6 +284,26 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
     }
   }
 
+  // ดึงไฟล์ภาพลายเซ็นผู้อนุมัติ (แอดมิน) ตาม key ที่คำนวณจากชื่อแอดมิน (ถ้ามี)
+  // แอดมินคนเดียวกัน → key เดียวกัน → ใช้ไฟล์ลายเซ็นไฟล์เดียวร่วมกัน
+  let adminSigBase64: string | null = null;
+  const adminKey = computeAdminKey(quoteData.employee_quotations);
+  if (adminKey) {
+    const extensions = ['.png', '.jpg', '.jpeg', '.gif'];
+    for (const ext of extensions) {
+      const sigPath = path.join(process.cwd(), "data", "admin_sigs", `${adminKey}${ext}`);
+      if (fs.existsSync(sigPath)) {
+        try {
+          const mimeType = ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : `image/${ext.substring(1)}`;
+          const imgBase64 = fs.readFileSync(sigPath).toString("base64");
+          adminSigBase64 = `data:${mimeType};base64,${imgBase64}`;
+          break; // ค้นพบแล้วให้หยุดลูป
+        } catch (err) {
+          console.error(`Error reading admin signature image ${sigPath}:`, err);
+        }
+      }
+    }
+  }
 
   const logoFile = isThemtech ? "logo2.png" : "logo.png";
   const logoBase64 = fs.readFileSync(path.join(process.cwd(), "data", logoFile)).toString("base64");
@@ -638,10 +659,10 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
           </div>
 
           <div class="sig">
-            <div class="sig-space"></div>
+            <div class="sig-space">${adminSigBase64 ? `<img src="${adminSigBase64}" alt="ลายเซ็นผู้อนุมัติ" style="max-height: 50px; max-width: 180px; object-fit: contain; display: block; margin: 0 auto;" />` : ''}</div>
             <div class="sig-line"></div>
-            <div class="sig-name">( ${salespersonNameFormatted === '' ? 'ชื่อพนักงานขาย' : salespersonNameFormatted} )</div>
-            <div style="color: #111; font-size: 11px;">${quoteData.salesperson_phone && quoteData.salesperson_phone !== '' ? `( ${quoteData.salesperson_phone} )` : '( เบอร์โทร )'}</div>
+            <div class="sig-name">( ${quoteData.employee_quotations && quoteData.employee_quotations !== '' ? cleanAdminName(quoteData.employee_quotations) : 'ชื่อแอดมิน'} )</div>
+            <div style="color: #111; font-size: 11px;">${quoteData.employee_quotations_phone && quoteData.employee_quotations_phone !== '' ? `( ${quoteData.employee_quotations_phone} )` : '( เบอร์โทร )'}</div>
             <div style="color: #111; font-size: 11px;">( ผู้เสนอราคา )</div>
             <div class="sig-date">วันที่......./......./.......</div>
           </div>
