@@ -1,0 +1,25 @@
+# deps — ติดตั้งใหม่ใน image
+node_modules
+frontend/node_modules
+
+# build outputs — สร้างใหม่ตอน build image
+public
+dist
+frontend/dist
+
+# secrets / local
+.env
+.env.*
+*.log
+
+# git / tooling
+.git
+.gitignore
+ngrok.exe
+
+# db dumps (มี PII — ไม่ต้องเข้า image)
+backup
+*.dump
+
+# plan / docs ที่ไม่ต้องใน image
+DEPLOY.md

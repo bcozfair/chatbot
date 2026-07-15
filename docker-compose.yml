@@ -1,0 +1,44 @@
+# ชื่อ project → ตั้ง prefix ให้ container/volume/network ไม่ชนโปรเจคอื่นบน server รวม
+name: primus-chatbot
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${PG_DATABASE}
+      POSTGRES_USER: ${PG_USER}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER} -d ${PG_DATABASE}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # ไม่ publish port 5432 ออก host → app คุยกับ db ผ่าน network ภายในชื่อ "db" เท่านั้น (ปลอดภัย + ไม่ชนโปรเจคอื่น)
+
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PG_HOST: db          # ชี้ไปที่ service db (override ค่าใน .env)
+      PG_PORT: "5432"
+      PORT: "3011"
+      NODE_ENV: production
+    depends_on:
+      db:
+        condition: service_healthy
+    # ผูกที่ 127.0.0.1 → เข้าถึงได้เฉพาะ reverse proxy กลางที่รันบน host
+    # APP_PORT = พอร์ต host ที่ IT จะ route subdomain มา (ตั้งใน .env; default 3011)
+    ports:
+      - "127.0.0.1:${APP_PORT:-3011}:3011"
+    volumes:
+      - sig_sale:/app/data/sale_sigs     # รูปลายเซ็นที่อัปโหลด (คงอยู่ข้าม rebuild)
+      - sig_admin:/app/data/admin_sigs
+
+volumes:
+  pgdata:
+  sig_sale:
+  sig_admin:
