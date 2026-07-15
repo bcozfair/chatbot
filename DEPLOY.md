@@ -29,9 +29,9 @@ git push origin main
 ### 1.2 dump database ออกจาก PostgreSQL ในเครื่อง
 ```powershell
 $env:PGPASSWORD = "database"
-& "C:\Program Files\PostgreSQL\16\bin\pg_dump.exe" -h localhost -p 5432 -U postgres -d chatbot_primus -Fc -f "$HOME\chatbot_primus.dump"
+& "C:\Program Files\PostgreSQL\18\bin\pg_dump.exe" -h localhost -p 5432 -U postgres -d chatbot_primus -Fc -f "$HOME\chatbot_primus.dump"
 ```
-> ถ้า PostgreSQL ไม่ใช่เวอร์ชัน 16 ให้เปลี่ยนเลขใน path (เช่น `15\bin`) — เช็คด้วย `psql --version`
+> เครื่อง dev นี้ใช้ PostgreSQL **18** → docker-compose ตั้ง `postgres:18` ให้ตรงกันแล้ว (major version ต้องตรง ไม่งั้น restore ไม่ได้)
 
 ### 1.3 ส่งไฟล์ dump ไป server
 ```powershell
