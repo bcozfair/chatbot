@@ -46,9 +46,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # ติดตั้ง dependency ทั้งหมด (รวม tsx + typescript ที่ใช้รัน production)
+# --include=dev บังคับลง devDependencies ด้วย เพราะ NODE_ENV=production จะข้าม devDeps ไม่งั้น tsx จะหาย
 # PUPPETEER_SKIP_DOWNLOAD=true ทำให้ puppeteer ไม่โหลด Chromium ของตัวเอง (ใช้ตัวจาก apt แทน)
 COPY package*.json ./
-RUN npm install
+RUN npm install --include=dev
 
 # โค้ดแอปทั้งหมด (public/ ในเครื่องถูกกันด้วย .dockerignore แล้วเอา build ใหม่มาทับ)
 COPY . .

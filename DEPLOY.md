@@ -136,7 +136,8 @@ docker compose up -d              # เปิดใหม่
 ---
 
 ## แก้ปัญหาเบื้องต้น
-- **PDF ภาษาไทยเป็นกล่องสี่เหลี่ยม** → ฟอนต์ไม่ถูกติดตั้งใน image ลองสร้าง PDF ทดสอบ (`/download-pdf/...`); ถ้าเป็นกล่องแจ้งผม (ปกติ `fonts-thai-tlwg` ใน Dockerfile แก้เรื่องนี้แล้ว)
+- **PDF ภาษาไทย** → template ใช้ฟอนต์ **Sarabun จาก Google Fonts** (ต้องมีเน็ต ซึ่ง server ต่อได้อยู่แล้ว) ถ้าเน็ตบล็อก จะ fallback ไปฟอนต์ไทยที่ติดตั้งใน image (`fonts-thai-tlwg`) — ยังอ่านออกไม่เป็นกล่อง ทดสอบจริงได้หลัง restore DB โดยสร้าง PDF (`/download-pdf/...`)
+  - ทดสอบแล้วบนเครื่อง dev: Chromium 150 + ฟอนต์ไทย 13 ตระกูลติดตั้งครบในกล่อง ✓
 - **app ต่อ db ไม่ได้ / ECONNREFUSED** → เช็คว่า `.env` ตั้ง `PG_HOST=db` (ไม่ใช่ localhost) และ db ขึ้น `healthy` แล้ว (`docker compose ps`)
 - **พอร์ตชนโปรเจคอื่น** → เปลี่ยน `APP_PORT` ใน `.env` เป็นเลขอื่น แล้ว `docker compose up -d`
 - **restore แล้ว error เรื่อง role/owner** → มี `--no-owner` อยู่แล้ว ถ้ายัง error ส่ง log มาให้ดู
