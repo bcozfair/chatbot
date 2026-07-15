@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import { pathToFileURL } from 'url';
 import { pool } from '../../config/db.js';
 
 dotenv.config();
@@ -318,7 +319,7 @@ function buildRecordsPath(cursorToken: string | null) {
 // ============================================================
 // Main Sync Function
 // ============================================================
-async function syncSaleOrders() {
+export async function syncSaleOrders() {
   let dbClient: any;
   const startTime = Date.now();
   const syncedOrderIds = new Set();
@@ -473,7 +474,10 @@ async function syncSaleOrders() {
   }
 }
 
-syncSaleOrders().catch((error) => {
-  console.error('[sale-order-sync] failed', error);
-  process.exit(1);
-});
+// รันเป็น CLI เฉพาะเมื่อถูกเรียกตรง ๆ (npm run sync:saleorders) — ไม่รันเมื่อถูก import จาก backend
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  syncSaleOrders().catch((error) => {
+    console.error('[sale-order-sync] failed', error);
+    process.exit(1);
+  });
+}

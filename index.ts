@@ -32,6 +32,15 @@ import { getJwtSecret } from './config/jwt.js';
 import { adminAuthMiddleware } from './config/auth.js';
 import { validateProductPriceWithPromotions } from './utils/promotionValidator.js';
 import { computeAdminKey, cleanAdminName } from './services/adminService.js';
+import {
+  startSync,
+  isRunning,
+  getStatus as getSyncStatus,
+  saveSettings as saveSyncSettings,
+  isValidResource,
+  RESOURCE_IDS,
+  initScheduler,
+} from './services/syncService.js';
 
 // ตรวจ JWT_SECRET ตั้งแต่ boot — ถ้าขาด ให้ล้มทันทีแทนที่จะไปพังตอนแอดมิน login ครั้งแรก
 getJwtSecret();
@@ -1731,6 +1740,61 @@ app.get('/api/admin/stats', adminAuthMiddleware, async (req: any, res: any) => {
   }
 });
 
+// --- API Endpoint: Sync status (run-state + per-resource last-synced + schedule config) ---
+app.get('/api/admin/sync/status', adminAuthMiddleware, async (req: any, res: any) => {
+  try {
+    const status = await getSyncStatus();
+    res.json(status);
+  } catch (err: any) {
+    console.error('GET /api/admin/sync/status error:', err);
+    res.status(500).json({ error: 'ไม่สามารถดึงสถานะการ sync ได้' });
+  }
+});
+
+// --- API Endpoint: Trigger a sync now (manual) ---
+app.post('/api/admin/sync/run', adminAuthMiddleware, express.json(), async (req: any, res: any) => {
+  try {
+    const raw = req.body?.resources;
+    // รับ ['products',...] หรือ 'all' (แปลว่าทั้งหมด)
+    const resources: string[] =
+      raw === 'all' || raw === undefined
+        ? [...RESOURCE_IDS]
+        : Array.isArray(raw)
+        ? raw.filter(isValidResource)
+        : [];
+
+    if (resources.length === 0) {
+      return res.status(400).json({ error: 'ไม่พบรายการข้อมูลที่จะ sync ที่ถูกต้อง' });
+    }
+
+    if (isRunning()) {
+      return res.status(409).json({ error: 'มีการ sync กำลังทำงานอยู่ กรุณารอให้เสร็จก่อน' });
+    }
+
+    const started = startSync(resources as any, 'manual');
+    if (!started) {
+      return res.status(409).json({ error: 'ไม่สามารถเริ่ม sync ได้ (อาจกำลังทำงานอยู่)' });
+    }
+
+    const status = await getSyncStatus();
+    res.status(202).json({ message: 'เริ่ม sync แล้ว', ...status });
+  } catch (err: any) {
+    console.error('POST /api/admin/sync/run error:', err);
+    res.status(500).json({ error: 'ไม่สามารถเริ่ม sync ได้' });
+  }
+});
+
+// --- API Endpoint: Save auto-sync schedule settings ---
+app.put('/api/admin/sync/settings', adminAuthMiddleware, express.json(), async (req: any, res: any) => {
+  try {
+    const settings = await saveSyncSettings(req.body || {});
+    res.json({ message: 'บันทึกการตั้งค่าสำเร็จ', settings });
+  } catch (err: any) {
+    console.error('PUT /api/admin/sync/settings error:', err);
+    res.status(500).json({ error: 'ไม่สามารถบันทึกการตั้งค่าได้' });
+  }
+});
+
 // --- API Endpoint: Delete Signature ---
 app.delete('/api/admin/signatures/:type/:salespersonId', adminAuthMiddleware, async (req: any, res: any) => {
   const { type, salespersonId } = req.params;
@@ -2787,6 +2851,8 @@ app.delete('/api/admin/moq-rules/:internal_reference', adminAuthMiddleware, asyn
 const port = process.env.PORT || 3011;
 const server = app.listen(port, () => {
   console.log(`listening on ${port}`);
+  // เริ่มตัวตั้งเวลา auto-sync (อ่าน config จากตาราง sync_settings)
+  initScheduler().catch((err) => console.error('[scheduler] init ล้มเหลว:', err));
 });
 
 // ปิด Chrome ที่ pdfGenerator ใช้ร่วมกัน ไม่งั้นจะค้างเป็น process กำพร้าทุกครั้งที่ restart

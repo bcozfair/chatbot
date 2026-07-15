@@ -8,6 +8,7 @@ import { QuotationRules } from './QuotationRules';
 import { OptionalLinks } from './OptionalLinks';
 import { StockRules } from './StockRules';
 import { ProductMoqRules } from './ProductMoqRules';
+import { SyncPanel } from './SyncPanel';
 import {
   LogOut,
   User as UserIcon,
@@ -425,6 +426,10 @@ function AdminContent() {
               {subTab === 'moq' && <ProductMoqRules />}
             </div>
           )}
+
+          {/* Sync data panel */}
+          <SyncPanel />
+          
         </main>
       </div>
     </div>
