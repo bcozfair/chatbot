@@ -21,7 +21,9 @@ import {
   createEditMenuFlex,
   createSalespersonProfileFlex,
   createProfileConfirmationFlex,
-  createCartConfirmationFlex
+  createCartConfirmationFlex,
+  appendReviseFrom,
+  createRevisionFlex
 } from '../utils/flexTemplates.js';
 import { findProduct } from '../services/productService.js';
 import { 
@@ -30,15 +32,16 @@ import {
   formatLineLabel,
   splitCustomerContact
 } from '../services/customerService.js';
-import { 
-  getQuotationNo, 
-  processQuotationRequest, 
+import {
+  getQuotationNo,
+  processQuotationRequest,
   resolveContactFlow,
   cancelOldRevision,
   updateQuotationCustomerSnapshot,
   insertDraftQuotations,
   enrichQuotationData
 } from '../services/quotationService.js';
+import { detectQuotationEditIntent, handleQuotationEditRequest } from '../services/quotationAgent.js';
 
 export async function handleImage(event: any): Promise<any> {
   try {
@@ -106,7 +109,7 @@ export async function handleEvent(event: any): Promise<any> {
             replyToken: event.replyToken,
             messages: [{ 
               type: 'text', 
-              text: 'กรุณาระบุเลขที่ใบเสนอราคาที่ต้องการแก้ไขครับ 📄 (ตัวอย่าง: QT-260605001 หรือ QP-260605001)' 
+              text: 'กรุณาระบุเลขที่ใบเสนอราคาที่ต้องการแก้ไขครับ เช่น QT/QP-260605xxx'
             }]
           });
         }
@@ -925,6 +928,60 @@ export async function handleEvent(event: any): Promise<any> {
         }
       }
 
+      // 🤖 Agent: แก้ไขใบเสนอราคาผ่านแชท (เช่น "แก้ไข QP-260705030 เพิ่มจำนวน RP-03W-C-1 อีก 2 ตัว")
+      // ต้องมีเลขที่ใบ + คำสั่งแก้ไข — AI จะสร้างฉบับแก้ไข (revision) เป็นร่างให้กดยืนยัน
+      if (salesperson.status === 'active') {
+        const editIntent = detectQuotationEditIntent(trimmedContent);
+        if (editIntent) {
+          try {
+            const res = await handleQuotationEditRequest({
+              userId,
+              quoteNo: editIntent.quoteNo,
+              instruction: editIntent.instruction,
+              salesperson
+            });
+            try {
+              await insertMessage({
+                user_id: userId,
+                message_id: messageId,
+                type: messageType,
+                content: content,
+                reply_token: replyToken,
+                reply_content: res.replyText
+              });
+            } catch (logErr) {
+              console.error('Error logging quotation-edit turn:', logErr);
+            }
+            return lineClient.replyMessage({
+              replyToken: replyToken,
+              messages: res.messages
+            });
+          } catch (err) {
+            console.error('Error handling quotation-edit request:', err);
+            return lineClient.replyMessage({
+              replyToken: replyToken,
+              messages: [{ type: 'text', text: '⚠️ ขออภัยครับ ระบบแก้ไขใบเสนอราคาขัดข้องชั่วคราว รบกวนลองใหม่อีกครั้งครับ' }]
+            });
+          }
+        }
+
+        // คำสั่งแนวแก้ไข แต่ไม่ได้ระบุเลขที่ใบ (เช่น "แก้ไขส่วนลดเป็น 30%")
+        // → ไม่ส่งให้ LLM เดา แต่ถามเลขที่ใบ + โชว์เมนูแก้ไข เพื่อให้เซลส์แก้ผ่านหน้า LIFF
+        else if (
+          /^(แก้ไข|แก้|เปลี่ยน|ปรับ)/.test(trimmedContent) &&
+          trimmedContent.replace(/\s/g, '').length > 6 &&
+          !['แก้ไขข้อมูล', 'เมนูแก้ไข'].includes(trimmedContent)
+        ) {
+          return lineClient.replyMessage({
+            replyToken: replyToken,
+            messages: [
+              { type: 'text', text: 'ต้องการแก้ไขใบเสนอราคาใบไหนครับ?\nรบกวนพิมพ์พร้อมเลขที่ใบ เช่น "แก้ไข QP-260705001"\nหรือกดปุ่มเพื่อเลือกเมนูด้านล่างครับ 👇' },
+              createEditMenuFlex() as any
+            ]
+          });
+        }
+      }
+
       const cleanText = content.trim().toLowerCase();
 
       if (['แก้ไข', '/edit', 'edit', 'แก้ไขข้อมูล', 'เมนูแก้ไข'].includes(cleanText)) {
@@ -970,7 +1027,7 @@ export async function handleEvent(event: any): Promise<any> {
 
       if (salesperson.status === 'edit_quote_number') {
         let val = content.trim().toUpperCase();
-        
+
         if (val === 'ยกเลิก' || val === 'CANCEL') {
           await updateSalespersonByUserId(userId, { status: 'active' });
           return lineClient.replyMessage({
@@ -978,87 +1035,108 @@ export async function handleEvent(event: any): Promise<any> {
             messages: [{ type: 'text', text: '❌ ยกเลิกการแก้ไขใบเสนอราคา' }]
           });
         }
-        
-        let baseQuoteNo = val;
-        const match = val.match(/^((?:QP|QT)-\d+)(-\d+)$/i);
-        if (match) {
-          baseQuoteNo = match[1];
-        }
 
-        let quotes: any[] = [];
-        try {
-          const res = await pool.query(
-            "SELECT * FROM quotations WHERE quotation_no = $1 OR quotation_no ILIKE $2",
-            [baseQuoteNo, `${baseQuoteNo}-%`]
-          );
-          const enrichPromises = res.rows.map(q => enrichQuotationData(q));
-          quotes = await Promise.all(enrichPromises);
-        } catch (quoteError) {
-          console.error("Fetch quote error:", quoteError);
-          return lineClient.replyMessage({
-            replyToken: replyToken,
-            messages: [{ type: 'text', text: '❌ เกิดข้อผิดพลาดในการค้นหาข้อมูลใบเสนอราคา' }]
-          });
-        }
-        
-        let quote: any = null;
-        if (quotes && quotes.length > 0) {
-          quotes.sort((a: any, b: any) => {
-            const getRev = (qNo: string) => {
-              const m = qNo.match(/^((?:QP|QT)-\d+)-(\d+)$/i);
-              return m ? parseInt(m[2]) : 0;
-            };
-            return getRev(b.quotation_no) - getRev(a.quotation_no);
-          });
-          quote = quotes[0];
-        }
-        
-        if (!quote) {
-          return lineClient.replyMessage({
-            replyToken: replyToken,
-            messages: [{ 
-              type: 'text', 
-              text: `❌ ไม่พบใบเสนอราคาเลขที่ "${val}" ในระบบ\nกรุณาตรวจสอบเลขที่และพิมพ์ส่งเข้ามาใหม่อีกครั้งครับ หรือพิมพ์ "ยกเลิก" เพื่อยกเลิก` 
-            }]
-          });
-        }
-        
-        const { appendReviseFrom, createRevisionFlex } = await import('../utils/flexTemplates.js');
-        const revisedCustomerName = appendReviseFrom(quote.customer_name, quote.quotation_no);
-        
-        try {
-          await pool.query(
-            "UPDATE quotations SET status = 'cancelled' WHERE user_id = $1 AND status = ANY($2)",
-            [userId, ['pending_company', 'pending_contact', 'draft']]
-          );
-        } catch (err) {
-          console.error("Error cancelling pending quotations:", err);
-        }
-          
-        let newQuote: any = null;
-        try {
-          const insertedQuotes = await insertDraftQuotations(userId, revisedCustomerName, quote.items, 'draft', quote.customer_id, quote.contact_id);
-          if (insertedQuotes && insertedQuotes.length > 0) {
-            newQuote = insertedQuotes[0];
+        // ดึงเฉพาะเลขที่ใบเสนอราคาออกจากข้อความ (เผื่อเซลส์พิมพ์เป็นประโยค เช่น "แก้ไข QP-260705001 ลด 30%")
+        const qnoMatch = val.match(/(QP|QT)-\d{6,}(?:-\d+)?/i);
+        if (!qnoMatch) {
+          // ไม่มีเลขที่ใบเลย → หลุดจากโหมดรอเลขที่ใบอัตโนมัติ แล้วตอบให้เหมาะกับสิ่งที่พิมพ์
+          await updateSalespersonByUserId(userId, { status: 'active' });
+          salesperson.status = 'active';
+
+          // ยังเป็นคำสั่งแนวแก้ไข → แนะนำวิธีที่ถูกต้องพร้อมเมนู
+          if (/^(แก้ไข|แก้|เปลี่ยน|ปรับ)/.test(trimmedContent)) {
+            return lineClient.replyMessage({
+              replyToken: replyToken,
+              messages: [
+                { type: 'text', text: 'หากต้องการแก้ไขใบเสนอราคา รบกวนพิมพ์พร้อมเลขที่ใบ เช่น "แก้ไข QP-260705001" หรือกดปุ่มด้านล่างครับ 👇' },
+                createEditMenuFlex() as any
+              ]
+            });
           }
-        } catch (insertError) {
-          console.error("Insert revised quote error:", insertError);
-        }
-          
-        if (!newQuote) {
+          // ไม่ใช่คำสั่งแก้ไข → ไม่ return ปล่อยให้ประมวลผลข้อความตามปกติด้านล่าง (LLM)
+        } else {
+          val = qnoMatch[0].toUpperCase();
+
+          let baseQuoteNo = val;
+          const match = val.match(/^((?:QP|QT)-\d+)(-\d+)$/i);
+          if (match) {
+            baseQuoteNo = match[1];
+          }
+
+          let quotes: any[] = [];
+          try {
+            const res = await pool.query(
+              "SELECT * FROM quotations WHERE quotation_no = $1 OR quotation_no ILIKE $2",
+              [baseQuoteNo, `${baseQuoteNo}-%`]
+            );
+            const enrichPromises = res.rows.map(q => enrichQuotationData(q));
+            quotes = await Promise.all(enrichPromises);
+          } catch (quoteError) {
+            console.error("Fetch quote error:", quoteError);
+            return lineClient.replyMessage({
+              replyToken: replyToken,
+              messages: [{ type: 'text', text: '❌ เกิดข้อผิดพลาดในการค้นหาข้อมูลใบเสนอราคา' }]
+            });
+          }
+
+          let quote: any = null;
+          if (quotes && quotes.length > 0) {
+            quotes.sort((a: any, b: any) => {
+              const getRev = (qNo: string) => {
+                const m = qNo.match(/^((?:QP|QT)-\d+)-(\d+)$/i);
+                return m ? parseInt(m[2]) : 0;
+              };
+              return getRev(b.quotation_no) - getRev(a.quotation_no);
+            });
+            quote = quotes[0];
+          }
+
+          if (!quote) {
+            return lineClient.replyMessage({
+              replyToken: replyToken,
+              messages: [{
+                type: 'text',
+                text: `❌ ไม่พบใบเสนอราคาเลขที่ "${val}" ในระบบ\nกรุณาตรวจสอบเลขที่และพิมพ์ส่งเข้ามาใหม่อีกครั้งครับ หรือพิมพ์ "ยกเลิก" เพื่อยกเลิก`
+              }]
+            });
+          }
+
+          const revisedCustomerName = appendReviseFrom(quote.customer_name, quote.quotation_no);
+
+          try {
+            await pool.query(
+              "UPDATE quotations SET status = 'cancelled' WHERE user_id = $1 AND status = ANY($2)",
+              [userId, ['pending_company', 'pending_contact', 'draft']]
+            );
+          } catch (err) {
+            console.error("Error cancelling pending quotations:", err);
+          }
+
+          let newQuote: any = null;
+          try {
+            const insertedQuotes = await insertDraftQuotations(userId, revisedCustomerName, quote.items, 'draft', quote.customer_id, quote.contact_id);
+            if (insertedQuotes && insertedQuotes.length > 0) {
+              newQuote = insertedQuotes[0];
+            }
+          } catch (insertError) {
+            console.error("Insert revised quote error:", insertError);
+          }
+
+          if (!newQuote) {
+            return lineClient.replyMessage({
+              replyToken: replyToken,
+              messages: [{ type: 'text', text: '❌ ไม่สามารถคัดลอกข้อมูลใบเสนอราคาเพื่อแก้ไขได้' }]
+            });
+          }
+
+          await updateSalespersonByUserId(userId, { status: 'active' });
+
+          const flexMsg = createRevisionFlex(quote.quotation_no, newQuote.id);
           return lineClient.replyMessage({
             replyToken: replyToken,
-            messages: [{ type: 'text', text: '❌ ไม่สามารถคัดลอกข้อมูลใบเสนอราคาเพื่อแก้ไขได้' }]
+            messages: [flexMsg as any]
           });
         }
-        
-        await updateSalespersonByUserId(userId, { status: 'active' });
-        
-        const flexMsg = createRevisionFlex(quote.quotation_no, newQuote.id);
-        return lineClient.replyMessage({
-          replyToken: replyToken,
-          messages: [flexMsg as any]
-        });
       }
     } else {
       content = `[Received ${messageType} message]`;
