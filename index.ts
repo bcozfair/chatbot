@@ -17,7 +17,6 @@ import {
   getSalespersonByUserId,
   insertSalesperson,
   updateSalespersonByUserId,
-  getLatestEmployeeQuotations,
   getBranchesByCodes,
   getBranches,
 } from './db/repositories.js';
@@ -31,7 +30,6 @@ import { pool } from './config/db.js';
 import { getJwtSecret } from './config/jwt.js';
 import { adminAuthMiddleware } from './config/auth.js';
 import { validateProductPriceWithPromotions } from './utils/promotionValidator.js';
-import { computeAdminKey, cleanAdminName } from './services/adminService.js';
 import {
   startSync,
   isRunning,
@@ -1266,79 +1264,12 @@ app.get('/api/branches', async (req: any, res: any) => {
   }
 });
 
-// --- API Endpoint ดึงรายชื่อแอดมิน (ผู้ดูแล) แบบไม่ซ้ำ จาก sale_orders ---
-// ใช้ทำ dropdown ให้เซลส์เลือกแอดมินที่ดูแลตัวเองในหน้า register.html
-app.get('/api/admins', async (req: any, res: any) => {
-  try {
-    const result = await pool.query(
-      `SELECT employee_quotations AS name,
-              MAX(employee_quotations_phone) AS phone
-       FROM sale_orders
-       WHERE employee_quotations IS NOT NULL AND TRIM(employee_quotations) <> ''
-       GROUP BY employee_quotations
-       ORDER BY employee_quotations ASC`
-    );
-
-    const adminSigsDir = path.join(process.cwd(), 'data', 'admin_sigs');
-    const extensions = ['.png', '.jpg', '.jpeg'];
-
-    // Dedup ตาม key ที่คำนวณจากชื่อ (ตัดวงเล็บ/ช่องว่าง/case) — variant (PM)/(THT) = แอดมินคนเดียวกัน
-    // และแสดงชื่อแบบสะอาด (cleanAdminName) เพื่อให้ตรงกับ identity ของลายเซ็น 1:1
-    const adminsByKey = new Map<string, any>();
-    for (const row of result.rows) {
-      const raw = String(row.name || '').trim();
-      const key = computeAdminKey(raw);
-      if (!key) continue;
-      const phone = row.phone ? String(row.phone).trim() : '';
-      const existing = adminsByKey.get(key);
-      if (!existing) {
-        const has_sig = extensions.some(ext => fs.existsSync(path.join(adminSigsDir, `${key}${ext}`)));
-        adminsByKey.set(key, { name: cleanAdminName(raw), phone, key, has_sig });
-      } else if (!existing.phone && phone) {
-        // เติมเบอร์ถ้าตัวแรกไม่มี
-        existing.phone = phone;
-      }
-    }
-
-    const admins = Array.from(adminsByKey.values())
-      .sort((a, b) => a.name.localeCompare(b.name, 'th'));
-
-    res.json(admins);
-  } catch (err: any) {
-    console.error("API GET admins error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-
 // --- API Endpoint ดึงประวัติสาขาและข้อมูลพนักงาน ---
 app.get('/api/salesperson/:userId', async (req: any, res: any) => {
   try {
     const userId = req.params.userId;
     const data = await getSalespersonByUserId(userId);
     const result = data || {};
-
-    // ค่าตั้งต้นแอดมิน (เหมือนช่องสาขา): ถ้ายังไม่เคยเลือก/บันทึกไว้
-    // ให้ดึงจากประวัติ sale_orders ล่าสุดมาแสดงเป็นค่าแนะนำ (ยังไม่ persist จนกดบันทึก)
-    const hasAdmin = result.employee_quotations && String(result.employee_quotations).trim();
-    if (!hasAdmin && result.salesperson_id) {
-      const empCodeInt = parseInt(String(result.salesperson_id), 10);
-      if (!isNaN(empCodeInt)) {
-        try {
-          const orderData = await getLatestEmployeeQuotations(empCodeInt);
-          if (orderData && orderData.employee_quotations && orderData.employee_quotations.trim()) {
-            // clean ชื่อ (ตัด (PM)/(THT)) ให้ prefill ตรงกับรายการใน dropdown /api/admins
-            result.employee_quotations = cleanAdminName(orderData.employee_quotations);
-            result.employee_quotations_phone = orderData.employee_quotations_phone
-              ? String(orderData.employee_quotations_phone).trim()
-              : '';
-          }
-        } catch (deriveErr) {
-          console.error("Error deriving default admin from sale_orders:", deriveErr);
-        }
-      }
-    }
-
     res.json(result);
   } catch (err: any) {
     console.error("API GET salesperson error:", err);
@@ -1350,7 +1281,7 @@ app.get('/api/salesperson/:userId', async (req: any, res: any) => {
 app.post('/api/salesperson/update-branches', express.json(), async (req: any, res: any) => {
   console.log(">>> POST /api/salesperson/update-branches received! body:", JSON.stringify(req.body, null, 2));
   try {
-    const { userId, branchCodes, name, phone, salespersonId, adminName, adminPhone } = req.body;
+    const { userId, branchCodes, name, phone, salespersonId } = req.body;
     if (!userId || branchCodes === undefined) {
       return res.status(400).json({ success: false, message: 'Missing required parameters' });
     }
@@ -1373,14 +1304,6 @@ app.post('/api/salesperson/update-branches', express.json(), async (req: any, re
     if (name !== undefined) updateData.name = name;
     if (phone !== undefined) updateData.phone = phone.trim();
     if (salespersonId !== undefined) updateData.salesperson_id = salespersonId;
-
-    // แอดมิน (ผู้ดูแล) — บันทึกตามที่เซลส์เลือก/แสดงอยู่ในฟอร์มเสมอ
-    // ค่านี้มาจาก dropdown (/api/admins) หรือค่าตั้งต้น auto-fill ตอนโหลด
-    // เบอร์ดึงมาจาก employee_quotations_phone (adminPhone) เท่านั้น เซลส์ไม่พิมพ์เอง
-    if (adminName !== undefined) {
-      updateData.employee_quotations = adminName ? String(adminName).trim() : '';
-      updateData.employee_quotations_phone = adminPhone ? String(adminPhone).trim() : '';
-    }
 
     if (isNew) {
       updateData.user_id = userId;
@@ -1477,7 +1400,7 @@ app.get('/download-pdf/:quoteId', async (req: any, res: any) => {
     if (enrichedQuote.user_id) {
       try {
         const spRes = await pool.query(
-          'SELECT name, phone, salesperson_id, employee_quotations, employee_quotations_phone FROM salesperson WHERE user_id = $1 LIMIT 1',
+          'SELECT name, phone, salesperson_id FROM salesperson WHERE user_id = $1 LIMIT 1',
           [enrichedQuote.user_id]
         );
         const spData = spRes.rows[0];
@@ -1485,8 +1408,6 @@ app.get('/download-pdf/:quoteId', async (req: any, res: any) => {
           salespersonName = spData.name || '';
           salespersonPhone = spData.phone || '';
           salespersonEmployeeCode = spData.salesperson_id || null;
-          enrichedQuote.employee_quotations = spData.employee_quotations || 'ชื่อแอดมิน';
-          enrichedQuote.employee_quotations_phone = spData.employee_quotations_phone || 'เบอร์โทร';
         }
       } catch (err) {
         console.error('Error fetching salesperson details for PDF:', err);
@@ -1571,38 +1492,21 @@ app.get('/api/admin/verify', adminAuthMiddleware, (req: any, res: any) => {
 app.post('/api/admin/signatures/upload', adminAuthMiddleware, express.json({ limit: '10mb' }), async (req: any, res: any) => {
   console.log(">>> POST /api/admin/signatures/upload received!");
   try {
-    const { salespersonId, type, image, adminName } = req.body;
-    if (!type || !image) {
-      return res.status(400).json({ error: 'Missing required parameters (type, image)' });
+    const { salespersonId, image } = req.body;
+    if (!image) {
+      return res.status(400).json({ error: 'Missing required parameter: image' });
     }
 
-    if (type !== 'sale' && type !== 'admin') {
-      return res.status(400).json({ error: 'Invalid type parameter. Must be "sale" or "admin"' });
+    // ลายเซ็นพนักงานขายผูกกับ salesperson_id (ลายเซ็นรายบุคคล)
+    if (!salespersonId) {
+      return res.status(400).json({ error: 'Missing required parameter: salespersonId' });
     }
-
-    // กำหนด key ของไฟล์ลายเซ็น
-    //  - sale  : ผูกกับ salesperson_id (ลายเซ็นรายบุคคล)
-    //  - admin : ผูกกับ key ที่คำนวณจากชื่อแอดมิน (แอดมินคนเดียวกัน = ไฟล์เดียว)
-    let fileKey: string | null = null;
-    if (type === 'sale') {
-      if (!salespersonId) {
-        return res.status(400).json({ error: 'Missing required parameter: salespersonId' });
-      }
-      // Check if salesperson exists in the salesperson table
-      const checkRes = await pool.query('SELECT name FROM salesperson WHERE salesperson_id = $1', [salespersonId.trim()]);
-      if (checkRes.rows.length === 0) {
-        return res.status(404).json({ error: `Salesperson with ID "${salespersonId}" not found in database.` });
-      }
-      fileKey = salespersonId.trim();
-    } else {
-      if (!adminName || !adminName.trim()) {
-        return res.status(400).json({ error: 'Missing required parameter: adminName' });
-      }
-      fileKey = computeAdminKey(adminName);
-      if (!fileKey) {
-        return res.status(400).json({ error: `Invalid admin name "${adminName}".` });
-      }
+    // Check if salesperson exists in the salesperson table
+    const checkRes = await pool.query('SELECT name FROM salesperson WHERE salesperson_id = $1', [salespersonId.trim()]);
+    if (checkRes.rows.length === 0) {
+      return res.status(404).json({ error: `Salesperson with ID "${salespersonId}" not found in database.` });
     }
+    const fileKey = salespersonId.trim();
 
     // Decode base64 image
     const matches = image.match(/^data:image\/([a-zA-Z+]+);base64,(.+)$/);
@@ -1622,7 +1526,7 @@ app.post('/api/admin/signatures/upload', adminAuthMiddleware, express.json({ lim
       return res.status(400).json({ error: 'Only PNG and JPG/JPEG images are allowed for signatures.' });
     }
 
-    const dir = type === 'sale' ? 'sale_sigs' : 'admin_sigs';
+    const dir = 'sale_sigs';
     const targetDir = path.join(process.cwd(), 'data', dir);
 
     // Clean up alternate extensions first to avoid duplicate active files
@@ -1665,18 +1569,14 @@ app.post('/api/admin/signatures/upload', adminAuthMiddleware, express.json({ lim
 app.get('/api/admin/salespersons', adminAuthMiddleware, async (req: any, res: any) => {
   console.log(">>> GET /api/admin/salespersons received!");
   try {
-    const result = await pool.query('SELECT user_id, name, status, phone, salesperson_id, branch, employee_quotations, employee_quotations_phone, created_at, updated_at FROM salesperson ORDER BY name ASC');
-    
+    const result = await pool.query('SELECT user_id, name, status, phone, salesperson_id, branch, created_at, updated_at FROM salesperson ORDER BY name ASC');
+
     const saleSigsDir = path.join(process.cwd(), 'data', 'sale_sigs');
-    const adminSigsDir = path.join(process.cwd(), 'data', 'admin_sigs');
     const extensions = ['.png', '.jpg', '.jpeg'];
 
     const salespersons = result.rows.map((row: any) => {
       const spId = row.salesperson_id ? String(row.salesperson_id).trim() : null;
-      // key ลายเซ็นแอดมิน คำนวณจากชื่อแอดมิน (employee_quotations) — คนเดียวกันใช้ไฟล์เดียว
-      const adminKey = computeAdminKey(row.employee_quotations);
       let has_sale_sig = false;
-      let has_admin_sig = false;
 
       if (spId) {
         // Check if salesperson has signature
@@ -1686,19 +1586,9 @@ app.get('/api/admin/salespersons', adminAuthMiddleware, async (req: any, res: an
         });
       }
 
-      if (adminKey) {
-        // Check if admin has signature (keyed by admin identity)
-        has_admin_sig = extensions.some(ext => {
-          const filepath = path.join(adminSigsDir, `${adminKey}${ext}`);
-          return fs.existsSync(filepath);
-        });
-      }
-
       return {
         ...row,
-        admin_sig_key: adminKey,
-        has_sale_sig,
-        has_admin_sig
+        has_sale_sig
       };
     });
 
@@ -1796,15 +1686,11 @@ app.put('/api/admin/sync/settings', adminAuthMiddleware, express.json(), async (
 });
 
 // --- API Endpoint: Delete Signature ---
-app.delete('/api/admin/signatures/:type/:salespersonId', adminAuthMiddleware, async (req: any, res: any) => {
-  const { type, salespersonId } = req.params;
-  console.log(`>>> DELETE /api/admin/signatures/${type}/${salespersonId} received!`);
+app.delete('/api/admin/signatures/:salespersonId', adminAuthMiddleware, async (req: any, res: any) => {
+  const { salespersonId } = req.params;
+  console.log(`>>> DELETE /api/admin/signatures/${salespersonId} received!`);
   try {
-    if (type !== 'sale' && type !== 'admin') {
-      return res.status(400).json({ error: 'Invalid type parameter. Must be "sale" or "admin"' });
-    }
-
-    const dir = type === 'sale' ? 'sale_sigs' : 'admin_sigs';
+    const dir = 'sale_sigs';
     const targetDir = path.join(process.cwd(), 'data', dir);
     const extensions = ['.png', '.jpg', '.jpeg'];
     let deletedCount = 0;

@@ -29,11 +29,7 @@ interface Salesperson {
   phone: string | null;
   salesperson_id: string | null;
   branch: string | null;
-  employee_quotations: string | null;
-  employee_quotations_phone: string | null;
   has_sale_sig: boolean;
-  has_admin_sig: boolean;
-  admin_sig_key: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -74,14 +70,13 @@ export function Salespersons() {
   
   // Upload State
   const [uploadingId, setUploadingId] = useState<string | null>(null);
-  const [uploadingType, setUploadingType] = useState<'sale' | 'admin' | null>(null);
   const [sigTimestamp, setSigTimestamp] = useState<number>(0);
-  
+
   // Dialog/Toast Message
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const currentUploadTarget = useRef<{ id: string; type: 'sale' | 'admin'; adminName?: string | null } | null>(null);
+  const currentUploadTarget = useRef<{ id: string } | null>(null);
 
   const fetchSalespersons = useCallback(async () => {
     setLoading(true);
@@ -120,8 +115,8 @@ export function Salespersons() {
     }, 4000);
   };
 
-  const handleUploadClick = (salespersonId: string, type: 'sale' | 'admin', adminName?: string | null) => {
-    currentUploadTarget.current = { id: salespersonId, type, adminName };
+  const handleUploadClick = (salespersonId: string) => {
+    currentUploadTarget.current = { id: salespersonId };
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
       fileInputRef.current.click();
@@ -132,13 +127,7 @@ export function Salespersons() {
     const file = e.target.files?.[0];
     if (!file || !currentUploadTarget.current) return;
 
-    const { id: salespersonId, type, adminName } = currentUploadTarget.current;
-
-    // ลายเซ็นแอดมินผูกกับชื่อแอดมิน (employee_quotations) — ต้องมีชื่อจึงอัปโหลดได้
-    if (type === 'admin' && (!adminName || !adminName.trim())) {
-      showToast('ยังไม่มีชื่อแอดมินสำหรับพนักงานคนนี้ ไม่สามารถอัปโหลดลายเซ็นได้', 'error');
-      return;
-    }
+    const { id: salespersonId } = currentUploadTarget.current;
 
     // Validate extension
     const validExtensions = ['image/png', 'image/jpeg', 'image/jpg'];
@@ -154,14 +143,13 @@ export function Salespersons() {
     }
 
     setUploadingId(salespersonId);
-    setUploadingType(type);
 
     try {
       const reader = new FileReader();
       reader.readAsDataURL(file);
       reader.onload = async () => {
         const base64Data = reader.result as string;
-        
+
         try {
           const res = await fetch('/api/admin/signatures/upload', {
             method: 'POST',
@@ -171,8 +159,6 @@ export function Salespersons() {
             },
             body: JSON.stringify({
               salespersonId,
-              type,
-              adminName: type === 'admin' ? adminName : undefined,
               image: base64Data
             })
           });
@@ -183,7 +169,7 @@ export function Salespersons() {
             throw new Error(result.error || 'เกิดข้อผิดพลาดในการอัปโหลดลายเซ็น');
           }
 
-          showToast(`อัปโหลดลายเซ็น${type === 'sale' ? 'พนักงานขาย' : 'ผู้อนุมัติ'}สำเร็จ`);
+          showToast('อัปโหลดลายเซ็นพนักงานขายสำเร็จ');
           setSigTimestamp(prev => prev + 1);
           fetchSalespersons(); // Refresh list to update signature status
         } catch (err: unknown) {
@@ -192,7 +178,6 @@ export function Salespersons() {
           showToast(errorMessage, 'error');
         } finally {
           setUploadingId(null);
-          setUploadingType(null);
           currentUploadTarget.current = null;
         }
       };
@@ -204,18 +189,17 @@ export function Salespersons() {
       const errorMessage = err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการประมวลผลไฟล์';
       showToast(errorMessage, 'error');
       setUploadingId(null);
-      setUploadingType(null);
       currentUploadTarget.current = null;
     }
   };
 
-  const handleDeleteSignature = async (deleteKey: string, type: 'sale' | 'admin') => {
-    if (!window.confirm(`คุณแน่ใจหรือไม่ที่จะลบลายเซ็น${type === 'sale' ? 'พนักงานขาย' : 'ผู้อนุมัติ'}นี้?`)) {
+  const handleDeleteSignature = async (deleteKey: string) => {
+    if (!window.confirm('คุณแน่ใจหรือไม่ที่จะลบลายเซ็นพนักงานขายนี้?')) {
       return;
     }
 
     try {
-      const res = await fetch(`/api/admin/signatures/${type}/${encodeURIComponent(deleteKey)}`, {
+      const res = await fetch(`/api/admin/signatures/${encodeURIComponent(deleteKey)}`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${token}`
@@ -228,7 +212,7 @@ export function Salespersons() {
         throw new Error(result.error || 'เกิดข้อผิดพลาดในการลบลายเซ็น');
       }
 
-      showToast(`ลบลายเซ็น${type === 'sale' ? 'พนักงานขาย' : 'ผู้อนุมัติ'}สำเร็จ`);
+      showToast('ลบลายเซ็นพนักงานขายสำเร็จ');
       setSigTimestamp(prev => prev + 1);
       fetchSalespersons(); // Refresh list to update signature status
     } catch (err: unknown) {
@@ -258,14 +242,14 @@ export function Salespersons() {
     if (aValue === null || aValue === undefined) return sortDirection === 'asc' ? 1 : -1;
     if (bValue === null || bValue === undefined) return sortDirection === 'asc' ? -1 : 1;
 
-    // Handle boolean values (has_sale_sig, has_admin_sig)
+    // Handle boolean values (has_sale_sig)
     if (typeof aValue === 'boolean' && typeof bValue === 'boolean') {
       return sortDirection === 'asc'
         ? (aValue === bValue ? 0 : aValue ? -1 : 1)
         : (aValue === bValue ? 0 : aValue ? 1 : -1);
     }
 
-    // Handle string values (name, branch, employee_quotations, etc.)
+    // Handle string values (name, branch, etc.)
     if (typeof aValue === 'string' && typeof bValue === 'string') {
       return sortDirection === 'asc'
         ? aValue.localeCompare(bValue, 'th', { sensitivity: 'base' })
@@ -395,29 +379,17 @@ export function Salespersons() {
                   >
                     พนักงานขาย {renderSortIcon('name')}
                   </th>
-                  <th 
+                  <th
                     onClick={() => handleSort('branch')}
                     className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors"
                   >
                     สังกัด/สาขา {renderSortIcon('branch')}
                   </th>
-                  <th 
-                    onClick={() => handleSort('employee_quotations')}
-                    className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors w-60"
-                  >
-                    แอดมิน {renderSortIcon('employee_quotations')}
-                  </th>
-                  <th 
+                  <th
                     onClick={() => handleSort('has_sale_sig')}
                     className="px-6 py-4 text-center cursor-pointer hover:bg-slate-100 transition-colors w-50"
                   >
                     ลายเซ็นพนักงานขาย {renderSortIcon('has_sale_sig')}
-                  </th>
-                  <th 
-                    onClick={() => handleSort('has_admin_sig')}
-                    className="px-6 py-4 text-center cursor-pointer hover:bg-slate-100 transition-colors w-50"
-                  >
-                    ลายเซ็นแอดมิน {renderSortIcon('has_admin_sig')}
                   </th>
                 </tr>
               </thead>
@@ -450,40 +422,15 @@ export function Salespersons() {
                       </div>
                     </td>
 
-                    {/* ผู้อนุมัติ */}
-                    <td className="px-6 py-4 space-y-1">
-                      <div className="font-medium text-slate-800">{sp.employee_quotations ? sp.employee_quotations.replace(/\s*\(.*?\)\s*$/, '').trim() : '-'}</div>
-                      {sp.employee_quotations_phone && sp.employee_quotations_phone !== '-' && (
-                        <div className="text-xs text-slate-500 flex items-center gap-1.5">
-                          <Phone className="w-3.5 h-3.5 text-slate-400" />
-                          <span className="font-mono text-slate-600">{sp.employee_quotations_phone}</span>
-                        </div>
-                      )}
-                    </td>
-
                     {/* ลายเซ็นพนักงานขาย */}
                     <td className="px-6 py-4 text-center">
-                      <SignatureCell 
+                      <SignatureCell
                         salesperson={sp}
-                        type="sale"
                         hasSig={sp.has_sale_sig}
-                        uploading={uploadingId === sp.salesperson_id && uploadingType === 'sale'}
+                        uploading={uploadingId === sp.salesperson_id}
                         sigTimestamp={sigTimestamp}
-                        onUpload={() => sp.salesperson_id && handleUploadClick(sp.salesperson_id, 'sale')}
-                        onDelete={() => sp.salesperson_id && handleDeleteSignature(sp.salesperson_id, 'sale')}
-                      />
-                    </td>
-
-                    {/* ลายเซ็นแอดมิน */}
-                    <td className="px-6 py-4 text-center">
-                      <SignatureCell 
-                        salesperson={sp}
-                        type="admin"
-                        hasSig={sp.has_admin_sig}
-                        uploading={uploadingId === sp.salesperson_id && uploadingType === 'admin'}
-                        sigTimestamp={sigTimestamp}
-                        onUpload={() => sp.salesperson_id && handleUploadClick(sp.salesperson_id, 'admin', sp.employee_quotations)}
-                        onDelete={() => sp.admin_sig_key && handleDeleteSignature(sp.admin_sig_key, 'admin')}
+                        onUpload={() => sp.salesperson_id && handleUploadClick(sp.salesperson_id)}
+                        onDelete={() => sp.salesperson_id && handleDeleteSignature(sp.salesperson_id)}
                       />
                     </td>
                   </tr>
@@ -557,7 +504,6 @@ export function Salespersons() {
 
 interface SignatureCellProps {
   salesperson: Salesperson;
-  type: 'sale' | 'admin';
   hasSig: boolean;
   uploading: boolean;
   sigTimestamp: number;
@@ -565,19 +511,17 @@ interface SignatureCellProps {
   onDelete: () => void;
 }
 
-function SignatureCell({ salesperson, type, hasSig, uploading, sigTimestamp, onUpload, onDelete }: SignatureCellProps) {
-  // key ของไฟล์ลายเซ็น: sale ผูกกับ salesperson_id, admin ผูกกับ admin_sig_key (ชื่อแอดมิน)
-  const dir = type === 'sale' ? 'sale_sigs' : 'admin_sigs';
-  const fileKey = type === 'sale'
-    ? (salesperson.salesperson_id ? salesperson.salesperson_id.trim() : null)
-    : salesperson.admin_sig_key;
+function SignatureCell({ salesperson, hasSig, uploading, sigTimestamp, onUpload, onDelete }: SignatureCellProps) {
+  // ลายเซ็นพนักงานขายผูกกับรหัสพนักงาน (salesperson_id)
+  const dir = 'sale_sigs';
+  const fileKey = salesperson.salesperson_id ? salesperson.salesperson_id.trim() : null;
 
-  // ถ้าไม่มี key จะจัดการลายเซ็นไม่ได้
+  // ถ้าไม่มีรหัสพนักงาน จะจัดการลายเซ็นไม่ได้
   if (!fileKey) {
     return (
       <div className="flex flex-col items-center justify-center p-2 text-slate-400 text-xs">
         <AlertTriangle className="w-4 h-4 text-amber-500 mb-1" />
-        <span>{type === 'sale' ? 'ต้องการรหัสพนักงาน' : 'ต้องการชื่อแอดมิน'}</span>
+        <span>ต้องการรหัสพนักงาน</span>
         <span>เพื่อจัดการลายเซ็น</span>
       </div>
     );

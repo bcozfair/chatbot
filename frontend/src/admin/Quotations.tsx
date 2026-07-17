@@ -69,8 +69,6 @@ interface Quotation {
     salesperson_id: string | null;
     saleperson: string;
     sale_phone: string;
-    employee_quotations: string;
-    employee_quotations_phone: string;
   };
 }
 

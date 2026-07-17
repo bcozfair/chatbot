@@ -194,16 +194,14 @@ export async function insertDraftQuotations(
   let employeeDetails: any = {
     salesperson_id: null,
     saleperson: '',
-    sale_phone: '',
-    employee_quotations: 'ชื่อแอดมิน',
-    employee_quotations_phone: 'เบอร์โทร'
+    sale_phone: ''
   };
   let salespersonIdStr: string | null = null;
 
   if (userId) {
     try {
       const spRes = await pool.query(
-        'SELECT salesperson_id, name, phone, employee_quotations, employee_quotations_phone FROM salesperson WHERE user_id = $1 LIMIT 1',
+        'SELECT salesperson_id, name, phone FROM salesperson WHERE user_id = $1 LIMIT 1',
         [userId]
       );
       const spData = spRes.rows[0];
@@ -212,9 +210,7 @@ export async function insertDraftQuotations(
         employeeDetails = {
           salesperson_id: salespersonIdStr,
           saleperson: spData.name || '',
-          sale_phone: spData.phone || '',
-          employee_quotations: spData.employee_quotations || 'ชื่อแอดมิน',
-          employee_quotations_phone: spData.employee_quotations_phone || 'เบอร์โทร'
+          sale_phone: spData.phone || ''
         };
       }
     } catch (err) {
@@ -1105,9 +1101,7 @@ export async function updateQuotationCustomerSnapshot(
   const employeeDetails = {
     salesperson_id: salesperson.salesperson_id || null,
     saleperson: salesperson.name || '',
-    sale_phone: salesperson.phone || '',
-    employee_quotations: salesperson.employee_quotations || '',
-    employee_quotations_phone: salesperson.employee_quotations_phone || ''
+    sale_phone: salesperson.phone || ''
   };
 
   await pool.query(
@@ -1294,8 +1288,6 @@ export async function enrichQuotationData(quoteDb: any): Promise<any> {
       salesperson_name: employeeDetails.saleperson || '',
       salesperson_phone: employeeDetails.sale_phone || '',
       salesperson_employee_code: salespersonId || null,
-      employee_quotations: employeeDetails.employee_quotations || 'ชื่อแอดมิน',
-      employee_quotations_phone: employeeDetails.employee_quotations_phone || 'เบอร์โทร',
       items: legacyItems,
       revise_from: reviseFrom,
       quote_company: quoteCompany

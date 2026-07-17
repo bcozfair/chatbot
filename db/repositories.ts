@@ -333,17 +333,6 @@ export async function getBranches(): Promise<any[]> {
 
 // ═══════════════════════════ sale_orders ═══════════════════════════
 
-/** ชื่อ-เบอร์พนักงานออกใบเสนอราคาล่าสุดของเซลส์ (prefill หน้า register) */
-export async function getLatestEmployeeQuotations(salespersonId: number): Promise<any | null> {
-  try {
-    const { rows } = await pool.query(
-      `SELECT employee_quotations, employee_quotations_phone FROM sale_orders
-       WHERE salesperson_id = $1 AND employee_quotations IS NOT NULL
-       ORDER BY order_date DESC LIMIT 1`, [salespersonId]);
-    return rows[0] || null;
-  } catch (err) { logErr('getLatestEmployeeQuotations', err); return null; }
-}
-
 // ═══════════════════════════ admin (index.ts) ═══════════════════════════
 
 /** ค้นหาลูกค้าหน้าแอดมิน/LIFF (ชื่อหรือรหัส) */

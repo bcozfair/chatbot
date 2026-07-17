@@ -561,8 +561,6 @@ CREATE TABLE public.salesperson (
     phone character varying(100),
     salesperson_id character varying(50),
     branch character varying(255),
-    employee_quotations character varying(255) DEFAULT 'ชื่อแอดมิน'::character varying,
-    employee_quotations_phone character varying(100) DEFAULT 'เบอร์โทร'::character varying,
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP
 );

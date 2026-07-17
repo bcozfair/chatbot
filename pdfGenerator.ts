@@ -638,7 +638,7 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
           </div>
 
           <div class="sig">
-            <div class="sig-space"></div>
+            <div class="sig-space">${sigBase64 ? `<img src="${sigBase64}" alt="ลายเซ็น" style="max-height: 50px; max-width: 180px; object-fit: contain; display: block; margin: 0 auto;" />` : ''}</div>
             <div class="sig-line"></div>
             <div class="sig-name">( ${salespersonNameFormatted === '' ? 'ชื่อพนักงานขาย' : salespersonNameFormatted} )</div>
             <div style="color: #111; font-size: 11px;">${quoteData.salesperson_phone && quoteData.salesperson_phone !== '' ? `( ${quoteData.salesperson_phone} )` : '( เบอร์โทร )'}</div>
