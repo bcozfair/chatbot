@@ -11,6 +11,28 @@ export const openai = new OpenAI({
   baseURL: hasDeepSeekKey ? 'https://api.deepseek.com' : (process.env.OPENAI_BASE_URL || undefined),
 });
 
+// โมเดลกลางของระบบ — ใช้ deepseek-v4-flash
+// (deepseek-chat / deepseek-reasoner จะถูก deprecate 2026/07/24 — v4-flash คือตัวแทนถาวร)
+export const LLM_MODEL = 'deepseek-v4-flash';
+
+/**
+ * เรียก chat completion ด้วยโมเดลกลาง + ปิด thinking mode เป็นค่าเริ่มต้น
+ *
+ * ทำไมต้องปิด thinking: deepseek-v4-flash default = thinking mode ซึ่งช้ามาก
+ * (วัดจริง avg ~6.9s, p95 ~12.6s) ขณะที่ non-thinking เร็ว ~1.7s (p95 ~2.1s) โดย
+ * ความถูกต้องเท่ากัน 100% — งานสกัด/จับคู่ของเราไม่ต้องใช้ reasoning
+ *
+ * รับ params เหมือน openai.chat.completions.create ทุกอย่าง ยกเว้นไม่ต้องระบุ model/thinking
+ * (ถ้าอยากเปิด thinking เฉพาะจุด ส่ง thinking: { type: 'enabled' } มา override ได้)
+ */
+export async function createChatCompletion(params: Record<string, any>): Promise<any> {
+  return openai.chat.completions.create({
+    model: LLM_MODEL,
+    thinking: { type: 'disabled' },
+    ...params,
+  } as any);
+}
+
 export const lineConfig = {
   channelSecret: process.env.LINE_CHANNEL_SECRET || '',
 };

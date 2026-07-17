@@ -1,4 +1,4 @@
-import { openai } from '../config/clients.js';
+import { createChatCompletion } from '../config/clients.js';
 import { pool } from '../config/db.js'; 
 
 // ─────────────────────────────────────────────
@@ -561,8 +561,7 @@ async function pickBestWithAI(
       ? `\n- ส่วนรหัสตัวเลขที่สำคัญ: "${numericPart}" — ให้ความสำคัญสูงสุดกับตัวเลือกที่มีเลขนี้ใน model หรือ name\n- ส่วนชื่อรุ่น: "${textPart || '-'}"\n`
       : '';
 
-    const response = await openai.chat.completions.create({
-      model: 'deepseek-chat',
+    const response = await createChatCompletion({
       messages: [
         {
           role: 'user',

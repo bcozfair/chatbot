@@ -88,7 +88,7 @@ export function createListFlexMessage(
   };
 }
 
-export function createBranchSelectionFlex(selectedCodesStr = '', isEditing = false, userId = '') {
+export function createBranchSelectionFlex(selectedCodesStr = '', userId = '') {
   const liffId = process.env.LIFF_ID || '';
   let liffUrl = `https://liff.line.me/${liffId}`;
   if (userId) {
@@ -97,7 +97,7 @@ export function createBranchSelectionFlex(selectedCodesStr = '', isEditing = fal
 
   return {
     type: "flex",
-    altText: isEditing ? "ปรับปรุงข้อมูลพนักงานขาย" : "ลงทะเบียนพนักงานขาย",
+    altText: "ลงทะเบียนพนักงานขาย",
     contents: {
       type: "bubble",
       size: "giga",
@@ -108,7 +108,7 @@ export function createBranchSelectionFlex(selectedCodesStr = '', isEditing = fal
         contents: [
           {
             type: "text",
-            text: isEditing ? "📝 ปรับปรุงข้อมูลพนักงานขาย" : "📝 ลงทะเบียนพนักงานขาย",
+            text: "📝 ลงทะเบียนพนักงานขาย",
             weight: "bold",
             color: "#FFFFFF",
             size: "md"
@@ -122,9 +122,7 @@ export function createBranchSelectionFlex(selectedCodesStr = '', isEditing = fal
         contents: [
           {
             type: "text",
-            text: isEditing
-              ? "กรุณากดปุ่มสีน้ำเงินด้านล่างเพื่อปรับปรุงข้อมูลส่วนตัวและสาขาดูแลของคุณครับ 👇"
-              : "ยินดีต้อนรับครับ! ก่อนเริ่มต้นใช้งาน กรุณากดปุ่มสีน้ำเงินด้านล่างเพื่อกรอกข้อมูลผู้ลงทะเบียนและเลือกสาขา/พื้นที่ดูแลของคุณครับ 👇",
+            text: "ยินดีต้อนรับครับ! ก่อนเริ่มต้นใช้งาน กรุณากดปุ่มสีน้ำเงินด้านล่างเพื่อกรอกข้อมูลผู้ลงทะเบียนและเลือกสาขา/พื้นที่ดูแลของคุณครับ 👇",
             wrap: true,
             size: "sm",
             color: "#4B5563"
@@ -133,7 +131,7 @@ export function createBranchSelectionFlex(selectedCodesStr = '', isEditing = fal
             type: "button",
             action: {
               type: "uri",
-              label: isEditing ? "🌐 แก้ไขข้อมูลส่วนตัว" : "🌐 ลงทะเบียนใช้งาน",
+              label: "🌐 ลงทะเบียนใช้งาน",
               uri: liffUrl
             },
             style: "primary",
@@ -219,7 +217,13 @@ export function createUnregisteredCustomerFlex(companyName: string, quoteIdsStr:
   };
 }
 
-export function createEditMenuFlex() {
+export function createEditMenuFlex(userId = '') {
+  const liffId = process.env.LIFF_ID || '';
+  let liffUrl = `https://liff.line.me/${liffId}`;
+  if (userId) {
+    liffUrl += `?userId=${userId}`;
+  }
+
   return {
     type: "flex",
     altText: "เมนูแก้ไขข้อมูล",
@@ -260,10 +264,9 @@ export function createEditMenuFlex() {
               {
                 type: "button",
                 action: {
-                  type: "postback",
+                  type: "uri",
                   label: "📝 แก้ไขข้อมูลส่วนตัวและสาขา",
-                  data: "action=edit_menu&sub=profile",
-                  displayText: "แก้ไขข้อมูลส่วนตัวและสาขา"
+                  uri: liffUrl
                 },
                 style: "primary",
                 color: "#2563EB",

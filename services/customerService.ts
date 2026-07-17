@@ -1,4 +1,4 @@
-import { openai } from '../config/clients.js';
+import { createChatCompletion } from '../config/clients.js';
 import { pool } from '../config/db.js';
 import {
   searchCustomersByReferencePatterns,
@@ -516,8 +516,7 @@ export async function findCustomerCandidates(customerQuery: string, salesperson:
   if (customerQuery && !isAiMatchDisabled()) {
     try {
       console.log(`[findCustomerCandidates] Invoking AI (Pre-Search) to extract Core Name from: "${customerQuery.replace(/\n/g, ' ')}"`);
-      const response = await openai.chat.completions.create({
-        model: 'deepseek-chat',
+      const response = await createChatCompletion({
         messages: [
           {
             role: 'user',
@@ -826,8 +825,7 @@ export async function findCustomerCandidates(customerQuery: string, salesperson:
    - เซลส์เจ้าของลูกค้าตรงกับผู้ส่งข้อความ: ${e.salespersonMatch ? 'ใช่ ✓' : 'ไม่'} | เคยออกใบเสนอราคายืนยันแล้ว: ${e.confirmedCount || 0} ครั้ง`;
       }).join('\n');
 
-      const response = await openai.chat.completions.create({
-        model: 'deepseek-chat',
+      const response = await createChatCompletion({
         messages: [
           {
             role: 'user',

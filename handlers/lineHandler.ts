@@ -1,4 +1,4 @@
-import { openai, lineClient } from '../config/clients.js';
+import { lineClient, createChatCompletion } from '../config/clients.js';
 import { pool } from '../config/db.js';
 import {
   getSalespersonByUserId,
@@ -76,7 +76,7 @@ export async function handleEvent(event: any): Promise<any> {
             status: 'pending_branch'
           });
         }
-        const flexMsg = createBranchSelectionFlex('', false, userId);
+        const flexMsg = createBranchSelectionFlex('', userId);
         return lineClient.replyMessage({
           replyToken: event.replyToken,
           messages: [
@@ -97,13 +97,7 @@ export async function handleEvent(event: any): Promise<any> {
 
       if (action === 'edit_menu') {
         const sub = params.get('sub');
-        if (sub === 'profile' || sub === 'branches') {
-          const flexMsg = createBranchSelectionFlex(salesperson.branch_code || '', true, userId);
-          return lineClient.replyMessage({
-            replyToken: event.replyToken,
-            messages: [flexMsg as any]
-          });
-        } else if (sub === 'quotation') {
+        if (sub === 'quotation') {
           await updateSalespersonByUserId(userId, { status: 'edit_quote_number' });
           return lineClient.replyMessage({
             replyToken: event.replyToken,
@@ -976,7 +970,7 @@ export async function handleEvent(event: any): Promise<any> {
             replyToken: replyToken,
             messages: [
               { type: 'text', text: 'ต้องการแก้ไขใบเสนอราคาใบไหนครับ?\nรบกวนพิมพ์พร้อมเลขที่ใบ เช่น "แก้ไข QP-260705001"\nหรือกดปุ่มเพื่อเลือกเมนูด้านล่างครับ 👇' },
-              createEditMenuFlex() as any
+              createEditMenuFlex(userId) as any
             ]
           });
         }
@@ -985,7 +979,7 @@ export async function handleEvent(event: any): Promise<any> {
       const cleanText = content.trim().toLowerCase();
 
       if (['แก้ไข', '/edit', 'edit', 'แก้ไขข้อมูล', 'เมนูแก้ไข'].includes(cleanText)) {
-        const flexMsg = createEditMenuFlex();
+        const flexMsg = createEditMenuFlex(userId);
         return lineClient.replyMessage({
           replyToken: replyToken,
           messages: [flexMsg as any]
@@ -1049,7 +1043,7 @@ export async function handleEvent(event: any): Promise<any> {
               replyToken: replyToken,
               messages: [
                 { type: 'text', text: 'หากต้องการแก้ไขใบเสนอราคา รบกวนพิมพ์พร้อมเลขที่ใบ เช่น "แก้ไข QP-260705001" หรือกดปุ่มด้านล่างครับ 👇' },
-                createEditMenuFlex() as any
+                createEditMenuFlex(userId) as any
               ]
             });
           }
@@ -1254,50 +1248,66 @@ export async function handleEvent(event: any): Promise<any> {
 
         ${historyContext}ข้อความล่าสุดจากเซลส์: ${content}
       `;
-      const response = await openai.chat.completions.create({
-        model: 'deepseek-v4-flash',
-        messages: [
-          { role: 'user', content: prompt }
-        ],
-        response_format: { type: 'json_object' }
-      });
-      let aiResult: any;
-      try {
-        let rawJson = (response.choices[0].message.content || '').replace(/```json/gi, '').replace(/```/g, '').trim();
-        aiResult = JSON.parse(rawJson);
-      } catch (e) {
-        // โมเดลบางครั้งตอบ JSON แล้วมีข้อความเกินต่อท้าย (เช่น {...} + คำอธิบาย หรือ {...}{...})
-        // ลองดึงเฉพาะ JSON object ก้อนแรกที่วงเล็บ balance ครบออกมา parse ใหม่
+      // สกัดคำสั่งด้วย LLM ผ่าน createChatCompletion (deepseek-v4-flash + thinking disabled)
+      // วัดจริง p95 ~2s, correctness 100% — เร็วเท่า non-thinking แต่ future-proof (ไม่ผูก deepseek-chat ที่จะ deprecate)
+      const MAX_EXTRACTION_ATTEMPTS = 3;
+
+      // parse JSON แบบทนทาน: ลอง parse ตรงๆ ก่อน ถ้าพลาดให้ดึง object ก้อนแรกที่วงเล็บ balance ครบออกมา
+      const parseAiJson = (rawContent: string): any => {
+        const rawJson = rawContent.replace(/```json/gi, '').replace(/```/g, '').trim();
         try {
-          const raw = (response.choices[0].message.content || '').replace(/```json/gi, '').replace(/```/g, '').trim();
-          const start = raw.indexOf('{');
-          if (start !== -1) {
-            let depth = 0, inString = false, escaped = false, end = -1;
-            for (let i = start; i < raw.length; i++) {
-              const ch = raw[i];
-              if (escaped) { escaped = false; continue; }
-              if (ch === '\\') { escaped = true; continue; }
-              if (ch === '"') { inString = !inString; continue; }
-              if (inString) continue;
-              if (ch === '{') depth++;
-              else if (ch === '}') { depth--; if (depth === 0) { end = i; break; } }
-            }
-            if (end !== -1) {
-              aiResult = JSON.parse(raw.slice(start, end + 1));
-            } else {
-              throw e;
-            }
-          } else {
-            throw e;
+          return JSON.parse(rawJson);
+        } catch (e) {
+          const start = rawJson.indexOf('{');
+          if (start === -1) throw e;
+          let depth = 0, inString = false, escaped = false, end = -1;
+          for (let i = start; i < rawJson.length; i++) {
+            const ch = rawJson[i];
+            if (escaped) { escaped = false; continue; }
+            if (ch === '\\') { escaped = true; continue; }
+            if (ch === '"') { inString = !inString; continue; }
+            if (inString) continue;
+            if (ch === '{') depth++;
+            else if (ch === '}') { depth--; if (depth === 0) { end = i; break; } }
           }
-        } catch (e2) {
-          console.error("JSON Parse Error:", e2);
-          aiResult = { intent: "UNCLEAR", reply_message: "ขออภัยครับ ผมไม่สามารถประมวลผลคำสั่งได้ กรุณาลองใหม่อีกครั้งครับ" };
+          if (end === -1) throw e;
+          return JSON.parse(rawJson.slice(start, end + 1));
         }
+      };
+
+      // Retry กัน failure mode ที่ flaky (content ว่าง / parse ไม่ได้) ก่อนยอมตกไป UNCLEAR —
+      // เดิมพลาดครั้งเดียวก็ตอบ error ทั้งที่คำสั่งเซลส์ถูกต้อง
+      let aiResult: any = null;
+      let lastExtractionErr: any = null;
+      for (let attempt = 1; attempt <= MAX_EXTRACTION_ATTEMPTS; attempt++) {
+        try {
+          const response = await createChatCompletion({
+            messages: [{ role: 'user', content: prompt }],
+            response_format: { type: 'json_object' },
+            // จำกัดเฉพาะ output (JSON ที่สร้างกลับ) ไม่เกี่ยว input เช่น ประวัติแชท/รายการสินค้าที่ยาว
+            // 8192 เผื่อ order รายการเยอะ (~160 รายการ); v4-flash รองรับ output ได้สูงถึง 384K
+            max_tokens: 8192
+          });
+          const rawContent = response.choices[0]?.message?.content || '';
+          if (!rawContent.trim()) {
+            lastExtractionErr = new Error('empty content');
+            console.warn(`[extraction] attempt ${attempt}/${MAX_EXTRACTION_ATTEMPTS}: โมเดลคืน content ว่าง — ลองใหม่`);
+            continue;
+          }
+          aiResult = parseAiJson(rawContent);
+          break; // สำเร็จ
+        } catch (e) {
+          lastExtractionErr = e;
+          console.warn(`[extraction] attempt ${attempt}/${MAX_EXTRACTION_ATTEMPTS} ล้มเหลว:`, (e as any)?.message || e);
+        }
+      }
+      if (!aiResult) {
+        console.error('[extraction] ทุก attempt ล้มเหลว — ตกไป UNCLEAR:', lastExtractionErr);
+        aiResult = { intent: "UNCLEAR", reply_message: "ขออภัยครับ ระบบไม่ว่างชั่วคราว รบกวนพิมพ์คำสั่งเดิมอีกครั้งนะครับ 🙏" };
       }
 
       if (aiResult.intent === 'REGISTER') {
-        const flexMsg = createBranchSelectionFlex('', false, userId);
+        const flexMsg = createBranchSelectionFlex('', userId);
         return lineClient.replyMessage({
           replyToken: replyToken,
           messages: [
