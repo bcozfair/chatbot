@@ -1225,25 +1225,57 @@ export async function enrichQuotationData(quoteDb: any): Promise<any> {
       quoteCompany = quoteDb.quotation_no?.toUpperCase()?.startsWith('QT') ? 'THT' : 'PM';
     }
 
+    // ดึงสต๊อกสด (actual_quantity) จากตารางสินค้า เพื่อให้คำเตือน "สินค้าคงเหลือ" ใน PDF
+    // ตรงกับที่แสดงใน flex message — snapshot ไม่ได้เก็บ stock ไว้ จึงต้อง query สดตอน enrich
+    const stockMap: Record<string, number> = {};
+    const stockKeys = itemDetails
+      .map((item: any) => item.model || item.internal_reference)
+      .filter(Boolean);
+    if (stockKeys.length > 0) {
+      try {
+        const { rows: stockRows } = await pool.query(
+          `SELECT model AS code, actual_quantity AS stock
+             FROM products
+            WHERE model = ANY($1)`,
+          [stockKeys]
+        );
+        stockRows.forEach((p: any) => {
+          const s = p.stock !== undefined && p.stock !== null ? Number(p.stock) : 0;
+          // เผื่อมีหลายแถวชื่อ model เดียวกัน ให้ใช้สต๊อกสูงสุด (เหมือน ORDER BY actual_quantity DESC)
+          if (stockMap[p.code] === undefined || s > stockMap[p.code]) {
+            stockMap[p.code] = s;
+          }
+        });
+      } catch (err) {
+        console.error('Error fetching live stock for snapshot enrichment:', err);
+      }
+    }
+
     // จัดระเบียบ items เพื่อความเข้ากันได้ย้อนหลังกับ Frontend
-    const legacyItems = itemDetails.map((item: any) => ({
-      product_id: item.product_id,
-      model: item.model || item.internal_reference,
-      product_code: item.model || item.internal_reference,
-      name: item.name,
-      sales_description: item.sales_description || '',
-      price: item.price,
-      quantity: item.quantity,
-      discount_1: item.discount_1 || 0,
-      discount_2: item.discount_2 || 0,
-      remark: item.remark || '',
-      brand: item.brand || '',
-      series: item.series || '',
-      production: item.production || '',
-      stock: item.stock !== undefined ? item.stock : 9999, // default fallback stock
-      is_optional: !!item.is_optional,
-      linked_to_product_id: item.linked_to_product_id || null
-    }));
+    const legacyItems = itemDetails.map((item: any) => {
+      const stockKey = item.model || item.internal_reference;
+      const liveStock = stockKey !== undefined && stockMap[stockKey] !== undefined
+        ? stockMap[stockKey]
+        : (item.stock !== undefined ? item.stock : 0);
+      return {
+        product_id: item.product_id,
+        model: item.model || item.internal_reference,
+        product_code: item.model || item.internal_reference,
+        name: item.name,
+        sales_description: item.sales_description || '',
+        price: item.price,
+        quantity: item.quantity,
+        discount_1: item.discount_1 || 0,
+        discount_2: item.discount_2 || 0,
+        remark: item.remark || '',
+        brand: item.brand || '',
+        series: item.series || '',
+        production: item.production || '',
+        stock: liveStock,
+        is_optional: !!item.is_optional,
+        linked_to_product_id: item.linked_to_product_id || null
+      };
+    });
 
     return {
       ...quoteDb,

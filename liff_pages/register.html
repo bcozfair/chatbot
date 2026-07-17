@@ -511,8 +511,8 @@
       </div>
 
       <div class="form-group">
-        <label for="inputPhone">📞 เบอร์โทรศัพท์ <span style="color:var(--danger)">*</span></label>
-        <input type="text" id="inputPhone" placeholder="เช่น 081-234-5678 หรือ 0-2693-7005 ต่อ 132" maxlength="100" required>
+        <label for="inputPhone">📞 เบอร์โทรศัพท์</label>
+        <input type="text" id="inputPhone" placeholder="ดึงข้อมูลจากฐานข้อมูลอัตโนมัติ" maxlength="100" readonly>
       </div>
 
       <div class="form-group">
@@ -686,9 +686,7 @@
 
     function updateSaveButtonState() {
       const nameVal = inputName.value.trim();
-      const phoneVal = inputPhone.value.trim();
-      const phoneValid = phoneVal.length >= 5;
-      btnSave.disabled = !(nameVal.length > 0 && phoneValid && selectedBranches.size > 0);
+      btnSave.disabled = !(nameVal.length > 0 && selectedBranches.size > 0);
     }
 
     inputName.addEventListener('input', updateSaveButtonState);
@@ -843,7 +841,7 @@
       const nameVal = inputName.value.trim();
       const phoneVal = inputPhone.value.trim();
       const employeeCodeVal = inputEmployeeCode.value.trim();
-      if (!nameVal || phoneVal.length < 5 || selectedBranches.size === 0 || !userId) return;
+      if (!nameVal || selectedBranches.size === 0 || !userId) return;
 
       loaderText.innerText = 'กำลังบันทึกข้อมูลลงทะเบียน...';
       loaderScreen.style.opacity = '1';

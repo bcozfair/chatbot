@@ -373,41 +373,48 @@ function AdminContent() {
                   <span>{statsError}</span>
                 </div>
               )}
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 sm:gap-6">
-                {SUMMARY_CARDS.map(({ key, label, unit, icon: Icon, onClick }) => {
-                  const count = stats ? stats[key] : null;
-                  return (
-                    <button
-                      key={key}
-                      onClick={onClick}
-                      className="text-left bg-white border border-slate-200 hover:border-[#009032]/40 rounded-2xl p-5 transition-all group cursor-pointer active:scale-[0.99] shadow-sm flex flex-col gap-3"
-                    >
-                      <div className="flex items-center justify-between">
-                        <div
-                          className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
-                          style={{ backgroundColor: BRAND_SOFT, color: BRAND }}
-                        >
-                          <Icon className="w-5 h-5" />
+
+              {/* Summary cards (left 2/3) + Sync panel (right 1/3) */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 items-start">
+                <div className="lg:col-span-2 grid grid-cols-2 sm:grid-cols-3 gap-4 sm:gap-6">
+                  {SUMMARY_CARDS.map(({ key, label, unit, icon: Icon, onClick }) => {
+                    const count = stats ? stats[key] : null;
+                    return (
+                      <button
+                        key={key}
+                        onClick={onClick}
+                        className="text-left bg-white border border-slate-200 hover:border-[#009032]/40 rounded-2xl p-4 transition-all group cursor-pointer active:scale-[0.99] shadow-sm flex flex-col gap-2"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div
+                            className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
+                            style={{ backgroundColor: BRAND_SOFT, color: BRAND }}
+                          >
+                            <Icon className="w-5 h-5" />
+                          </div>
+                          <div className="flex items-baseline gap-1">
+                            {statsLoading || count === null ? (
+                              <span className="inline-block w-10 h-7 rounded-md bg-slate-100 animate-pulse" />
+                            ) : (
+                              <span className="text-2xl font-extrabold text-slate-900 tabular-nums">
+                                {count.toLocaleString('th-TH')}
+                              </span>
+                            )}
+                            <span className="text-xs font-medium text-slate-400">{unit}</span>
+                          </div>
                         </div>
-                      </div>
-                      <div>
-                        <div className="flex items-baseline gap-1.5">
-                          {statsLoading || count === null ? (
-                            <span className="inline-block w-12 h-8 rounded-md bg-slate-100 animate-pulse" />
-                          ) : (
-                            <span className="text-3xl font-extrabold text-slate-900 tabular-nums">
-                              {count.toLocaleString('th-TH')}
-                            </span>
-                          )}
-                          <span className="text-xs font-medium text-slate-400">{unit}</span>
-                        </div>
-                        <h3 className="text-sm font-semibold text-slate-600 mt-1 group-hover:text-slate-900 transition-colors">
+                        <h3 className="text-sm font-semibold text-slate-600 group-hover:text-slate-900 transition-colors">
                           {label}
                         </h3>
-                      </div>
-                    </button>
-                  );
-                })}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Sync data panel (right 1/3) */}
+                <div className="lg:col-span-1">
+                  <SyncPanel />
+                </div>
               </div>
             </div>
           ) : activeTab === 'promotions' ? (
@@ -427,9 +434,6 @@ function AdminContent() {
             </div>
           )}
 
-          {/* Sync data panel */}
-          <SyncPanel />
-          
         </main>
       </div>
     </div>
