@@ -60,6 +60,8 @@ export function cleanCompanyName(name: string | null | undefined): string {
 export function cleanContactName(name: string | null | undefined): string {
   if (!name) return '';
   return name
+    // "K"/"K." = คำนำหน้าเรียกบุคคล (= คุณ) ตัดออกเมื่อขึ้นต้นและมีชื่อตามหลัง เช่น "K นิว"/"K.นิว" → "นิว"
+    .replace(/^\s*[Kk]\.?\s*(?=[ก-๙A-Za-z])/, '')
     .replace(/^(คุณ|นาย|นางสาว|นาง|นายแพทย์|แพทย์หญิง|ดร\.)/g, '')
     .trim();
 }
@@ -94,6 +96,8 @@ export function normalizeCompanyNameTS(s: string | null | undefined): string {
   return s
     .replace(new RegExp(NORM_PATTERN, 'g'), '')
     .replace(new RegExp(NORM_STRIP_CLASS, 'g'), '')
+    // fold สระเสียงสั้น/ยาวที่คนไทยมักพิมพ์สลับกัน (ปิยะ↔ปียะ) ทำทั้งสองฝั่งจึงยัง symmetric
+    .replace(/ี/g, 'ิ').replace(/ื/g, 'ึ').replace(/ู/g, 'ุ')
     .toLowerCase();
 }
 
@@ -118,7 +122,7 @@ export function collapseSpaces(s: string | null | undefined): string {
  */
 export function splitCustomerContact(raw: string): { customer: string; contact: string | null } {
   const trimmed = (raw || '').trim();
-  const m = trimmed.match(/^(.+?)\s+((?:คุณ|K\.\s?)[฀-๿a-zA-Z].*)$/i);
+  const m = trimmed.match(/^(.+?)\s+((?:คุณ|[Kk]\.?\s?)[฀-๿a-zA-Z].*)$/i);
   if (m && m[1].trim()) {
     return { customer: m[1].trim(), contact: m[2].trim() };
   }
@@ -133,7 +137,8 @@ export function splitCustomerContact(raw: string): { customer: string; contact: 
 function contactNameParts(s: string | null | undefined): string[] {
   if (!s) return [];
   let t = s.replace(/0\d{1,2}[-.\s]?\d{3,4}[-.\s]?\d{4}/g, ' ');
-  t = t.replace(/^\s*(คุณ|นายแพทย์|แพทย์หญิง|นางสาว|นาย|นาง|ดร\.?|K\.)\s*/i, '');
+  t = t.replace(/^\s*[Kk]\.?\s*(?=[ก-๙A-Za-z])/, '');            // "K"/"K." honorific → ตัดออก เหลือชื่อ
+  t = t.replace(/^\s*(คุณ|นายแพทย์|แพทย์หญิง|นางสาว|นาย|นาง|ดร\.?)\s*/i, '');
   const aliasMatch = t.match(/\(([^)]+)\)/);
   const noParen = t.replace(/\([^)]*\)/g, ' ').trim();
   const firstWord = noParen.split(/\s+/)[0] || '';
@@ -922,6 +927,8 @@ export function cleanContactNameExtra(name: string | null | undefined): string {
   if (!name) return '';
   // 1. Remove phone numbers
   let cleaned = name.replace(/0\d{1,2}[-.\s]?\d{3,4}[-.\s]?\d{4}/g, '');
+  // 1.5 "K"/"K." = คำนำหน้าเรียกบุคคล ตัดเฉพาะตอนขึ้นต้นและมีชื่อตามหลัง เช่น "K นิว" → "นิว"
+  cleaned = cleaned.replace(/^\s*[Kk]\.?\s*(?=[ก-๙A-Za-z])/, '');
   // 2. Remove common title/position words
   const titles = [
     'คุณ', 'นาย', 'นางสาว', 'นาง', 'นายแพทย์', 'แพทย์หญิง', 'ดร.',
