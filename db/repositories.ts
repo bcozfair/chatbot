@@ -263,7 +263,7 @@ export async function deletePendingQuotations(userId: string): Promise<void> {
   try {
     await pool.query(
       `DELETE FROM quotations WHERE user_id = $1 AND status = ANY($2)`,
-      [userId, ['pending_company', 'pending_contact', 'draft']]);
+      [userId, ['pending_company', 'pending_contact', 'pending_product', 'draft']]);
   } catch (err) { logErr('deletePendingQuotations', err); }
 }
 

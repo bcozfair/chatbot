@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(npx tsc --noEmit -p tsconfig.json)",
+      "PowerShell(npx tsx \"C:\\\\Users\\\\bcozf\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bcozf-Downloads-chatbot\\\\e635625c-bb3d-4574-81e5-f5946c65876a\\\\scratchpad\\\\verifyRefExtract.ts\")",
+      "PowerShell(npx tsx \"C:\\\\Users\\\\bcozf\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bcozf-Downloads-chatbot\\\\e635625c-bb3d-4574-81e5-f5946c65876a\\\\scratchpad\\\\verifyTpcsFlow.ts\")",
+      "PowerShell(git -C \"c:\\\\Users\\\\bcozf\\\\Downloads\\\\chatbot\" diff --stat services/customerService.ts)",
+      "PowerShell(npx tsx \"C:\\\\Users\\\\bcozf\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bcozf-Downloads-chatbot\\\\e635625c-bb3d-4574-81e5-f5946c65876a\\\\scratchpad\\\\verifyTpcsFlow.ts\" 2>&1)",
+      "PowerShell(npx tsx \"C:\\\\Users\\\\bcozf\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bcozf-Downloads-chatbot\\\\e635625c-bb3d-4574-81e5-f5946c65876a\\\\scratchpad\\\\verifyLineFilter.ts\")",
+      "PowerShell(git -C \"c:\\\\Users\\\\bcozf\\\\Downloads\\\\chatbot\" diff --stat)",
+      "PowerShell(npx tsx scripts/evalCustomerSearch.ts 2>&1)",
+      "PowerShell(Copy-Item \"services\\\\customerService.ts\" \"C:\\\\Users\\\\bcozf\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bcozf-Downloads-chatbot\\\\e635625c-bb3d-4574-81e5-f5946c65876a\\\\scratchpad\\\\customerService.NEW.ts\" -Force)",
+      "PowerShell(git stash push services/customerService.ts)",
+      "PowerShell(git stash pop)",
+      "PowerShell(npx tsx \"C:\\\\Users\\\\bcozf\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bcozf-Downloads-chatbot\\\\e635625c-bb3d-4574-81e5-f5946c65876a\\\\scratchpad\\\\verifyTpcsFlow.ts\" --no-ai 2>&1)",
+      "PowerShell(npx tsx \"C:\\\\Users\\\\bcozf\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bcozf-Downloads-chatbot\\\\e635625c-bb3d-4574-81e5-f5946c65876a\\\\scratchpad\\\\inspectKorat.ts\")"
+    ]
+  }
+}

@@ -586,13 +586,14 @@ app.post('/api/quotation/draft-cart', express.json(), async (req: any, res: any)
       if (prod) {
         itemsForDb.push({
           product_id: prod.product_template_id,
-          product_code: prod.code,
-          model: prod.code,
+          internal_reference: prod.internal_reference || '',
+          product_code: prod.model,
+          model: prod.model,
           name: prod.name,
           brand: prod.brand || '',
           series: prod.series || '',
           quantity: Number(item.quantity) || 1,
-          price: Number(prod.price) || 0,
+          price: Number(prod.sales_price) || 0,
           discount_1: 0,
           discount_2: 0,
           production: prod.production || ''

@@ -43,6 +43,102 @@ import {
 } from '../services/quotationService.js';
 import { detectQuotationEditIntent, handleQuotationEditRequest } from '../services/quotationAgent.js';
 
+// คำนวณรายการสินค้าที่พร้อมบันทึก (ราคา/ส่วนลดสุทธิ) จาก product ในฐานข้อมูล + item ที่เซลส์ระบุ + ส่วนลดระดับบิล
+// ใช้ทั้งตอนสกัดครั้งแรก และตอน resume หลังเซลส์กดเลือกรุ่นจากปุ่ม เพื่อให้ตรรกะราคาตรงกันเป๊ะ (ไม่ drift)
+function buildResolvedItem(dbProduct: any, item: any, quoteData: any): { itemForDb: any; itemTotal: number; price: number; disc1: number; disc2: number } {
+  const requestedQty = Number(item.quantity) || 1;
+  const hasCustomPrice = (item.price !== undefined && item.price !== null && Number(item.price) > 0);
+  let price = hasCustomPrice ? Number(item.price) : (Number(dbProduct.sales_price) || 0);
+  const isNetDiscount = !!item.discount_is_net || !!quoteData.discount_is_net;
+  let disc1 = hasCustomPrice ? 0 : (Number(item.discount_1) > 0 ? Number(item.discount_1) : (Number(quoteData.discount_1) || 0));
+  let disc2 = hasCustomPrice ? 0 : (Number(item.discount_1) > 0 ? (Number(item.discount_2) || 0) : (Number(quoteData.discount_2) || 0));
+  if (isNetDiscount) {
+    price = Math.round(price * (1 - disc1 / 100) * (1 - disc2 / 100) * 100) / 100;
+    disc1 = 0;
+    disc2 = 0;
+  }
+  const discountedPrice = price * (1 - disc1 / 100) * (1 - disc2 / 100);
+  const itemTotal = requestedQty * discountedPrice;
+  const itemForDb = {
+    product_id: dbProduct.product_template_id,
+    product_code: dbProduct.model,
+    model: dbProduct.model,
+    name: dbProduct.name,
+    brand: dbProduct.brand || '',
+    series: dbProduct.series || '',
+    quantity: requestedQty,
+    price,
+    discount_1: disc1,
+    discount_2: disc2,
+    production: dbProduct.production || ''
+  };
+  return { itemForDb, itemTotal, price, disc1, disc2 };
+}
+
+// สร้างข้อความเลือกรุ่นสินค้าที่กำกวม (mirror การเลือกบริษัท) — postback: action=select_product&slot=<i>&pick=<j>
+// คืน 2 ข้อความ: ปุ่ม candidate + ปุ่มค้นหาเพิ่มเติม (ทางออกเมื่อไม่มี candidate ตัวไหนถูก — คงไว้เหมือน flow เดิม)
+function buildProductSelectionMessages(slot: any, slotIndex: number, userId: string): any[] {
+  const query = String(slot?.item?.model || slot?.item?.product_code || '').trim();
+  const options = (slot.candidates || []).map((c: any, i: number) => {
+    const price = Number(c.sales_price || 0).toLocaleString();
+    const stock = Number(c.actual_quantity || 0);
+    return {
+      label: `${c.model}\n💵 ฿${price}  •  📦 คงเหลือ ${stock}`,
+      data: `action=select_product&slot=${slotIndex}&pick=${i}`,
+      displayText: `เลือกรุ่น ${c.model}`
+    };
+  });
+
+  const messages: any[] = [
+    createListFlexMessage(
+      '📦 เลือกรุ่นสินค้าที่ถูกต้อง',
+      `พบหลายรุ่นใกล้เคียงกับ "${query}" ครับ กรุณากดเลือกรุ่นที่ถูกต้องด้านล่างนี้ 👇`,
+      options
+    )
+  ];
+
+  const liffProductSearchId = process.env.LIFF_PRODUCT_SEARCH_ID || process.env.LIFF_QUOTE_ID || '';
+  if (liffProductSearchId) {
+    let searchLiffUrl = `https://liff.line.me/${liffProductSearchId}?userId=${userId}`;
+    if (query) searchLiffUrl += `&q=${encodeURIComponent(query)}`;
+    messages.push({
+      type: 'flex',
+      altText: 'ค้นหาสินค้าเพิ่มเติม',
+      contents: {
+        type: 'bubble',
+        size: 'kilo',
+        body: {
+          type: 'box',
+          layout: 'vertical',
+          spacing: 'sm',
+          paddingAll: '12px',
+          contents: [
+            {
+              type: 'text',
+              text: 'ไม่มีรุ่นที่ต้องการ?',
+              size: 'sm',
+              color: '#6B7280',
+              wrap: true
+            },
+            {
+              type: 'button',
+              action: {
+                type: 'uri',
+                label: '🔎 ค้นหาสินค้าเพิ่มเติม',
+                uri: searchLiffUrl
+              },
+              style: 'primary',
+              color: '#2563EB',
+              height: 'sm'
+            }
+          ]
+        }
+      }
+    });
+  }
+  return messages;
+}
+
 export async function handleImage(event: any): Promise<any> {
   try {
     return await lineClient.replyMessage({
@@ -212,7 +308,7 @@ export async function handleEvent(event: any): Promise<any> {
       if (action === 'cancel_pending') {
         await pool.query(
           "DELETE FROM quotations WHERE user_id = $1 AND status = ANY($2)",
-          [userId, ['pending_company', 'pending_contact', 'draft']]
+          [userId, ['pending_company', 'pending_contact', 'pending_product', 'draft']]
         );
 
         // บันทึกลง messages เพื่อเคลียร์ประวัติในบอท
@@ -632,6 +728,91 @@ export async function handleEvent(event: any): Promise<any> {
           replyToken: event.replyToken,
           messages: summary.messages as any
         });
+      }
+      if (action === 'select_product') {
+        const slotIdx = parseInt(params.get('slot') || '-1', 10);
+        const pick = parseInt(params.get('pick') || '-1', 10);
+
+        // โหลด context ที่ค้างไว้ (pending_product) ของเซลส์คนนี้
+        let pending: any = null;
+        try {
+          const res = await pool.query(
+            "SELECT * FROM quotations WHERE user_id = $1 AND status = 'pending_product' ORDER BY created_at DESC LIMIT 1",
+            [userId]
+          );
+          pending = res.rows[0] || null;
+        } catch (err) {
+          console.error('[select_product] load pending error:', err);
+        }
+        if (!pending) {
+          return lineClient.replyMessage({
+            replyToken: event.replyToken,
+            messages: [{ type: 'text', text: '❌ เซสชันหมดอายุหรือไม่มีรายการที่รอเลือกรุ่น รบกวนพิมพ์คำสั่งเสนอราคาใหม่อีกครั้งครับ' }]
+          });
+        }
+
+        const slots: any[] = Array.isArray(pending.item_details) ? pending.item_details : [];
+        const billCtx: any = pending.customer_details || {};
+        const slot = slots[slotIdx];
+
+        if (!slot || slot.resolved || !Array.isArray(slot.candidates) || !slot.candidates[pick]) {
+          return lineClient.replyMessage({
+            replyToken: event.replyToken,
+            messages: [{ type: 'text', text: '❌ ตัวเลือกไม่ถูกต้องหรือหมดอายุ รบกวนลองใหม่อีกครั้งครับ' }]
+          });
+        }
+
+        // resolve รุ่นที่กดเลือก → คำนวณราคา/ส่วนลดด้วยตรรกะเดียวกับตอนสกัดครั้งแรก (buildResolvedItem)
+        const chosen = slot.candidates[pick];
+        const { itemForDb } = buildResolvedItem(chosen, slot.item, billCtx);
+        slots[slotIdx] = { resolved: true, itemForDb };
+
+        const nextIdx = slots.findIndex((s: any) => !s.resolved && Array.isArray(s.candidates) && s.candidates.length > 0);
+        if (nextIdx !== -1) {
+          // ยังมีรุ่นกำกวมเหลือ → อัปเดต state แล้วโชว์ปุ่มของตัวถัดไป
+          try {
+            await pool.query(
+              "UPDATE quotations SET item_details = $1, updated_at = NOW() WHERE id = $2",
+              [JSON.stringify(slots), pending.id]
+            );
+          } catch (err) {
+            console.error('[select_product] update pending error:', err);
+          }
+          return lineClient.replyMessage({
+            replyToken: event.replyToken,
+            messages: buildProductSelectionMessages(slots[nextIdx], nextIdx, userId) as any
+          });
+        }
+
+        // ครบทุกรุ่นแล้ว → เคลียร์ pending_product แล้วเดินหน้าออกใบเสนอราคาต่อ (เหมือน flow QUOTATION ปกติ)
+        try {
+          await pool.query("DELETE FROM quotations WHERE id = $1", [pending.id]);
+        } catch (err) {
+          console.error('[select_product] delete pending error:', err);
+        }
+
+        const itemsForDb = slots.map((s: any) => s.itemForDb).filter(Boolean);
+        const result = await processQuotationRequest(
+          userId,
+          billCtx.customer_query,
+          billCtx.contact_query,
+          itemsForDb,
+          salesperson
+        );
+
+        if (result.success) {
+          const summary = await getQuotationSummaryMessage(result.quotes);
+          return lineClient.replyMessage({
+            replyToken: event.replyToken,
+            messages: summary.messages as any
+          });
+        }
+        if (result.type === 'flex') {
+          return lineClient.replyMessage({ replyToken: event.replyToken, messages: [result] });
+        }
+        const productMsgs: any[] = [{ type: 'text', text: result.text }];
+        if (result.quickReply) productMsgs[0].quickReply = result.quickReply;
+        return lineClient.replyMessage({ replyToken: event.replyToken, messages: productMsgs });
       }
       return;
     }
@@ -1334,39 +1515,12 @@ export async function handleEvent(event: any): Promise<any> {
         });
         const productResults = await Promise.all(productPromises);
 
+        // slots = สถานะการ resolve ต่อรายการ (ตามลำดับเดิม): resolved | กำกวม(มี candidate ให้กดเลือก) | พิมพ์ผิด(ไม่มี candidate)
+        const slots: any[] = [];
         for (let i = 0; i < productResults.length; i++) {
           const { item, result } = productResults[i];
-          const requestedQty = Number(item.quantity) || 1;
           if (result.found && result.product) {
-            const dbProduct = result.product;
-            const hasCustomPrice = (item.price !== undefined && item.price !== null && Number(item.price) > 0);
-            let price = hasCustomPrice
-               ? Number(item.price)
-               : (Number(dbProduct.sales_price) || 0);
-            const stock = Number(dbProduct.actual_quantity) || 0;
-            
-            const isNetDiscount = !!item.discount_is_net || !!quoteData.discount_is_net;
-
-            let disc1 = hasCustomPrice
-               ? 0
-               : (item.discount_1 !== undefined && item.discount_1 !== null && Number(item.discount_1) > 0)
-                  ? Number(item.discount_1)
-                  : (Number(quoteData.discount_1) || 0);
-            let disc2 = hasCustomPrice
-               ? 0
-               : (item.discount_1 !== undefined && item.discount_1 !== null && Number(item.discount_1) > 0)
-                  ? (Number(item.discount_2) || 0)
-                  : (Number(quoteData.discount_2) || 0);
-
-            if (isNetDiscount) {
-              price = price * (1 - disc1 / 100) * (1 - disc2 / 100);
-              price = Math.round(price * 100) / 100;
-              disc1 = 0;
-              disc2 = 0;
-            }
-
-            const discountedPrice = price * (1 - disc1 / 100) * (1 - disc2 / 100);
-            const itemTotal = requestedQty * discountedPrice;
+            const { itemForDb, itemTotal, price, disc1, disc2 } = buildResolvedItem(result.product, item, quoteData);
             totalSum += itemTotal;
             let discDesc = '';
             if (disc1 > 0 && disc2 > 0) {
@@ -1374,29 +1528,53 @@ export async function handleEvent(event: any): Promise<any> {
             } else if (disc1 > 0) {
               discDesc = ` (ลด ${disc1}%)`;
             }
-            successReport += `${i + 1}. [${dbProduct.model}]: ${requestedQty} x ${price.toLocaleString()}${discDesc} = ${itemTotal.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 })} บาท\n`;
-            itemsForDb.push({
-              product_id: dbProduct.product_template_id,
-              product_code: dbProduct.model,
-              model: dbProduct.model,
-              name: dbProduct.name,
-              brand: dbProduct.brand || '',
-              series: dbProduct.series || '',
-              quantity: requestedQty,
-              price: price,
-              discount_1: disc1,
-              discount_2: disc2,
-              production: dbProduct.production || ''
-            });
-
+            successReport += `${i + 1}. [${itemForDb.model}]: ${itemForDb.quantity} x ${price.toLocaleString()}${discDesc} = ${itemTotal.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 })} บาท\n`;
+            itemsForDb.push(itemForDb);
+            slots.push({ resolved: true, itemForDb });
           } else {
             isAllValid = false;
             hasNotFoundIssue = true;
             itemReports += result.report;
             issueCount++;
+            // เก็บ candidate (ถ้ามี) ไว้ทำปุ่มกดเลือก — เฉพาะรุ่นกำกวมที่ระบบเจอตัวใกล้เคียง (ตัวพิมพ์ผิดจะไม่มี candidate)
+            const cands = (result.candidates || []).slice(0, 5).map((c: any) => ({
+              model: c.model,
+              sales_price: c.sales_price,
+              actual_quantity: c.actual_quantity,
+              product_template_id: c.product_template_id,
+              name: c.name,
+              brand: c.brand,
+              series: c.series,
+              production: c.production
+            }));
+            slots.push({ resolved: false, item, candidates: cands });
           }
         }
-        if (!isAllValid) {
+
+        const ambiguousSlots = slots.filter((s: any) => !s.resolved && s.candidates && s.candidates.length > 0);
+        const hasHardNotFound = slots.some((s: any) => !s.resolved && (!s.candidates || s.candidates.length === 0));
+
+        if (!isAllValid && ambiguousSlots.length > 0 && !hasHardNotFound) {
+          // ── ปุ่มเลือกรุ่น: รุ่นที่ไม่พบทั้งหมดเป็นแบบ "กำกวมมี candidate" → เก็บ context ค้าง (pending_product) แล้วให้กดเลือก ──
+          const billCtx = {
+            customer_query: quoteData.customer_query ?? null,
+            contact_query: quoteData.contact_query ?? null,
+            discount_1: Number(quoteData.discount_1) || 0,
+            discount_2: Number(quoteData.discount_2) || 0,
+            discount_is_net: !!quoteData.discount_is_net
+          };
+          try {
+            await pool.query(
+              "INSERT INTO quotations (user_id, status, customer_details, item_details) VALUES ($1, 'pending_product', $2, $3)",
+              [userId, JSON.stringify(billCtx), JSON.stringify(slots)]
+            );
+          } catch (err) {
+            console.error('[quotation] insert pending_product error:', err);
+          }
+          const firstIdx = slots.findIndex((s: any) => !s.resolved && s.candidates && s.candidates.length > 0);
+          customMessages = buildProductSelectionMessages(slots[firstIdx], firstIdx, userId);
+          botReplyText = `พบหลายรุ่นใกล้เคียง กรุณากดเลือกรุ่นที่ถูกต้อง`;
+        } else if (!isAllValid) {
           let headerText = '❌ ยังไม่สามารถออกใบเสนอราคาได้\n';
           if (hasNotFoundIssue) {
             headerText += `พบรุ่นที่ไม่ชัดเจน ${issueCount} รายการ \n\nกรุณาพิมพ์ชื่อรุ่นที่ถูกต้องอีกครั้งนะครับ\n\n`;

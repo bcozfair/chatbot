@@ -288,6 +288,34 @@ export async function searchCustomersNormalized(variants: string[]): Promise<any
  * ให้ evidence boost ขั้นถัดไปเป็นคนชี้ตัวจริงเป็น 0.0), ที่เหลือไล่ตาม best_signal → 0.02..0.33
  * มีแค่ตัวที่ evidence ชี้ขาด/AI ยืนยัน เท่านั้นที่ได้ 0.0 แล้วผ่าน auto-select gate (top<=0.05, gap>0.05)
  */
+/**
+ * คะแนนที่ให้ candidate ที่ "ตรงแค่ชื่อ" เมื่อมีตัวอื่นที่ "ตรงทั้งชื่อและผู้ติดต่อ"
+ * ต้อง > 0.05 เพื่อให้ gap จากตัวชนะ (0.0) ผ่าน auto-select gate ที่ processQuotationRequest
+ * (quotationService: topScore <= 0.05 && secondScore - topScore > 0.05)
+ */
+const NAME_ONLY_DEMOTED_SCORE = 0.06;
+
+/** น้ำหนักหลักฐานตอนคะแนนเท่ากัน: ชื่อตรงเป๊ะทั้งบรรทัด > ผู้ติดต่อตรง > ชื่อตรงแบบ normalize */
+const evidenceWeight = (c: any) =>
+  (c.evidence?.isExactRaw ? 4 : 0) +
+  ((c.evidence?.matchedContacts?.length ?? 0) > 0 ? 2 : 0) +
+  (c.evidence?.isExactNorm ? 1 : 0);
+
+/**
+ * เรียง candidate: score ต่ำก่อน → หลักฐานแข็งกว่า → ความคล้ายของชื่อ (sim) สูงกว่า
+ *
+ * sim เป็นตัวตัดสินท้ายสุด สำหรับกรณีที่ boost ตรึงหลายตัวไว้ที่คะแนนเดียวกัน เช่น query "เอส.วี.เอส"
+ * ทำให้ทั้ง "เอส.วี.เอส.การไฟฟ้า" (sim 41%) และ "เอส.วี.เอส. เอนจิเนียริ่ง" (sim 32%) ได้ 0.01 เท่ากัน
+ * จาก boost "ชื่อมีคำค้นอยู่ข้างใน" — ตัวที่ sim สูงกว่าคือตัวที่ใกล้เคียงคำค้นจริงมากกว่า
+ *
+ * ปลอดภัยต่อ auto-select: คะแนนเท่ากัน = gap 0 ซึ่งไม่ผ่าน gate (ต้อง > 0.05) อยู่แล้ว
+ * การเรียงนี้จึงมีผลแค่ลำดับที่ผู้ใช้/AI เห็น ไม่ทำให้ระบบเลือกอัตโนมัติผิด
+ */
+const compareCandidates = (a: any, b: any) =>
+  ((a.score ?? 0) - (b.score ?? 0)) ||
+  (evidenceWeight(b) - evidenceWeight(a)) ||
+  ((b.evidence?.sim ?? 0) - (a.evidence?.sim ?? 0));
+
 function normRowScore(row: any): number {
   if (row.has_exact) return 0.005;
   const signal = Math.min(Math.max(Number(row.best_signal) || 0, 0), 0.99);
@@ -376,6 +404,107 @@ function buildDotInitialVariants(rawText: string): string[] {
 }
 
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Reference-code extraction
+// เดิม regex หลวมมาก (ยอมรับเลขล้วน 3-8 หลักทุกที่ในข้อความ) → บ้านเลขที่ / รหัสไปรษณีย์ /
+// เลขสาขา / แรงดันไฟ ถูกจับเป็น "รหัสลูกค้า" หมด แล้ว fast-path ยิง ILIKE '%600%' '%220%'
+// ไปโดนบริษัทมั่ว 30 ตัว (เคสจริง: TPCS — ดูคอมเมนต์ที่ fast-path guard ด้านล่าง)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** บรรทัดที่มีคำบ่งชี้ที่อยู่ไทย → เลขในบรรทัดนี้คือบ้านเลขที่/ไปรษณีย์ ไม่ใช่รหัสลูกค้า */
+const ADDRESS_HINT_RE = /(?:^|\s)(?:ถ\.|ต\.|อ\.|จ\.|ซ\.|ม\.|หมู่|ตำบล|อำเภอ|จังหวัด|ถนน|แขวง|เขต|ซอย)/;
+/** บรรทัดที่เป็นคำว่า "สาขา"/"สาขาที่ N" ล้วนๆ → บรรทัดถัดไปที่เป็นเลขคือเลขสาขา */
+const BRANCH_ONLY_LINE_RE = /^สาขา(?:ที่)?\s*\d*$/;
+
+/** คำบ่งชี้ที่อยู่แบบเต็มคำ — เจอคำเดียวก็ชัดว่าเป็นบรรทัดที่อยู่ */
+const ADDRESS_WORD_RE = /(?:หมู่บ้าน|หมู่ที่|ตำบล|อำเภอ|จังหวัด|ถนน|แขวง|เขต|ซอย|จ\.ม\.|รหัสไปรษณีย์)/;
+/** ตัวย่อที่อยู่ — กำกวมกับตัวย่อชื่อบริษัท (เช่น หจก. "ต.อิเล็คทริค") จึงต้องเจอ ≥2 ตัวถึงจะฟันธง */
+const ADDRESS_ABBR_RE = /(?:^|\s)(?:ถ|ต|อ|จ|ซ|ม)\./g;
+/** หน่วยนับ/คำที่ไม่ใช่ชื่อบริษัทแน่ๆ */
+const UNIT_WORDS = new Set(['pcs', 'pc', 'set', 'sets', 'ea', 'unit', 'units', 'อัน', 'ชิ้น', 'ตัว', 'ชุด', 'เส้น']);
+
+/**
+ * บรรทัดนี้ "มีโอกาสเป็นชื่อบริษัท" ไหม — ใช้กรองก่อนเอาไปค้นด้วยชื่อ
+ * เดิมโยนทุกบรรทัดเข้า Fuse.js รวมบรรทัดที่อยู่/เบอร์/อีเมล/สเปคสินค้า/"2"/"Pcs"
+ * → Fuse match มั่วแล้วแจก score ต่ำผิดปกติ (0.0028) ชนะสาขาจริงของบริษัทที่ถูก (0.005)
+ * ทำให้ gap แคบจน auto-select ไม่ทำงาน และลิสต์ให้เซลส์เลือกมีขยะปน
+ */
+export function isLikelyCompanyNameLine(rawLine: string): boolean {
+  const line = (rawLine || '').trim();
+  if (!line) return false;
+
+  if (line.includes('@')) return false;                       // อีเมล
+  if (/ผู้เสียภาษี|\d{13}/.test(line)) return false;             // เลขผู้เสียภาษี
+  // เบอร์ติดต่อ — ต้องมีตัวเลขตามหลัง (\b ใช้กับอักษรไทยไม่ได้ เพราะไทยไม่ใช่ \w)
+  // และกันบริษัทที่ขึ้นต้นคล้ายกันอย่าง "โทรีไทย" ไม่ให้โดนตัด
+  if (/^(?:โทร|เบอร์|แฟกซ์|มือถือ|tel|mobile|fax|phone)[\s.:\-]*\d/i.test(line)) return false;
+  if (/^\d+[.)]\s/.test(line)) return false;                  // รายการสินค้า "1. FP-108-1 ..."
+  if (UNIT_WORDS.has(line.toLowerCase().replace(/[^a-zก-๙]/g, ''))) return false;
+
+  // ที่อยู่: คำเต็ม 1 คำ หรือ ตัวย่อ ≥2 ตัว (ตัวย่อตัวเดียวอาจเป็นชื่อบริษัท เช่น "ต.อิเล็คทริค")
+  if (ADDRESS_WORD_RE.test(line)) return false;
+  if ((line.match(ADDRESS_ABBR_RE) || []).length >= 2) return false;
+
+  // ต้องมีตัวอักษรจริงอย่างน้อย 2 ตัว — กัน "2", "00005", "-"
+  const letters = line.replace(/[^a-zA-Zก-๙]/g, '');
+  if (letters.length < 2) return false;
+
+  return true;
+}
+
+/**
+ * สกัดรหัสลูกค้าจากข้อความแชท — รับเฉพาะรหัสที่ "แข็งแรงพอ" เท่านั้น
+ * รับ:   A022914, A/35871, A011030(2), และเลขล้วน ≥5 หลักที่ยืนเดี่ยวเป็น token
+ * ไม่รับ: เลขในบรรทัดที่อยู่, เลขสาขาที่ตามหลังคำว่า "สาขา", เลขผู้เสียภาษี 13 หลัก,
+ *        แรงดันไฟ (เลขตามด้วย V), เลขล้วน <5 หลัก
+ */
+export function extractReferenceCodes(rawLines: string[]): string[] {
+  const referenceCodes = new Set<string>();
+  // ต้องมีตัวอักษรนำหน้าเสมอ เช่น A022914 / A-35871 / A/35871
+  const strongRefRe = /\b[A-Z][\/-]?\d{3,8}(?:\(\d+\))?(?![a-zA-Z0-9])/gi;
+  // token เลขล้วนที่ยืนเดี่ยว (เซลส์บางคนพิมพ์เฉพาะตัวเลขของรหัส)
+  const bareNumRe = /^\d{5,8}(?:\(\d+\))?$/;
+
+  const add = (raw: string) => {
+    // "A011030(2)" = รหัส A011030 สาขา 2 — ต้องตัดวงเล็บทิ้ง ไม่ใช่ยุบเป็น "A0110302"
+    const base = raw.replace(/\(\d+\)\s*$/, '').trim();
+    const normRef = base.replace(/[\/\s-]/g, '').trim();
+    const numOnly = base.replace(/[^0-9]/g, '');
+    referenceCodes.add(raw);
+    referenceCodes.add(base);
+    referenceCodes.add(normRef);
+    // numOnly ต้อง ≥5 หลัก — เลขสั้นกว่านั้น ILIKE แล้วชนมั่วทั้งตาราง
+    if (numOnly.length >= 5) referenceCodes.add(numOnly);
+  };
+
+  let prevLineEndsWithBranchKw = false;
+  for (const rawLine of rawLines) {
+    const line = rawLine.trim();
+    const isBranchNumberLine = prevLineEndsWithBranchKw && /^\d{1,6}$/.test(line);
+    prevLineEndsWithBranchKw = /สาขา\s*$/.test(line) || BRANCH_ONLY_LINE_RE.test(line);
+
+    // ข้ามบรรทัดที่อยู่ และบรรทัดเลขสาขา
+    if (ADDRESS_HINT_RE.test(line) || isBranchNumberLine) continue;
+
+    // ตัดสิ่งที่ "ไม่มีวันเป็นรหัสลูกค้า" ออกก่อน match
+    // (รหัสไปรษณีย์ไม่ต้องตัดตรงนี้ — อยู่ในบรรทัดที่อยู่ซึ่งถูกข้ามไปแล้ว
+    //  และถ้าตัดเลข 5 หลักท้ายบรรทัดจะไปกินเคสเซลส์พิมพ์รหัสเลขล้วนมาบรรทัดเดียว)
+    const cleaned = line
+      .replace(/\d{13}/g, ' ')        // เลขผู้เสียภาษี
+      .replace(/\d+\s*V\b/gi, ' ');   // แรงดันไฟ เช่น "220 V."
+
+    const matches = cleaned.match(strongRefRe);
+    if (matches) for (const m of matches) add(m);
+
+    for (const word of cleaned.split(/\s+/).map(w => w.trim()).filter(Boolean)) {
+      if (bareNumRe.test(word)) add(word);
+    }
+  }
+
+  return Array.from(referenceCodes).filter(Boolean);
+}
+
+
 export async function findCustomerCandidates(customerQuery: string, salesperson: any, contactQuery?: string): Promise<any[]> {
   if (!customerQuery) return [];
 
@@ -383,89 +512,100 @@ export async function findCustomerCandidates(customerQuery: string, salesperson:
   const rawLines = customerQuery.split('\n').map(l => l.trim()).filter(Boolean);
   if (rawLines.length === 0) return [];
 
-  const referenceCodes = new Set<string>();
-  const refRegex = /\b[A-Z][\/-]?\d{3,8}(?:\(\d+\))?(?![a-zA-Z0-9])/gi;
+  // เฉพาะบรรทัดที่มีโอกาสเป็นชื่อบริษัท — บรรทัดที่อยู่/เบอร์/อีเมล/สเปคสินค้า/"2"/"Pcs"
+  // เคยหลุดเข้า Fuse.js แล้วแจก score ต่ำผิดปกติให้บริษัทที่ไม่เกี่ยวเลย
+  const nameSearchLines = rawLines.filter(isLikelyCompanyNameLine);
 
-  for (const line of rawLines) {
-    // Extract reference codes (e.g. A022914 or A011030(2) or A/35871)
-    const matches = line.match(refRegex);
-    if (matches) {
-      for (const match of matches) {
-        const cleanRef = match.replace(/[()]/g, '').trim();
-        const normRef = cleanRef.replace(/[\/\s-]/g, '').trim();
-        const numOnly = cleanRef.replace(/[^0-9]/g, '').trim();
-
-        referenceCodes.add(match);
-        referenceCodes.add(cleanRef);
-        referenceCodes.add(normRef);
-        if (numOnly.length >= 3) {
-          referenceCodes.add(numOnly);
-        }
-      }
-    }
-
-    // Split by whitespace to check individual words for reference codes
-    const words = line.split(/\s+/).map(w => w.trim()).filter(Boolean);
-    for (const word of words) {
-      if (word.match(/^[A-Z]?[\/-]?\d{3,8}(?:\(\d+\))?$/i)) {
-        const cleanRef = word.replace(/[()]/g, '').trim();
-        const normRef = cleanRef.replace(/[\/\s-]/g, '').trim();
-        const numOnly = cleanRef.replace(/[^0-9]/g, '').trim();
-
-        referenceCodes.add(word);
-        referenceCodes.add(cleanRef);
-        referenceCodes.add(normRef);
-        if (numOnly.length >= 3) {
-          referenceCodes.add(numOnly);
-        }
-      }
-    }
-  }
+  const refArray = extractReferenceCodes(rawLines);
 
   // --- Step A: ถ้ารู้รหัส Reference ลองค้นจากรหัสก่อนเป็นอันดับแรก (Fast-path) ---
-  if (referenceCodes.size > 0) {
-    const refArray = Array.from(referenceCodes).filter(Boolean);
+  if (refArray.length > 0) {
+    console.log('[findCustomerCandidates] extracted reference codes:', refArray);
     const refData = await searchCustomersByReferencePatterns(refArray, 30);
 
     if (refData && refData.length > 0) {
-      console.log(`[findCustomerCandidates] Found ${refData.length} candidates by reference codes (Fast-path)!`);
-      
-      const candidates = refData.map((c: any) => {
-        const refLower = c.reference ? c.reference.toLowerCase().trim() : '';
-        const refClean = refLower.replace(/[^a-z0-9]/g, '');
-        
-        let score = 0.5; // คะแนนเริ่มต้นสำหรับ match
-        
-        // เช็คว่าตรงเป๊ะในชุด normalized refs หรือไม่
-        const isExact = refArray.some(r => {
-          const cleanInput = r.toLowerCase().replace(/[^a-z0-9]/g, '');
-          return cleanInput === refClean;
+      // ═══ Fast-path guard: รหัสที่สกัดได้ต้องสอดคล้องกับ "ชื่อ" ที่เซลส์พิมพ์ด้วย ═══
+      // เคสจริงที่พลาด (TPCS): ข้อความมีเลขสาขา/ที่อยู่/แรงดันไฟ → ref match บริษัทมั่ว 30 ตัว
+      // คะแนนเท่ากันหมด 0.1 แล้ว return ทันที — ไม่เคยค้นชื่อ "ทีพีซีเอส" และไม่เคยเรียก AI เลย
+      // ถ้าไม่มี candidate ตัวไหนชื่อพ้องกับที่เซลส์พิมพ์ → ถือว่ารหัสที่สกัดมาเป็นขยะ ตกไปใช้ flow ชื่อ+AI
+      // รหัสตรงเป๊ะ = หลักฐานชี้ขาด ข้ามการเช็คชื่อไปเลย
+      // (เซลส์มักพิมพ์ชื่อย่อที่ไม่ตรงกับชื่อเต็มใน DB เช่น "บ.ถิรเดช" ↔ "ถิรเดช โอภาสวัฒนกุล")
+      const refMatchesExactly = (c: any) => {
+        const refClean = (c.reference || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (!refClean) return false;
+        return refArray.some(r => r.toLowerCase().replace(/[^a-z0-9]/g, '') === refClean);
+      };
+
+      // เทียบระดับ "คำ" ไม่ใช่ทั้งก้อน — "บ.ถิรเดช" กับ "ถิรเดช โอภาสวัฒนกุล" ไม่มีฝั่งไหนครอบอีกฝั่ง
+      // แต่แชร์คำว่า "ถิรเดช" ซึ่งคือตัวชี้ว่าเป็นบริษัทเดียวกัน
+      const queryTokens = new Set(
+        nameSearchLines.flatMap(l =>
+          cleanCompanyName(stripPhoneNumbers(l))
+            .split(/\s+/)
+            .filter(w => w.length >= 3 && !STOP_WORDS.has(w.toLowerCase()))
+            .map(w => normalizeCompanyNameTS(w))
+            .filter(w => w.length >= 3)));
+
+      const nameAgrees = (displayName: string) => {
+        const dn = normalizeCompanyNameTS(displayName);
+        if (!dn) return false;
+        for (const t of queryTokens) if (dn.includes(t)) return true;
+        return false;
+      };
+
+      // เซลส์พิมพ์ชื่อบริษัทมาด้วย → ref match ต้องสอดคล้องกับชื่อ (หรือรหัสตรงเป๊ะ)
+      // เซลส์พิมพ์มาแต่รหัสล้วน (ไม่มีชื่อให้เทียบ) → เชื่อรหัสได้ตามเดิม
+      const agreeing = queryTokens.size > 0
+        ? refData.filter((c: any) => refMatchesExactly(c) || nameAgrees(c.display_name))
+        : refData;
+
+      if (agreeing.length === 0) {
+        console.log(`[findCustomerCandidates] ⚠️ Fast-path ทิ้ง ${refData.length} ผลลัพธ์: ไม่มีตัวไหนชื่อตรงกับที่เซลส์พิมพ์ → ใช้ flow ค้นด้วยชื่อ + AI แทน`);
+      } else {
+        console.log(`[findCustomerCandidates] Found ${agreeing.length}/${refData.length} candidates by reference codes (Fast-path, ชื่อสอดคล้อง)!`);
+
+        const candidates = agreeing.map((c: any) => {
+          const refLower = c.reference ? c.reference.toLowerCase().trim() : '';
+          const refClean = refLower.replace(/[^a-z0-9]/g, '');
+
+          let score = 0.5; // คะแนนเริ่มต้นสำหรับ match
+
+          // เช็คว่าตรงเป๊ะในชุด normalized refs หรือไม่
+          const isExact = refArray.some(r => {
+            const cleanInput = r.toLowerCase().replace(/[^a-z0-9]/g, '');
+            return cleanInput === refClean;
+          });
+
+          if (isExact) {
+            score = 0.0; // ตรงเป๊ะ
+          } else {
+            // fuzzy (สาขา/เลขท้ายห้อย) ยอมเฉพาะรหัสที่จำเพาะพอ — มีตัวอักษรนำ หรือยาว ≥6
+            // เลขสั้นๆ substring แล้วชนมั่วข้ามบริษัท
+            const isFuzzy = refArray.some(r => {
+              const cleanInput = r.toLowerCase().replace(/[^a-z0-9]/g, '');
+              if (!cleanInput) return false;
+              const specific = /[a-z]/.test(cleanInput) || cleanInput.length >= 6;
+              if (!specific) return false;
+              return refClean.includes(cleanInput) || cleanInput.includes(refClean);
+            });
+            if (isFuzzy) {
+              score = 0.1; // เป็นสาขา หรือมีเลขท้ายห้อย
+            }
+          }
+
+          return {
+            item: {
+              ...c,
+              cleanName: cleanCompanyName(c.display_name)
+            },
+            score
+          };
         });
 
-        if (isExact) {
-          score = 0.0; // ตรงเป๊ะ
-        } else {
-          const isFuzzy = refArray.some(r => {
-            const cleanInput = r.toLowerCase().replace(/[^a-z0-9]/g, '');
-            return refClean.includes(cleanInput) || cleanInput.includes(refClean);
-          });
-          if (isFuzzy) {
-            score = 0.1; // เป็นสาขา หรือมีเลขท้ายห้อย
-          }
-        }
-
-        return {
-          item: {
-            ...c,
-            cleanName: cleanCompanyName(c.display_name)
-          },
-          score
-        };
-      });
-
-      candidates.sort((a: any, b: any) => a.score - b.score);
-      console.log('[findCustomerCandidates] Fast-path by Reference results:', candidates.map((r: any) => `${r.item.display_name} (score: ${r.score})`));
-      return candidates;
+        candidates.sort((a: any, b: any) => a.score - b.score);
+        console.log('[findCustomerCandidates] Fast-path by Reference results:', candidates.map((r: any) => `${r.item.display_name} (score: ${r.score})`));
+        return candidates;
+      }
     }
   }
 
@@ -484,8 +624,9 @@ export async function findCustomerCandidates(customerQuery: string, salesperson:
   if (!isNewSearchDisabled()) {
     // ใช้เฉพาะส่วนบริษัทเป็น variant ค้นหา (ถ้า split ไม่เกิด customerLines[i] = ทั้งบรรทัดอยู่แล้ว) —
     // บรรทัดที่มี "คุณY" ปนจะสร้าง match ขยะจนเบียดตัวจริงหลุด limit
+    // กรองบรรทัดที่ไม่มีทางเป็นชื่อบริษัท (ที่อยู่/เบอร์/อีเมล/สเปคสินค้า) ออกก่อนค้น
     const initialVariants: string[] = [];
-    for (const line of customerLines) {
+    for (const line of customerLines.filter(isLikelyCompanyNameLine)) {
       const noPhone = stripPhoneNumbers(line);
       initialVariants.push(line, noPhone, cleanCompanyName(noPhone));
       initialVariants.push(...buildDotInitialVariants(noPhone));
@@ -568,7 +709,7 @@ export async function findCustomerCandidates(customerQuery: string, salesperson:
     }
   }
 
-  for (const line of rawLines) {
+  for (const line of nameSearchLines) {
     const cleanLine = cleanCompanyName(line);
     if (cleanLine) {
       cleanedLines.push(cleanLine);
@@ -788,7 +929,25 @@ export async function findCustomerCandidates(customerQuery: string, salesperson:
       // contact ชี้ขาดได้แม้มี record ชื่อซ้ำหลายตัว (เช่น ย่งฮง 2 แถว — ผู้ติดต่ออยู่แถวเดียว)
       exactContacts[0].score = 0.0;
     }
-    finalCandidates.sort((a, b) => (a.score ?? 0) - (b.score ?? 0));
+
+    // ═══ "ชื่อตรง + ผู้ติดต่อตรง" ต้องชนะ "ชื่อตรงอย่างเดียว" ═══
+    // record ชื่อซ้ำ (บริษัทเดียวกันหลายสาขา เช่น TPCS 3 สาขา) ได้ 0.0 พร้อมกันจาก cleanName-exact
+    // การ boost ตัวที่ผู้ติดต่อตรงเป็น 0.0 จึงไม่มีผล — คะแนนเสมอกัน ไม่มีใครชนะ
+    // ต้องถ่างคู่แข่งที่ "ตรงแค่ชื่อ" ออกไปให้เกิน auto-select gap ด้วย หลักฐาน 2 ชั้นจึงจะชี้ขาดได้จริง
+    const nameAndContact = finalCandidates.filter(c =>
+      c.evidence.isExact && c.evidence.matchedContacts.length > 0);
+    if (nameAndContact.length === 1) {
+      const winner = nameAndContact[0];
+      winner.score = 0.0;
+      for (const c of finalCandidates) {
+        if (c === winner) continue;
+        // ไม่ถ่างตัวที่หลักฐานแข็งพอกัน: มีผู้ติดต่อตรงด้วย หรือชื่อตรงเป๊ะทั้งบรรทัด (แข็งกว่า norm-exact)
+        if (c.evidence.matchedContacts.length > 0 || c.evidence.isExactRaw) continue;
+        if ((c.score ?? 1) < NAME_ONLY_DEMOTED_SCORE) c.score = NAME_ONLY_DEMOTED_SCORE;
+      }
+      console.log(`[findCustomerCandidates] ✅ ชื่อ+ผู้ติดต่อตรงตัวเดียว: "${winner.item.display_name}" → ถ่างคู่แข่งที่ตรงแค่ชื่อ`);
+    }
+    finalCandidates.sort(compareCandidates);
 
     // ═══ คัดกรองรายชื่อ: ตัดตัวที่สัญญาณต่ำและไม่มี evidence อื่นเลย ═══
     const curated = finalCandidates.filter(c =>
@@ -901,12 +1060,8 @@ ${evidenceLines}
   // (deterministic evidence boost ทำไปแล้วก่อน slice — ที่นี่ไม่ต้อง fallback ซ้ำ)
 
   // Sort สุดท้าย: score ต่ำก่อน; คะแนนเท่ากัน (เช่น record ชื่อซ้ำได้ 0.0 คู่กัน) ให้ตัวที่หลักฐานแข็งกว่าขึ้นก่อน
-  const evidenceWeight = (c: any) =>
-    (c.evidence?.isExactRaw ? 4 : 0) +
-    ((c.evidence?.matchedContacts?.length ?? 0) > 0 ? 2 : 0) +
-    (c.evidence?.isExactNorm ? 1 : 0);
-  finalCandidates.sort((a, b) =>
-    ((a.score ?? 0) - (b.score ?? 0)) || (evidenceWeight(b) - evidenceWeight(a)));
+  // แล้วตัดสินด้วย sim เป็นด่านสุดท้าย (ดูคอมเมนต์ที่ compareCandidates)
+  finalCandidates.sort(compareCandidates);
   console.log('[findCustomerCandidates] Final results after AI check:', finalCandidates.map(r => `${r.item.display_name} (score: ${r.score})`));
 
   return finalCandidates;
