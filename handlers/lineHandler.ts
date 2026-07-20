@@ -1510,10 +1510,35 @@ export async function handleEvent(event: any): Promise<any> {
         let issueCount = 0;
         const productPromises = quoteData.items.map(async (item: any) => {
           const codeRaw = String(item.model || item.product_code || '').trim();
-          const result = await findProduct(codeRaw);
+          // ส่งข้อความเต็มไปด้วย — เซลส์มักพิมพ์รหัสแตกหลายบรรทัด AI จะได้เห็นคำนำหน้ารุ่นที่อยู่บรรทัดอื่น
+          const result = await findProduct(codeRaw, content);
           return { item, result };
         });
         const productResults = await Promise.all(productPromises);
+
+        // ── ซ่อมเคสเซลส์พิมพ์รหัสสินค้าแตกเป็น 2 บรรทัด (เช่น "QH" + "50X800-550-3X220S-3000W-1") ──
+        // เงื่อนไขเข้มเพื่อกันรวมมั่ว: ตัวหน้าต้อง "หาไม่เจอและไม่มี candidate เลย" (= เศษรหัส ไม่ใช่สินค้าจริง)
+        // และรหัสที่ต่อกันแล้วต้อง match แบบ found เท่านั้น (ปกติจะเข้า stage1 exact → ไม่ต้องพึ่ง AI เดา)
+        for (let i = 0; i < productResults.length - 1; i++) {
+          const cur = productResults[i];
+          const next = productResults[i + 1];
+          if (!cur || !next) continue;
+          if (cur.result.found || (cur.result.candidates && cur.result.candidates.length > 0)) continue;
+
+          const curCode = String(cur.item.model || cur.item.product_code || '').trim();
+          const nextCode = String(next.item.model || next.item.product_code || '').trim();
+          if (!curCode || !nextCode) continue;
+
+          const mergedResult = await findProduct(`${curCode} ${nextCode}`, content);
+          if (!mergedResult.found || !mergedResult.product) continue;
+
+          console.log(`[quotation] รวมรหัสที่ถูกตัดบรรทัด: "${curCode}" + "${nextCode}" → "${mergedResult.product.model}"`);
+          // ใช้ item ของบรรทัดหลังเป็นฐาน (จำนวน/ราคา/ส่วนลดมักอยู่บรรทัดนั้น) แล้วยุบสองรายการเหลือรายการเดียว
+          productResults.splice(i, 2, {
+            item: { ...next.item, model: mergedResult.product.model },
+            result: mergedResult
+          });
+        }
 
         // slots = สถานะการ resolve ต่อรายการ (ตามลำดับเดิม): resolved | กำกวม(มี candidate ให้กดเลือก) | พิมพ์ผิด(ไม่มี candidate)
         const slots: any[] = [];
@@ -1662,7 +1687,7 @@ export async function handleEvent(event: any): Promise<any> {
         const queryModels = aiResult.product_query.models || aiResult.product_query.product_codes || [];
         let infoReport = "";
         const infoPromises = queryModels.map(async (codeRaw: any) => {
-          const result = await findProduct(codeRaw);
+          const result = await findProduct(codeRaw, content);
           return { codeRaw, result };
         });
         const infoResults = await Promise.all(infoPromises);

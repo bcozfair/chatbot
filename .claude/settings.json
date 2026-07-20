@@ -13,7 +13,11 @@
       "PowerShell(git stash push services/customerService.ts)",
       "PowerShell(git stash pop)",
       "PowerShell(npx tsx \"C:\\\\Users\\\\bcozf\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bcozf-Downloads-chatbot\\\\e635625c-bb3d-4574-81e5-f5946c65876a\\\\scratchpad\\\\verifyTpcsFlow.ts\" --no-ai 2>&1)",
-      "PowerShell(npx tsx \"C:\\\\Users\\\\bcozf\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bcozf-Downloads-chatbot\\\\e635625c-bb3d-4574-81e5-f5946c65876a\\\\scratchpad\\\\inspectKorat.ts\")"
+      "PowerShell(npx tsx \"C:\\\\Users\\\\bcozf\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bcozf-Downloads-chatbot\\\\e635625c-bb3d-4574-81e5-f5946c65876a\\\\scratchpad\\\\inspectKorat.ts\")",
+      "PowerShell(try { $r = Invoke-WebRequest -Uri \"http://localhost:3011/api/products/search?q=A\" -UseBasicParsing -TimeoutSec 8; \"UP: $\\($r.StatusCode\\)\" } catch { \"DOWN or error: $\\($_.Exception.Message\\)\" })",
+      "PowerShell(curl.exe -s -w \"`nHTTP_STATUS:%{http_code}`n\" -X POST \"http://localhost:3011/api/quotation/draft-cart\" -H \"Content-Type: application/json\" -d $body)",
+      "PowerShell($body = '{\"userId\":\"DEBUG_TEST_USER_ZZZ\",\"items\":[{\"product_code\":\"A-000014\",\"model\":\"A-000014\",\"name\":\"test\",\"price\":100,\"quantity\":1}]}')",
+      "PowerShell(npx tsx scripts/diag/probeDraftCart.ts)"
     ]
   }
 }

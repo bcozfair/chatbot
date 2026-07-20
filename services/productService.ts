@@ -67,6 +67,28 @@ function extractTextPart(qNorm: string): string {
 }
 
 // ─────────────────────────────────────────────
+//  Helper: text part สำหรับ "ส่งเข้า prompt ให้ AI ตัดสินใจ" เท่านั้น
+//  ต่างจาก extractTextPart ตรงที่คืน '' เมื่อเศษที่ได้ไม่มีความหมาย
+//  เช่น "50x800-550-3x220s-3000w-1" → extractTextPart ได้ "x--xs-w" (ขยะ — เกิดจากตัวอักษร
+//  เดี่ยว x/s/w ที่แทรกกลางตัวเลข ไม่ใช่ชื่อรุ่น) ถ้าส่งขยะนี้เข้า prompt กติกาข้อ 1
+//  ("ต้องเลือกเฉพาะตัวเลือกที่มี text part ไม่งั้นตอบ 0") จะบังคับให้ AI ตอบ 0
+//  ทั้งที่ตัวเลือกที่ถูกอยู่ตรงหน้า → เคยทำให้หาสินค้าไม่เจอแบบสุ่ม
+//  เกณฑ์ (วัดกับสินค้าจริง 50,752 รายการ): ถือว่ามี "ชื่อรุ่น" จริงเมื่อมี token ใด token หนึ่ง
+//    (ก) ขึ้นต้นด้วยตัวอักษร  — j2d, h100p, v-42, r0  (ตัวอักษรเดี่ยวก็สำคัญ! เช่น J2D-H10N vs J2D-S10P,
+//        ท้าย N/P = NPN/PNP คนละชนิดกัน — ห้ามปิด rule 1 ทิ้ง)
+//    (ข) มีตัวอักษรติดกัน ≥2 ตัวในก้อนเดียว — 4vprt35, 5gn50k, 30a/50mv
+//  ถ้าไม่เข้าทั้งสองข้อ แปลว่าตัวอักษรที่เจอเป็นแค่ "หน่วยที่ฝังในตัวเลข" (50x800, 3x220s, 3000w) = ขยะ
+//  เกณฑ์นี้ปิด rule 1 กับสินค้าเพียง 0.57% และเหลือความเสี่ยงหลวมแค่ 28 รายการ (0.055%)
+// ─────────────────────────────────────────────
+function promptTextPart(qNorm: string): string {
+  const L = '[a-z\\u0E00-\\u0E7F]';
+  const hasModelName = qNorm.split(/[-\/.+]/).some(t =>
+    new RegExp(`^${L}`).test(t) || new RegExp(`${L}{2,}`).test(t)
+  );
+  return hasModelName ? extractTextPart(qNorm) : '';
+}
+
+// ─────────────────────────────────────────────
 //  Helper: สกัด "key tokens" = ส่วนที่มีตัวเลขปนอยู่ (ตัวระบุรุ่นที่สำคัญจริง)
 //  แยก token ตาม separator ทุกชนิด (รวม space) เพื่อไม่ให้ token เชื่อมกันผิด
 //  เช่น "TIM-94N-AB-220"      → ["94n", "220"]
@@ -117,7 +139,7 @@ function keyTokenMismatchReason(raw: string, product: Product): string | null {
 // ─────────────────────────────────────────────
 //  Main findProduct
 // ─────────────────────────────────────────────
-export async function findProduct(codeRaw: any): Promise<FindProductResult> {
+export async function findProduct(codeRaw: any, chatContext?: string): Promise<FindProductResult> {
   const codeTrimmed = String(codeRaw || '').trim();
 
   if (!codeTrimmed) {
@@ -141,7 +163,7 @@ export async function findProduct(codeRaw: any): Promise<FindProductResult> {
   }
 
   // ── Stage 1.3: Multi-token AND Search (ค้นหาด้วย AND ทุกคำ) ──────────────
-  const stage13 = await multiTokenAndSearch(qNorm, codeTrimmed);
+  const stage13 = await multiTokenAndSearch(qNorm, codeTrimmed, chatContext);
   if (stage13.product) {
     return { found: true, product: stage13.product, candidates: [], report: '' };
   }
@@ -163,7 +185,7 @@ export async function findProduct(codeRaw: any): Promise<FindProductResult> {
   // ── Stage 1.5: Numeric code search (LIKE '%code%' ใน model+name) ─────────
   const numericCode = extractLongestNumber(codeTrimmed);
   if (numericCode) {
-    const stage15 = await numericCodeSearch(numericCode, qNorm, codeTrimmed);
+    const stage15 = await numericCodeSearch(numericCode, qNorm, codeTrimmed, chatContext);
     if (stage15) {
       return { found: true, product: stage15, candidates: [], report: '' };
     }
@@ -173,7 +195,7 @@ export async function findProduct(codeRaw: any): Promise<FindProductResult> {
   const textPart = extractTextPart(qNorm);
   if (numericCode && textPart && textPart.length >= 2) {
     try {
-      const stage17 = await splitPartFuzzySearch(numericCode, textPart, codeTrimmed);
+      const stage17 = await splitPartFuzzySearch(numericCode, textPart, codeTrimmed, chatContext);
       if (stage17) {
         return { found: true, product: stage17, candidates: [], report: '' };
       }
@@ -184,7 +206,7 @@ export async function findProduct(codeRaw: any): Promise<FindProductResult> {
 
   // ── Stage 2: pg_trgm fuzzy + AI pick ────────────────────────────────────
   try {
-    return await fuzzySearch(codeTrimmed, qNorm);
+    return await fuzzySearch(codeTrimmed, qNorm, chatContext);
   } catch (pgError: any) {
     // pg_trgm ยังไม่ได้ติดตั้ง → fallback วิธีเดิม
     console.warn('[findProduct] pg_trgm unavailable, using legacy search:', pgError.message);
@@ -233,7 +255,8 @@ async function exactMatch(qNorm: string, codeTrimmed: string): Promise<Product |
 // ─────────────────────────────────────────────
 async function multiTokenAndSearch(
   qNorm: string,
-  codeTrimmed: string
+  codeTrimmed: string,
+  chatContext?: string
 ): Promise<{ product: Product | null; candidates: Product[] }> {
   const empty = { product: null, candidates: [] };
   try {
@@ -283,7 +306,7 @@ async function multiTokenAndSearch(
     // ถ้าได้หลายผลและไม่มี normalize ตรงเป๊ะ → ส่งให้ AI ช่วยเลือก
     console.log(`[findProduct] stage1.3 multiple(${rows.length}) → AI pick`);
     const candidatesForAI = rows.map(r => ({ ...r, _score: 0.5, _matched_from: 'model' as const }));
-    const best = await pickBestWithAI(codeTrimmed, candidatesForAI);
+    const best = await pickBestWithAI(codeTrimmed, candidatesForAI, undefined, chatContext);
 
     if (best) {
       return { product: best, candidates: [] };
@@ -306,7 +329,8 @@ async function multiTokenAndSearch(
 async function numericCodeSearch(
   numericCode: string,
   qNorm: string,
-  codeTrimmed: string
+  codeTrimmed: string,
+  chatContext?: string
 ): Promise<Product | null> {
   try {
     const result = await pool.query<Product>(
@@ -362,7 +386,7 @@ async function numericCodeSearch(
 
     // ไม่มี textPart (ตัวเลขล้วน) → ส่ง AI pick
     console.log(`[findProduct] stage1.5 multiple(${rows.length}) → AI pick`);
-    const best = await pickBestWithAI(codeTrimmed, rows as (Product & { _score: number; _matched_from: string })[], numericCode);
+    const best = await pickBestWithAI(codeTrimmed, rows as (Product & { _score: number; _matched_from: string })[], numericCode, chatContext);
     return best;
   } catch (err) {
     console.error('[numericCodeSearch] error:', err);
@@ -378,7 +402,8 @@ async function numericCodeSearch(
 async function splitPartFuzzySearch(
   numericCode: string,
   textPart: string,
-  codeTrimmed: string
+  codeTrimmed: string,
+  chatContext?: string
 ): Promise<Product | null> {
   const result = await pool.query<Product & { _score: number; _matched_from: string }>(
     `
@@ -432,7 +457,7 @@ async function splitPartFuzzySearch(
 
   // คะแนนปานกลาง → AI pick (แล้วตรวจ key-token guard อีกชั้น)
   if (rows[0]._score >= 0.20) {
-    const best = await pickBestWithAI(codeTrimmed, rows, numericCode);
+    const best = await pickBestWithAI(codeTrimmed, rows, numericCode, chatContext);
     if (best) {
       const reason = keyTokenMismatchReason(codeTrimmed, best);
       if (reason) {
@@ -450,7 +475,7 @@ async function splitPartFuzzySearch(
 //  Stage 2: pg_trgm fuzzy search
 //  ใช้ qNorm ที่ตัด () แล้วเพื่อให้ trigram match ดีขึ้น
 // ─────────────────────────────────────────────
-async function fuzzySearch(codeTrimmed: string, qNorm: string): Promise<FindProductResult> {
+async function fuzzySearch(codeTrimmed: string, qNorm: string, chatContext?: string): Promise<FindProductResult> {
   // normalize สำหรับ pg_trgm — ตัด () เช่นเดียวกัน
   const qNormForTrgm = qNorm; // ตัด () ไปแล้วใน normalize()
 
@@ -520,7 +545,7 @@ async function fuzzySearch(codeTrimmed: string, qNorm: string): Promise<FindProd
   // ── score ปานกลาง/ต่ำ (≥0.20) → ให้ AI เลือก (แล้วตรวจ key-token guard) ───
   else if (candidates[0]._score >= 0.20) {
     console.log(`[findProduct] stage2 AI pick from ${candidates.length} candidates, top score=${candidates[0]._score}`);
-    const best = await pickBestWithAI(codeTrimmed, candidates);
+    const best = await pickBestWithAI(codeTrimmed, candidates, undefined, chatContext);
     const reason = best ? keyTokenMismatchReason(codeTrimmed, best) : null;
     if (best && !reason) {
       return { found: true, product: best, candidates: [], report: '' };
@@ -551,14 +576,26 @@ async function fuzzySearch(codeTrimmed: string, qNorm: string): Promise<FindProd
 async function pickBestWithAI(
   rawCode: string,
   candidates: (Product & { _score: number; _matched_from: string })[],
-  numericHint?: string
+  numericHint?: string,
+  chatContext?: string
 ): Promise<Product | null> {
   try {
     // สร้าง context เพิ่มเติมเกี่ยวกับ numeric/text parts
     const numericPart = numericHint || extractLongestNumber(rawCode);
-    const textPart = extractTextPart(normalize(rawCode));
+    // ใช้ promptTextPart (ไม่ใช่ extractTextPart) เพื่อกันเศษตัวอักษรขยะไปทริกกติกาข้อ 1 ให้ AI ตอบ 0
+    const textPart = promptTextPart(normalize(rawCode));
     const partsContext = numericPart
       ? `\n- ส่วนรหัสตัวเลขที่สำคัญ: "${numericPart}" — ให้ความสำคัญสูงสุดกับตัวเลือกที่มีเลขนี้ใน model หรือ name\n- ส่วนชื่อรุ่น: "${textPart || '-'}"\n`
+      : '';
+
+    // ข้อความเต็มจากแชท = หลักฐานชี้ขาด เพราะเซลส์มักพิมพ์รหัสแตกหลายบรรทัด
+    // (เช่น "QH" อยู่บรรทัดบน, "50X800-..." บรรทัดล่าง) ถ้า AI เห็นแค่รหัสท่อนเดียวจะตัดสินไม่ได้
+    // วัดจริง: ไม่มีบริบท ตอบถูก 0/15 — ใส่บริบท ตอบถูก 15/15
+    const chatBlock = chatContext && chatContext.trim()
+      ? `\nข้อความเต็มที่เซลส์พิมพ์มา (ใช้ประกอบการตัดสิน — เซลส์มักพิมพ์รหัสแตกหลายบรรทัด คำนำหน้า/ส่วนขยายรุ่นอาจอยู่คนละบรรทัดกัน):\n"""\n${chatContext.trim()}\n"""\n`
+      : '';
+    const chatRule = chatBlock
+      ? `\n0. **หลักฐานแข็งแรงที่สุด (สำคัญกว่าทุกข้อ):** ถ้ารุ่นของตัวเลือกใดปรากฏอยู่ใน "ข้อความเต็มที่เซลส์พิมพ์มา" — แม้จะข้ามบรรทัด เว้นวรรคต่างกัน หรือพิมพ์เล็ก/ใหญ่ต่างกัน — ให้เลือกตัวนั้นทันที และห้ามให้กฎข้ออื่นมาทำให้ตอบ 0\n`
       : '';
 
     const response = await createChatCompletion({
@@ -568,7 +605,7 @@ async function pickBestWithAI(
           content: `คุณคือผู้เชี่ยวชาญการตรวจจับรหัสสินค้า (Product Code Matcher)
 งานของคุณคือจับคู่รหัสสินค้าที่ต้องการค้นหากับรายการในฐานข้อมูล
 
-รหัสสินค้าที่ต้องการค้นหา: "${rawCode}"${partsContext}
+รหัสสินค้าที่ต้องการค้นหา: "${rawCode}"${partsContext}${chatBlock}
 รายการในฐานข้อมูล:
 ${candidates
   .map(
@@ -577,7 +614,7 @@ ${candidates
   )
   .join('\n')}
 
-กติกาการเลือก (เรียงตามลำดับความสำคัญ):
+กติกาการเลือก (เรียงตามลำดับความสำคัญ):${chatRule}
 1. **กฎเหล็ก — ส่วนตัวอักษร (text part):** ถ้า "ส่วนชื่อรุ่น" ระบุมา (ไม่ใช่ '-') ต้องเลือกเฉพาะตัวเลือกที่ model หรือ name มีอักษรส่วนนั้นปรากฏอยู่เท่านั้น เช่น ถ้า text part คือ "cmp" → ตัวเลือกที่ model/name ขึ้นต้นด้วย "cm" แต่ไม่มี "cmp" ถือว่าไม่ผ่าน — ตอบ 0 ทันที
 2. **กฎเหล็ก — ส่วนรหัสผสมอักษร+ตัวเลข:** token ที่ผสมตัวอักษรกับตัวเลข (เช่น "94N", "94B2", "P1K") ถือเป็นตัวระบุรุ่นที่สำคัญมาก ต้องปรากฏตรงกันในตัวเลือกทุกตัว หากต่างกันแม้แต่ตัวเดียว (เช่น query มี "94N" แต่ตัวเลือกมี "94B2") ถือว่าไม่ผ่าน — ตอบ 0 ทันที ห้ามเดา
 3. หากมีรหัสตัวเลขเฉพาะ (เช่น 304120, 444160) — ให้เลือกตัวเลือกที่ model หรือ name มีตัวเลขนั้นปรากฏอยู่ก่อนเป็นอันดับแรก ไม่ว่าตัวเลขจะอยู่หน้าหรือหลัง

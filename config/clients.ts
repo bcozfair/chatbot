@@ -22,13 +22,19 @@ export const LLM_MODEL = 'deepseek-v4-flash';
  * (วัดจริง avg ~6.9s, p95 ~12.6s) ขณะที่ non-thinking เร็ว ~1.7s (p95 ~2.1s) โดย
  * ความถูกต้องเท่ากัน 100% — งานสกัด/จับคู่ของเราไม่ต้องใช้ reasoning
  *
- * รับ params เหมือน openai.chat.completions.create ทุกอย่าง ยกเว้นไม่ต้องระบุ model/thinking
- * (ถ้าอยากเปิด thinking เฉพาะจุด ส่ง thinking: { type: 'enabled' } มา override ได้)
+ * ทำไม temperature = 0: งานทุกจุดของระบบนี้เป็น "เลือกคำตอบเดียวที่ถูก" (สกัด JSON / เลือกเบอร์ตัวเลือก)
+ * ค่า default ของ DeepSeek คือ 1.0 = สุ่มตามความน่าจะเป็น ทำให้ตอนโมเดลลังเลจะได้คำตอบไม่เหมือนเดิมทุกครั้ง
+ * (วัดจริงกับ prompt เลือกรุ่นสินค้า: temp 1.0 ตอบผิด 1/8 ครั้ง, temp 0 ถูก 8/8)
+ * DeepSeek เองแนะนำ 0.0 สำหรับงานประเภท Coding/Math ซึ่งตรงกับงานเรา
+ *
+ * รับ params เหมือน openai.chat.completions.create ทุกอย่าง ยกเว้นไม่ต้องระบุ model/thinking/temperature
+ * (ถ้าอยากเปิด thinking หรือเพิ่มความหลากหลายเฉพาะจุด ส่ง thinking/temperature มา override ได้)
  */
 export async function createChatCompletion(params: Record<string, any>): Promise<any> {
   return openai.chat.completions.create({
     model: LLM_MODEL,
     thinking: { type: 'disabled' },
+    temperature: 0,
     ...params,
   } as any);
 }

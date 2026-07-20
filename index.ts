@@ -570,6 +570,15 @@ app.post('/api/quotation/draft-cart', express.json(), async (req: any, res: any)
       return res.status(400).json({ error: 'Missing required parameters' });
     }
 
+    // quotations.user_id มี FK ไป salesperson(user_id) — ถ้ายังไม่ลงทะเบียนจะ insert ไม่ผ่าน
+    // ต้องดักไว้ก่อน เพื่อบอกสาเหตุที่แท้จริงแทนที่จะพังตอน insert แล้วขึ้น error กำกวม
+    const spCheck = await pool.query('SELECT 1 FROM salesperson WHERE user_id = $1 LIMIT 1', [userId]);
+    if (spCheck.rowCount === 0) {
+      return res.status(403).json({
+        error: 'บัญชี LINE นี้ยังไม่ได้ลงทะเบียนเป็นพนักงานขาย\nกรุณาลงทะเบียนในแชทก่อนใช้งานครับ 🙏'
+      });
+    }
+
     // 1. ลบรายการใบเสนอราคาเก่าที่ยังค้างอยู่ทั้งหมดออกถาวร
     await deletePendingQuotations(userId);
 

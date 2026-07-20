@@ -1669,8 +1669,8 @@
           const stockClass = remaining < 0 ? "out-of-stock" : "in-stock";
           const stockText =
             remaining < 0
-              ? `ไม่พอคงเหลือ: ${stock} ชิ้น`
-              : `พร้อมส่ง: ${stock}`;
+              ? `ไม่พอคงเหลือ ${stock} ชิ้น`
+              : `พร้อมส่ง ${stock}`;
 
           const itemEl = document.createElement("div");
           itemEl.className = "item-card";
@@ -1837,7 +1837,7 @@
             val > (Number(item.stock) || 0)
           ) {
             showCustomAlert(
-              `ระวัง: สินค้าไม่เพียงพอ (พร้อมส่ง: ${item.stock} ชิ้น, ต้องการ: ${val} ชิ้น) ขาดอีก ${val - item.stock} ชิ้นจะต้องรอการผลิตหรือสั่งซื้อ`,
+              `ระวัง: สินค้าไม่เพียงพอ (พร้อมส่ง ${item.stock} ชิ้น, ต้องการ ${val} ชิ้น) ขาดอีก ${val - item.stock} ชิ้นจะต้องรอการผลิตหรือสั่งซื้อ`,
             );
           }
           item.quantity = val;
@@ -1871,7 +1871,7 @@
             const rem = stock - item.quantity;
             stockEl.className = `item-stock-badge ${rem < 0 ? "out-of-stock" : "in-stock"}`;
             stockEl.textContent =
-              rem < 0 ? `ไม่พอคงเหลือ: ${stock} ชิ้น` : `พร้อมส่ง: ${stock}`;
+              rem < 0 ? `ไม่พอคงเหลือ ${stock} ชิ้น` : `พร้อมส่ง ${stock}`;
           }
         }
         checkDirty();
@@ -2254,7 +2254,7 @@
             <span class="prod-price">฿${formatNumber(prod.price, 2)}</span>
           </div>
           <div style="display:flex;justify-content:flex-end;align-items:center;font-size:11px;">
-            <span class="prod-stock ${stock > 0 ? "in-stock" : "out-of-stock"}">${stock > 0 ? `คงเหลือ: ${stock} ชิ้น` : "สินค้าหมด"}</span>
+            <span class="prod-stock ${stock > 0 ? "in-stock" : "out-of-stock"}">${stock > 0 ? `คงเหลือ ${stock} ชิ้น` : "สินค้าหมด"}</span>
           </div>`;
 
           // 🛠️ แก้ไขลำดับการทำงานตรงนี้
@@ -2308,7 +2308,7 @@
         };
         if (1 > stock)
           showCustomAlert(
-            `ระวัง: สินค้าไม่เพียงพอ (สต็อกพร้อมส่ง: ${stock} ชิ้น, ต้องการ: 1 ชิ้น) ขาดอีก ${1 - stock} ชิ้นจะต้องรอการผลิตหรือสั่งซื้อ`,
+            `ระวัง: สินค้าไม่เพียงพอ (พร้อมส่ง ${stock} ชิ้น, ต้องการ 1 ชิ้น) ขาดอีก ${1 - stock} ชิ้นจะต้องรอการผลิตหรือสั่งซื้อ`,
           );
 
         // ── ไม่มีใบของบริษัทสินค้านี้ → แยกใบใหม่ (สร้างพร้อมสินค้าเลย + ห้ามลบ draft เดิม) ──
