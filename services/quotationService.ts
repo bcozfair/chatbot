@@ -13,6 +13,15 @@ import {
   createUnregisteredCustomerFlex
 } from '../utils/flexTemplates.js';
 import { expandOptionalProducts, checkStockRules, StockViolation } from './productService.js';
+import { sumLineTotals } from '../utils/pricing.js';
+import {
+  loadQuotationRules,
+  resolveQuotationRule,
+  findBlockingRule,
+  findCompanyRule,
+  buildBlockedMessage,
+  normalizeProductScope
+} from './rules/index.js';
 
 const cleanState = (s: any) => String(s || '').replace(/\s*\(.*/, '').split(/\s+/)[0].trim();
 
@@ -131,19 +140,20 @@ export async function getQuotationNo(quoteData: any, executor: DbExecutor = pool
 }
 
 export async function resolveQuoteCompany(item: any, executor: DbExecutor = pool): Promise<'PM' | 'THT'> {
-  let companyRules: any[] = [];
+  let rules: any[] = [];
   try {
-    const rulesRes = await executor.query('SELECT * FROM quotation_rules WHERE quote_company IS NOT NULL');
-    companyRules = rulesRes.rows || [];
+    rules = await loadQuotationRules(executor);
   } catch (err) {
     console.error('Error fetching quotation rules for company resolution:', err);
   }
 
+  // ไม่มีกฏที่ระบุค่ายเลย → ข้ามการ query สินค้าไปเลย (เหมือนเดิม)
+  const hasCompanyRule = rules.some((r: any) => r.quote_company != null);
   const code = item.product_code || item.model || item.code;
-  if (code && companyRules.length > 0) {
+  if (code && hasCompanyRule) {
     const prod = await getProductInfo(code, executor);
     if (prod) {
-      const rule = matchRuleWithProduct(prod, companyRules);
+      const rule = findCompanyRule(rules, normalizeProductScope(prod));
       if (rule) {
         if (rule.quote_company === 'PM') return 'PM';
         if (rule.quote_company === 'THT') return 'THT';
@@ -153,6 +163,70 @@ export async function resolveQuoteCompany(item: any, executor: DbExecutor = pool
 
   // fallback: logic เดิม
   return item.production === 'Import(PM)' ? 'THT' : 'PM';
+}
+
+/**
+ * สร้าง snapshot ของรายการสินค้าเพื่อ freeze ลง quotations.item_details
+ *
+ * เป็นจุดเดียวในระบบที่สร้าง snapshot — ทั้ง LINE flow (insertDraftQuotations)
+ * และ PUT /api/quotation/:id ใช้ตัวนี้ร่วมกัน field ใหม่ทุกตัวต้องเพิ่มที่นี่ที่เดียว
+ */
+export async function buildItemSnapshots(rawItems: any[], executor: DbExecutor = pool): Promise<any[]> {
+  let quotationRules: any[] = [];
+  try {
+    quotationRules = await loadQuotationRules(executor);
+  } catch (err) {
+    console.error('[buildItemSnapshots] Error fetching quotation rules:', err);
+  }
+
+  const snapshotItems: any[] = [];
+  for (const item of rawItems) {
+    const code = item.product_code || item.model || item.code || '';
+    let dbProduct: any = null;
+    try {
+      const prodRes = await executor.query(
+        'SELECT product_template_id AS product_id, internal_reference, name, sales_description, brand, series, production FROM products WHERE model = $1 ORDER BY actual_quantity DESC LIMIT 1',
+        [code]
+      );
+      dbProduct = prodRes.rows[0];
+    } catch (err) {
+      console.warn(`[buildItemSnapshots] ดึงข้อมูลสินค้าไม่สำเร็จ (model="${code}") — ใช้ค่าจาก item แทน`, err);
+    }
+
+    const finalInternalRef = dbProduct?.internal_reference || code;
+    const finalProductId = dbProduct?.product_id || item.product_id || null;
+    const finalName = dbProduct?.name || item.name || '';
+    const finalSalesDesc = dbProduct?.sales_description || item.sales_description || '';
+    const iBrand = dbProduct?.brand || item.brand || '';
+    const iSeries = dbProduct?.series || item.series || '';
+    const iProduction = dbProduct?.production || item.production || '';
+
+    const outcome = resolveQuotationRule(
+      quotationRules,
+      normalizeProductScope({ production: iProduction, brand: iBrand, series: iSeries })
+    );
+
+    snapshotItems.push({
+      internal_reference: finalInternalRef,
+      product_id: finalProductId,
+      model: code,
+      name: finalName,
+      sales_description: finalSalesDesc,
+      price: Number(item.price) || 0,
+      quantity: Number(item.quantity ?? item.qty) || 0,
+      discount_1: Number(item.discount_1) || 0,
+      discount_2: Number(item.discount_2) || 0,
+      remark: item.remark || '',
+      brand: iBrand,
+      series: iSeries,
+      production: iProduction,
+      warranty_display: outcome.warranty_display,
+      delivery_in_stock_days: outcome.delivery_in_stock_days,
+      delivery_out_of_stock_days: outcome.delivery_out_of_stock_days,
+      is_optional: !!item.is_optional
+    });
+  }
+  return snapshotItems;
 }
 
 export async function insertDraftQuotations(
@@ -367,98 +441,11 @@ export async function insertDraftQuotations(
     custom_meta: customMetaStr
   };
 
-  // ดึงกฎการประกันสินค้ามาคำนวณ Snapshot
-  let quotationRules: any[] = [];
-  try {
-    const rulesRes = await pool.query('SELECT * FROM quotation_rules');
-    quotationRules = rulesRes.rows || [];
-  } catch (err) {
-    console.error('[insertDraftQuotations] Error fetching quotation rules:', err);
-  }
-
-  const mapItemsToSnapshot = async (rawItems: any[]) => {
-    const snapshotItems: any[] = [];
-    for (const item of rawItems) {
-      const code = item.product_code || item.model || item.code || '';
-      let dbProduct: any = null;
-      try {
-        const prodRes = await pool.query(
-          'SELECT product_template_id AS product_id, internal_reference, name, sales_description, brand, series, production FROM products WHERE model = $1 ORDER BY actual_quantity DESC LIMIT 1',
-          [code]
-        );
-        dbProduct = prodRes.rows[0];
-      } catch (err) {
-        console.warn(`[quotationService] ดึงข้อมูลสินค้าไม่สำเร็จ (model="${code}") — ใช้ค่าจาก item แทน`, err);
-      }
-
-      const finalInternalRef = dbProduct?.internal_reference || code;
-      const finalProductId = dbProduct?.product_id || item.product_id || null;
-      const finalName = dbProduct?.name || item.name || '';
-      const finalSalesDesc = dbProduct?.sales_description || item.sales_description || '';
-      const iBrand = dbProduct?.brand || item.brand || '';
-      const iSeries = dbProduct?.series || item.series || '';
-      const iProduction = dbProduct?.production || item.production || '';
-
-      let matchedRule = null;
-      const clean = (s: string) => s.replace(/\s+/g, '').toLowerCase();
-      const pBrand = iBrand.trim().toLowerCase();
-      const pSeries = iSeries.trim().toLowerCase();
-      const pProduction = iProduction.trim().toLowerCase();
-
-      matchedRule = quotationRules.find((r: any) => {
-        if (r.production) {
-          if (r.production === '__NULL__') {
-            if (pProduction !== '') return false;
-          } else {
-            const rp = clean(r.production);
-            const ip = clean(pProduction);
-            const isImportMatch = (rp === 'import' && ip.startsWith('import'));
-            const isExactMatch = (rp === ip);
-            if (!isExactMatch && !isImportMatch) return false;
-          }
-        }
-        if (r.brand && r.brand.trim().toLowerCase() !== pBrand) return false;
-        if (r.series && r.series.trim().toLowerCase() !== pSeries) return false;
-        return true;
-      });
-
-      const warrantyYears = matchedRule ? matchedRule.warranty_years : 1;
-      const warrantyUnit = matchedRule ? (matchedRule.warranty_unit || 'year') : 'year';
-      const warrantyDisplay = warrantyUnit === 'month' ? `${warrantyYears} เดือน` : `${warrantyYears} ปี`;
-      const deliveryInStockDays = matchedRule ? matchedRule.delivery_in_stock_days : 3;
-      const deliveryOutOfStockDays = matchedRule ? matchedRule.delivery_out_of_stock_days : 7;
-
-      snapshotItems.push({
-        internal_reference: finalInternalRef,
-        product_id: finalProductId,
-        model: code,
-        name: finalName,
-        sales_description: finalSalesDesc,
-        price: Number(item.price) || 0,
-        quantity: Number(item.quantity ?? item.qty) || 0,
-        discount_1: Number(item.discount_1) || 0,
-        discount_2: Number(item.discount_2) || 0,
-        remark: item.remark || '',
-        brand: iBrand,
-        series: iSeries,
-        production: iProduction,
-        warranty_display: warrantyDisplay,
-        delivery_in_stock_days: deliveryInStockDays,
-        delivery_out_of_stock_days: deliveryOutOfStockDays,
-        is_optional: !!item.is_optional
-      });
-    }
-    return snapshotItems;
-  };
   const draftQuotesToInsert: any[] = [];
 
   if (pmItems.length > 0) {
-    const pmSum = pmItems.reduce((sum, item) => {
-      const netPrice = item.price * (1 - item.discount_1 / 100) * (1 - item.discount_2 / 100);
-      const quantity = item.quantity ?? item.qty ?? 0;
-      return sum + (quantity * netPrice);
-    }, 0);
-    const itemDetails = await mapItemsToSnapshot(pmItems);
+    const pmSum = sumLineTotals(pmItems);
+    const itemDetails = await buildItemSnapshots(pmItems);
     draftQuotesToInsert.push({
       user_id: userId,
       total_sum: pmSum,
@@ -473,12 +460,8 @@ export async function insertDraftQuotations(
   }
 
   if (thtItems.length > 0) {
-    const thtSum = thtItems.reduce((sum, item) => {
-      const netPrice = item.price * (1 - item.discount_1 / 100) * (1 - item.discount_2 / 100);
-      const quantity = item.quantity ?? item.qty ?? 0;
-      return sum + (quantity * netPrice);
-    }, 0);
-    const itemDetails = await mapItemsToSnapshot(thtItems);
+    const thtSum = sumLineTotals(thtItems);
+    const itemDetails = await buildItemSnapshots(thtItems);
     draftQuotesToInsert.push({
       user_id: userId,
       total_sum: thtSum,
@@ -546,61 +529,20 @@ export async function getProductInfo(code: string, executor: DbExecutor = pool):
 }
 
 /**
- * ค้นหา Rule ที่ตรงกับสินค้า (matching production, brand, series)
- */
-export function matchRuleWithProduct(prod: any, rules: any[]): any {
-  if (!prod) return null;
-
-  const prodBrand      = prod.brand      ? String(prod.brand).trim().toLowerCase()      : '';
-  const prodSeries     = prod.series     ? String(prod.series).trim().toLowerCase()     : '';
-  const prodProduction = prod.production ? String(prod.production).trim().toLowerCase() : '';
-  const clean = (s: string) => s.replace(/\s+/g, '').toLowerCase();
-
-  return rules.find(r => {
-    if (r.production) {
-      if (r.production === '__NULL__') {
-        if (prodProduction !== '') return false;
-      } else {
-        const rp = clean(r.production);
-        const ip = clean(prodProduction);
-        const isImportMatch = (rp === 'import' && ip.startsWith('import'));
-        const isExactMatch = (rp === ip);
-        if (!isExactMatch && !isImportMatch) return false;
-      }
-    }
-    if (r.brand  && r.brand.trim().toLowerCase() !== prodBrand)   return false;
-    if (r.series && r.series.trim().toLowerCase() !== prodSeries) return false;
-    return true;
-  });
-}
-
-/**
- * ค้นหา Rule จาก item โดยการ query สินค้าในตัว
- */
-export async function getRuleForItem(item: any, rules: any[]): Promise<any> {
-  const code = item.product_code || item.model || item.code;
-  if (!code) return null;
-
-  const prod = await getProductInfo(code);
-  return matchRuleWithProduct(prod, rules);
-}
-
-/**
  * ค้นหาข้อมูลสินค้าและตรวจสอบว่ามีสินค้าใดติดกฎล็อกเสนอราคา (is_locked) หรือไม่
  */
 export async function getBlockedProductError(items: any[] | null): Promise<string | null> {
   if (!items || items.length === 0) return null;
 
-  let lockedRules: any[] = [];
+  let rules: any[] = [];
   try {
-    const rulesRes = await pool.query('SELECT * FROM quotation_rules WHERE is_locked = true');
-    lockedRules = rulesRes.rows || [];
+    rules = await loadQuotationRules();
   } catch (err) {
     console.error('Error fetching quotation rules for blocking validation:', err);
     return null;
   }
 
-  if (lockedRules.length === 0) return null;
+  if (!rules.some((r: any) => r.is_locked === true)) return null;
 
   for (const item of items) {
     const code = item.product_code || item.model || item.code;
@@ -609,10 +551,9 @@ export async function getBlockedProductError(items: any[] | null): Promise<strin
     const prod = await getProductInfo(code);
     if (!prod) continue;
 
-    const matchedRule = matchRuleWithProduct(prod, lockedRules);
+    const matchedRule = findBlockingRule(rules as any, normalizeProductScope(prod));
     if (matchedRule) {
-      const prodLabel = matchedRule.production === '__NULL__' ? '(ไม่มีฝ่ายผลิต)' : (matchedRule.production || '');
-      return `❌ ระงับการเสนอราคา\n${prod.code}\nเงื่อนไข: ${prodLabel} > ${matchedRule.brand || ''} > ${matchedRule.series || ''}\nกรุณาติดต่อแอดมิน`;
+      return buildBlockedMessage(matchedRule, prod.code);
     }
   }
 

@@ -19,7 +19,7 @@ import {
   ChevronRight,
 } from 'lucide-react';
 
-// ── ComboBox (unchanged logic, displayLabel helper) ──────────────────────
+// ── ComboBox ─────────────────────────────────────────────────────────────
 function ComboBox({
   options,
   value,
@@ -35,11 +35,8 @@ function ComboBox({
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
-  const displayLabel = (opt: string) =>
-    opt === '__NULL__' ? '(ไม่มีฝ่ายผลิต)' : opt;
-
   const filtered = query.trim()
-    ? options.filter(o => displayLabel(o).toLowerCase().includes(query.toLowerCase()))
+    ? options.filter(o => o.toLowerCase().includes(query.toLowerCase()))
     : options;
 
   useEffect(() => {
@@ -76,7 +73,7 @@ function ComboBox({
           />
         ) : (
           <span className={`flex-1 truncate ${value ? 'text-slate-800 font-medium' : 'text-slate-400'}`}>
-            {value ? displayLabel(value) : placeholder}
+            {value || placeholder}
           </span>
         )}
         <div className="flex items-center gap-1 flex-shrink-0">
@@ -109,7 +106,7 @@ function ComboBox({
                     : 'text-slate-700 hover:bg-slate-50'
                     }`}
                 >
-                  {displayLabel(opt)}
+                  {opt}
                 </button>
               ))
             )}
@@ -182,7 +179,7 @@ export function QuotationRules() {
 
   const availableBrands = React.useMemo(() => {
     let brands = options.brands;
-    if (formData.production && formData.production !== '__NULL__') {
+    if (formData.production) {
       const filtered = relations
         .filter(r => r.production === formData.production && r.brand)
         .map(r => r.brand as string);
@@ -203,7 +200,7 @@ export function QuotationRules() {
 
   const availableSeries = React.useMemo(() => {
     let filteredRelations = relations;
-    if (formData.production && formData.production !== '__NULL__') {
+    if (formData.production) {
       filteredRelations = filteredRelations.filter(r => r.production === formData.production);
     }
     if (formData.brand) {
@@ -350,7 +347,7 @@ export function QuotationRules() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!formData.production && formData.production !== '__NULL__' && !formData.brand && !formData.series) {
+    if (!formData.production && !formData.brand && !formData.series) {
       showToast('กรุณาระบุอย่างน้อย 1 ช่อง (ฝ่ายผลิต, ยี่ห้อ หรือซีรีส์)', 'error');
       return;
     }
@@ -575,9 +572,7 @@ export function QuotationRules() {
                     <tr key={rule.id} className="hover:bg-slate-50/50 transition-colors">
                       <td className="px-4 py-2.5 align-top">
                         <div className="font-semibold text-slate-900 text-[13px]">
-                          {rule.production === '__NULL__'
-                            ? <span className="text-slate-400 italic text-xs">(ไม่มีฝ่ายผลิต)</span>
-                            : rule.production || '-'}
+                          {rule.production || '-'}
                         </div>
                       </td>
                       <td className="px-4 py-2.5 align-top">
@@ -765,10 +760,10 @@ export function QuotationRules() {
                         ฝ่ายผลิต
                       </label>
                       <ComboBox
-                        options={['__NULL__', ...options.productions]}
+                        options={options.productions}
                         value={formData.production}
                         onChange={val => {
-                          const nextBrands = !val || val === '__NULL__'
+                          const nextBrands = !val
                             ? options.brands
                             : Array.from(new Set(
                               relations
@@ -797,7 +792,7 @@ export function QuotationRules() {
                         value={formData.brand}
                         onChange={val => {
                           let filteredRelations = relations;
-                          if (formData.production && formData.production !== '__NULL__') {
+                          if (formData.production) {
                             filteredRelations = filteredRelations.filter(r => r.production === formData.production);
                           }
                           if (val) {

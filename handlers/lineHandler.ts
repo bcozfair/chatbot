@@ -14,6 +14,7 @@ import {
   getBranchesByCodes,
 } from '../db/repositories.js';
 import { validateProductPriceWithPromotions } from '../utils/promotionValidator.js';
+import { calcNetPrice, round2 } from '../utils/pricing.js';
 import { 
   createBranchSelectionFlex, 
   getQuotationSummaryMessage, 
@@ -43,6 +44,23 @@ import {
 } from '../services/quotationService.js';
 import { detectQuotationEditIntent, handleQuotationEditRequest } from '../services/quotationAgent.js';
 
+// ข้อความตอบกลับเมื่อเจตนาไม่ชัด (UNCLEAR) — ส่งแบบฟอร์มขอใบเสนอราคาให้เซลส์ก๊อปไปกรอก
+// แทนการถามกลับลอยๆ (เซลส์พิมพ์ "ออกใบเสนอราคา" เฉยๆ แล้ววนถามซ้ำไม่จบ)
+// กำหนดเป็นค่าคงที่ ไม่ให้ LLM แต่งเอง เพื่อให้รูปแบบฟอร์มเหมือนกันทุกครั้ง
+const QUOTATION_FORM_REPLY = `รบกวนพิมพ์ข้อมูลตามรูปแบบนี้ครับ 📝
+
+เสนอราคา
+บริษัท:
+ผู้ติดต่อ:
+รหัสลูกค้า:
+รายการสินค้า:
+1. TMPxxxxx = 5 ตัว
+2. CMPxxxxx = 10 ตัว
+ส่วนลด:
+ลด 30%
+หรือ ลด 20+5%
+หรือ ลด 25 ตาม 5`;
+
 // คำนวณรายการสินค้าที่พร้อมบันทึก (ราคา/ส่วนลดสุทธิ) จาก product ในฐานข้อมูล + item ที่เซลส์ระบุ + ส่วนลดระดับบิล
 // ใช้ทั้งตอนสกัดครั้งแรก และตอน resume หลังเซลส์กดเลือกรุ่นจากปุ่ม เพื่อให้ตรรกะราคาตรงกันเป๊ะ (ไม่ drift)
 function buildResolvedItem(dbProduct: any, item: any, quoteData: any): { itemForDb: any; itemTotal: number; price: number; disc1: number; disc2: number } {
@@ -53,11 +71,12 @@ function buildResolvedItem(dbProduct: any, item: any, quoteData: any): { itemFor
   let disc1 = hasCustomPrice ? 0 : (Number(item.discount_1) > 0 ? Number(item.discount_1) : (Number(quoteData.discount_1) || 0));
   let disc2 = hasCustomPrice ? 0 : (Number(item.discount_1) > 0 ? (Number(item.discount_2) || 0) : (Number(quoteData.discount_2) || 0));
   if (isNetDiscount) {
-    price = Math.round(price * (1 - disc1 / 100) * (1 - disc2 / 100) * 100) / 100;
+    // จุดเดียวในระบบที่ปัดเศษราคาต่อหน่วย — ส่วนลดแบบ net เขียนทับ unit price จริง จึงต้องเป็นเลขสวย
+    price = round2(calcNetPrice(price, disc1, disc2));
     disc1 = 0;
     disc2 = 0;
   }
-  const discountedPrice = price * (1 - disc1 / 100) * (1 - disc2 / 100);
+  const discountedPrice = calcNetPrice(price, disc1, disc2);
   const itemTotal = requestedQty * discountedPrice;
   const itemForDb = {
     product_id: dbProduct.product_template_id,
@@ -435,10 +454,7 @@ export async function handleEvent(event: any): Promise<any> {
                     const itemKey = item.model || item.product_code;
                     const minPrice = minPriceMap[itemKey] || 0;
                     if (minPrice <= 0) continue;
-                    const price = parseFloat(item.price) || 0;
-                    const disc1 = parseFloat(item.discount_1) || 0;
-                    const disc2 = parseFloat(item.discount_2) || 0;
-                    const discountedPrice = price * (1 - disc1 / 100) * (1 - disc2 / 100);
+                    const discountedPrice = calcNetPrice(item.price, item.discount_1, item.discount_2);
 
                     if (discountedPrice < minPrice - 0.01) {
                       // หากไม่ผ่านขั้นต่ำปกติ ให้ไปตรวจสอบสิทธิ์จากโปรโมชัน
@@ -1404,7 +1420,7 @@ export async function handleEvent(event: any): Promise<any> {
            - 3.6 ห้ามตรวจจับเครื่องหมายลบ "-" นำหน้าตัวเลขส่วนลด เช่น "-30%" หรือ "-25%" ให้ถือว่าเป็นส่วนหนึ่งของรหัสสินค้าหรือสัญลักษณ์ทั่วไป และห้ามสกัดเป็นส่วนลดเด็ดขาด! ให้สังเกตเฉพาะคำว่า "ลด" หรือ "ลด..." เท่านั้น (ตัวอย่าง: "ลด 30%" ให้สกัดส่วนลด, แต่ "-30%" ให้ข้าม)
         4. หากข้อความล่าสุดเป็นการแก้ไขคำผิด การระบุรุ่นที่ถูกต้อง หรือเปลี่ยนแปลงรายละเอียดสำหรับการเสนอราคา (และประวัติการสนทนาล่าสุดยังอยู่ในเซสชันปัจจุบัน) ให้วิเคราะห์ประวัติการสนทนาประกอบเพื่อรักษารายการสินค้าตัวอื่นที่เคยเสนอไว้ รวมถึงข้อมูลส่วนลดและรายละเอียดชื่อลูกค้า/ผู้ติดต่อเดิมไว้ใน quotation_data ใบนี้ด้วย แต่หากประวัติสนทนามีการแจ้งยกเลิกรายการเดิมไปแล้ว หรือข้อความล่าสุดระบุชัดเจนว่าเริ่มใหม่ ให้ล้างรายการทั้งหมดแล้วจัดทำใหม่
         5. ถ้าข้อความเป็นคำทักทาย, ถามเรื่องทั่วไป, หรืออ่านแล้วไม่เข้าใจว่าต้องการสั่งของกี่ชิ้น หรือสินค้าคืออะไร ให้ถือว่า intent = "UNCLEAR"
-        6. ถ้า intent = "UNCLEAR" ให้สร้าง reply_message ถามเซลส์กลับอย่างสุภาพ เช่น "ผมเป็นผู้ช่วยเซลส์ ไม่แน่ใจว่าต้องการให้ออกใบเสนอราคาใช่หรือไม่ครับ? รบกวนพิมพ์ชื่อลูกค้าและรายการสินค้าให้ผมหน่อยนะครับ"
+        6. ถ้า intent = "UNCLEAR" ให้ปล่อย reply_message เป็นสตริงว่าง "" เสมอ เพราะระบบจะตอบกลับด้วย "แบบฟอร์มขอใบเสนอราคา" มาตรฐานให้เอง ห้ามแต่งข้อความถามกลับเองเด็ดขาด
         7. ห้าม! ตอบคำถามทั่วไปที่ไม่เกี่ยวกับการขายเด็ดขาด ให้ตอบกลับด้วย reply_message ตามกฎข้อ 6 เสมอ
         8. หากเซลส์พิมพ์ชื่อมาเพียงชื่อเดียว (เช่น บรรทัดที่สองหลังจากเสนอราคา หรือระบุมาสั้นๆ) ให้ใช้ "คำนำหน้า" เป็นตัวตัดสินหลัก:
            - ถ้ามีคำนำหน้าบุคคล ("คุณ", "K", "K.", "k", "k.", "นาย", "นาง", "นางสาว") ให้ถือเป็นชื่อผู้ติดต่อ ใส่ใน contact_query และเว้น customer_query เป็น null (เช่น "คุณถาวร" หรือ "K นิว" เป็นชื่อผู้ติดต่อ)
@@ -1484,7 +1500,9 @@ export async function handleEvent(event: any): Promise<any> {
       }
       if (!aiResult) {
         console.error('[extraction] ทุก attempt ล้มเหลว — ตกไป UNCLEAR:', lastExtractionErr);
-        aiResult = { intent: "UNCLEAR", reply_message: "ขออภัยครับ ระบบไม่ว่างชั่วคราว รบกวนพิมพ์คำสั่งเดิมอีกครั้งนะครับ 🙏" };
+        // extraction_failed: บอกปลายทางว่าเป็น UNCLEAR เพราะระบบล่ม ไม่ใช่เพราะเซลส์พิมพ์ไม่ชัด
+        // จะได้แจ้งว่าระบบไม่ว่าง แทนที่จะยัดแบบฟอร์มขอใบเสนอราคากลับไป
+        aiResult = { intent: "UNCLEAR", extraction_failed: true, reply_message: "ขออภัยครับ ระบบไม่ว่างชั่วคราว รบกวนพิมพ์คำสั่งเดิมอีกครั้งนะครับ 🙏" };
       }
 
       if (aiResult.intent === 'REGISTER') {
@@ -1945,7 +1963,10 @@ export async function handleEvent(event: any): Promise<any> {
             }
           }
         } else {
-          botReplyText = aiResult.reply_message || "ผมเป็นบอทผู้ช่วยเซลส์ ไม่แน่ใจว่าต้องการให้ออกใบเสนอราคาใช่หรือไม่ครับ? รบกวนพิมพ์ชื่อลูกค้าและรายการสินค้าให้ผมหน่อยนะครับ";
+          // ระบบสกัดล่ม → แจ้งตามข้อความจริง, นอกนั้นตอบด้วยแบบฟอร์มขอใบเสนอราคาเสมอ
+          botReplyText = aiResult.extraction_failed
+            ? (aiResult.reply_message || QUOTATION_FORM_REPLY)
+            : QUOTATION_FORM_REPLY;
         }
       }
     }

@@ -3,8 +3,14 @@ import puppeteer from "puppeteer";
 import ThaiBahtText from "thai-baht-text";
 import fs from "fs";
 import path from "path";
-import { pool } from "./config/db.js";
 import { resolveQuoteCompany } from "./services/quotationService.js";
+import {
+  loadQuotationRules,
+  resolveQuotationRule,
+  buildBlockedPdfMessage,
+  normalizeProductScope
+} from "./services/rules/index.js";
+import { calcNetPrice, calcVat, calcGrandTotal } from "./utils/pricing.js";
 
 // ใช้ Chrome ตัวเดียวร่วมกันทุก request แทนการ launch ใหม่ทุกครั้ง
 // เดิม: launch ต่อ request และ browser.close() ไม่อยู่ใน finally -> error หนึ่งครั้ง = Chrome ค้าง 1 ตัว สะสมจน RAM หมด
@@ -117,11 +123,16 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
       minWarrantyDisplay = '1 ปี';
     }
   } else {
-    // Fallback: ดึงกฎเงื่อนไขจาก quotation_rules เดิม
+    // Fallback: คำนวณกฎเงื่อนไขสดจาก quotation_rules แทนการอ่าน snapshot
+    // path นี้ให้ตัวเลขคนละชุดกับ snapshot ได้ (เช่นกฏถูกแก้หลังใบถูกสร้าง) จึงต้องดังพอให้เห็นใน log
+    console.warn(
+      `[pdfGenerator] snapshot ไม่ครบ → ใช้ fallback คำนวณกฎสด ` +
+      `(quote id=${quoteData.id ?? '-'} items=${itemsList.length} snapshots=${Array.isArray(itemSnapshots) ? itemSnapshots.length : 0})`
+    );
+
     let quotationRules: any[] = [];
     try {
-      const rulesRes = await pool.query('SELECT * FROM quotation_rules');
-      quotationRules = rulesRes.rows || [];
+      quotationRules = await loadQuotationRules();
     } catch (err) {
       console.error('Error fetching quotation rules in PDF generator:', err);
     }
@@ -137,53 +148,24 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
         allItemsInStock = false;
       }
 
-      // Matching logic — rule match เฉพาะ field ที่ระบุไว้เท่านั้น
-      let matchedRule = null;
-      const iBrand      = item.brand      ? String(item.brand).trim().toLowerCase()      : '';
-      const iSeries     = item.series     ? String(item.series).trim().toLowerCase()     : '';
-      const iProduction = item.production ? String(item.production).trim().toLowerCase() : '';
-      const clean = (s: string) => s.replace(/\s+/g, '').toLowerCase();
-
-      matchedRule = quotationRules.find((r: any) => {
-        if (r.production) {
-          if (r.production === '__NULL__') {
-            if (iProduction !== '') return false;
-          } else {
-            const rp = clean(r.production);
-            const ip = clean(iProduction);
-            const isImportMatch = (rp === 'import' && ip.startsWith('import'));
-            const isExactMatch = (rp === ip);
-            if (!isExactMatch && !isImportMatch) return false;
-          }
-        }
-        if (r.brand  && r.brand.trim().toLowerCase() !== iBrand)   return false;
-        if (r.series && r.series.trim().toLowerCase() !== iSeries) return false;
-        return true;
-      }) || null;
+      const outcome = resolveQuotationRule(quotationRules, normalizeProductScope(item));
 
       // ตรวจสอบเงื่อนไขล็อคเสนอราคา
-      if (matchedRule && matchedRule.is_locked) {
-        const prodLabel = matchedRule.production === '__NULL__' ? '(ไม่มีฝ่ายผลิต)' : (matchedRule.production || '');
-        throw new Error(`❌ ระงับการเสนอราคาสินค้า ${item.product_code || item.model}\nเงื่อนไข: ${prodLabel} > ${matchedRule.brand || ''} > ${matchedRule.series || ''}\nกรุณาติดต่อแอดมิน`);
+      if (outcome.is_locked) {
+        const blockingRule = quotationRules.find((r: any) => r.id === outcome.matched_rule_id);
+        throw new Error(buildBlockedPdfMessage(blockingRule, item.product_code || item.model));
       }
 
-      const itemWarrantyVal = matchedRule ? matchedRule.warranty_years : 1;
-      const itemWarrantyUnit = matchedRule ? (matchedRule.warranty_unit || 'year') : 'year';
-      const inMonths = itemWarrantyUnit === 'year' ? itemWarrantyVal * 12 : itemWarrantyVal;
-
-      const itemInStockDays = matchedRule ? matchedRule.delivery_in_stock_days : 3;
-      const itemOutOfStockDays = matchedRule ? matchedRule.delivery_out_of_stock_days : 7;
+      const inMonths = outcome.warranty_unit === 'year'
+        ? outcome.warranty_years * 12
+        : outcome.warranty_years;
 
       if (inMonths < minWarrantyMonths) {
         minWarrantyMonths = inMonths;
-        if (itemWarrantyUnit === 'month') {
-          minWarrantyDisplay = `${itemWarrantyVal} เดือน`;
-        } else {
-          minWarrantyDisplay = `${itemWarrantyVal} ปี`;
-        }
+        minWarrantyDisplay = outcome.warranty_display;
       }
 
-      const days = hasStock ? itemInStockDays : itemOutOfStockDays;
+      const days = hasStock ? outcome.delivery_in_stock_days : outcome.delivery_out_of_stock_days;
       itemDeliveryDays.push(days);
     });
 
@@ -211,7 +193,7 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
     const disc2 = Number(item.discount_2) || 0;
 
     const rowGross = qty * price;
-    const discountedPrice = price * (1 - disc1 / 100) * (1 - disc2 / 100);
+    const discountedPrice = calcNetPrice(price, disc1, disc2);
     const rowNet = qty * discountedPrice;
 
     grossSubTotal += rowGross;
@@ -219,8 +201,8 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
   });
 
   const totalDiscountAmount = 0.00;
-  const vat = Math.round((discountedSubTotal * 0.07) * 100) / 100;
-  const grandTotal = Math.round((discountedSubTotal + vat) * 100) / 100;
+  const vat = calcVat(discountedSubTotal);
+  const grandTotal = calcGrandTotal(discountedSubTotal);
 
   const now = new Date();
   const dd = String(now.getDate()).padStart(2, '0');
@@ -400,7 +382,7 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
         const disc1 = Number(item.discount_1) || 0;
         const disc2 = Number(item.discount_2) || 0;
 
-        const discountedPrice = price * (1 - disc1 / 100) * (1 - disc2 / 100);
+        const discountedPrice = calcNetPrice(price, disc1, disc2);
         const itemTotal = qty * discountedPrice;
 
         let discountDisplay = "";

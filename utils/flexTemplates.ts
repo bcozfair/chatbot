@@ -1,5 +1,6 @@
 import { pool } from '../config/db.js';
 import { validateProductPriceWithPromotions, getRelevantPromotion } from './promotionValidator.js';
+import { calcNetPrice } from './pricing.js';
 
 export function createListFlexMessage(
   title: string,
@@ -796,7 +797,7 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
       const price = item.price;
       const disc1 = item.discount_1 || 0;
       const disc2 = item.discount_2 || 0;
-      const netPrice = price * (1 - disc1 / 100) * (1 - disc2 / 100);
+      const netPrice = calcNetPrice(price, disc1, disc2);
       const itemTotal = qty * netPrice;
       
       let discDesc = '';

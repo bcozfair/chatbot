@@ -20,7 +20,14 @@ import {
   getBranchesByCodes,
   getBranches,
 } from './db/repositories.js';
-import { getQuotationNo, cancelOldRevision, enrichQuotationData } from './services/quotationService.js';
+import { getQuotationNo, cancelOldRevision, enrichQuotationData, buildItemSnapshots } from './services/quotationService.js';
+import {
+  loadQuotationRules,
+  findBlockingRule,
+  buildBlockedMessage,
+  normalizeProductScope,
+  invalidateRuleCache
+} from './services/rules/index.js';
 import { handleEvent } from './handlers/lineHandler.js';
 import { generateQuotationPDF, closePdfBrowser } from './pdfGenerator.js';
 import { Parser } from 'json2csv';
@@ -30,6 +37,7 @@ import { pool } from './config/db.js';
 import { getJwtSecret } from './config/jwt.js';
 import { adminAuthMiddleware } from './config/auth.js';
 import { validateProductPriceWithPromotions } from './utils/promotionValidator.js';
+import { calcNetPrice, sumLineTotals } from './utils/pricing.js';
 import {
   startSync,
   isRunning,
@@ -423,10 +431,8 @@ app.get('/api/products/:code/blocked', async (req: any, res: any) => {
     const code = req.params.code;
     if (!code) return res.status(400).json({ error: 'Missing product code' });
 
-    // ดึง locked rules
-    const rulesRes = await pool.query('SELECT * FROM quotation_rules WHERE is_locked = true');
-    const lockedRules: any[] = rulesRes.rows || [];
-    if (lockedRules.length === 0) return res.json({ blocked: false });
+    const rules = await loadQuotationRules();
+    if (!rules.some(r => r.is_locked === true)) return res.json({ blocked: false });
 
     // ดึงข้อมูลสินค้า
     const { rows } = await pool.query(
@@ -437,34 +443,9 @@ app.get('/api/products/:code/blocked', async (req: any, res: any) => {
 
     if (!prod) return res.json({ blocked: false });
 
-    const prodBrand      = prod.brand      ? String(prod.brand).trim().toLowerCase()      : '';
-    const prodSeries     = prod.series     ? String(prod.series).trim().toLowerCase()     : '';
-    const prodProduction = prod.production ? String(prod.production).trim().toLowerCase() : '';
-    const clean = (s: string) => s.replace(/\s+/g, '').toLowerCase();
-
-    // rule match เฉพาะ field ที่ระบุไว้เท่านั้น
-    // '__NULL__' หมายถึง match สินค้าที่ production เป็น null/empty โดยเฉพาะ
-    const matchedRule: any = lockedRules.find(r => {
-      if (r.production) {
-        if (r.production === '__NULL__') {
-          if (prodProduction !== '') return false;
-        } else {
-          const rp = clean(r.production);
-          const ip = clean(prodProduction);
-          const isImportMatch = (rp === 'import' && ip.startsWith('import'));
-          const isExactMatch = (rp === ip);
-          if (!isExactMatch && !isImportMatch) return false;
-        }
-      }
-      if (r.brand  && r.brand.trim().toLowerCase() !== prodBrand)   return false;
-      if (r.series && r.series.trim().toLowerCase() !== prodSeries) return false;
-      return true;
-    });
-
+    const matchedRule = findBlockingRule(rules, normalizeProductScope(prod));
     if (matchedRule) {
-      const prodLabel = matchedRule.production === '__NULL__' ? '(ไม่มีฝ่ายผลิต)' : (matchedRule.production || '');
-      const message = `❌ ระงับการเสนอราคา\n${prod.code}\nเงื่อนไข: ${prodLabel} > ${matchedRule.brand || ''} > ${matchedRule.series || ''}\nกรุณาติดต่อแอดมิน`;
-      return res.json({ blocked: true, message });
+      return res.json({ blocked: true, message: buildBlockedMessage(matchedRule, prod.code) });
     }
 
     res.json({ blocked: false });
@@ -713,97 +694,12 @@ app.put('/api/quotation/:id', express.json(), async (req: any, res: any) => {
     resultItems.push(...expandedNew);
 
     // คำนวณราคายอดรวมสุทธิของใบเสนอราคาใหม่
-    const finalSum = resultItems.reduce((sum, item) => {
-      const price = parseFloat(item.price) || 0;
-      const disc1 = parseFloat(item.discount_1) || 0;
-      const disc2 = parseFloat(item.discount_2) || 0;
-      const netPrice = price * (1 - disc1 / 100) * (1 - disc2 / 100);
-      const quantity = item.quantity ?? item.qty ?? 0;
-      return sum + (quantity * netPrice);
-    }, 0);
+    const finalSum = sumLineTotals(resultItems);
 
     // --------------------------------------------------
     // BUILD SNAPSHOT FOR UPDATED DATA
     // --------------------------------------------------
-    let quotationRules: any[] = [];
-    try {
-      const rulesRes = await pool.query('SELECT * FROM quotation_rules');
-      quotationRules = rulesRes.rows || [];
-    } catch (err) {
-      console.error('Error fetching quotation rules in PUT API:', err);
-    }
-
-    const snapshotItems: any[] = [];
-    for (const item of resultItems) {
-      const code = item.product_code || item.model || item.code || '';
-      let dbProduct: any = null;
-      try {
-        const prodRes = await pool.query(
-          'SELECT product_template_id AS product_id, internal_reference, name, sales_description, brand, series, production FROM products WHERE model = $1 ORDER BY actual_quantity DESC LIMIT 1',
-          [code]
-        );
-        dbProduct = prodRes.rows[0];
-      } catch (err) {
-        console.warn(`[PUT /api/quotation/:id] ดึงข้อมูลสินค้าไม่สำเร็จ (model="${code}") — ใช้ค่าจาก item แทน`, err);
-      }
-
-      const finalInternalRef = dbProduct?.internal_reference || code;
-      const finalProductId = dbProduct?.product_id || item.product_id || null;
-      const finalName = dbProduct?.name || item.name || '';
-      const finalSalesDesc = dbProduct?.sales_description || item.sales_description || '';
-      const iBrand = dbProduct?.brand || item.brand || '';
-      const iSeries = dbProduct?.series || item.series || '';
-      const iProduction = dbProduct?.production || item.production || '';
-
-      let matchedRule = null;
-      const clean = (s: string) => s.replace(/\s+/g, '').toLowerCase();
-      const pBrand = iBrand.trim().toLowerCase();
-      const pSeries = iSeries.trim().toLowerCase();
-      const pProduction = iProduction.trim().toLowerCase();
-
-      matchedRule = quotationRules.find((r: any) => {
-        if (r.production) {
-          if (r.production === '__NULL__') {
-            if (pProduction !== '') return false;
-          } else {
-            const rp = clean(r.production);
-            const ip = clean(pProduction);
-            const isImportMatch = (rp === 'import' && ip.startsWith('import'));
-            const isExactMatch = (rp === ip);
-            if (!isExactMatch && !isImportMatch) return false;
-          }
-        }
-        if (r.brand && r.brand.trim().toLowerCase() !== pBrand) return false;
-        if (r.series && r.series.trim().toLowerCase() !== pSeries) return false;
-        return true;
-      });
-
-      const warrantyYears = matchedRule ? matchedRule.warranty_years : 1;
-      const warrantyUnit = matchedRule ? (matchedRule.warranty_unit || 'year') : 'year';
-      const warrantyDisplay = warrantyUnit === 'month' ? `${warrantyYears} เดือน` : `${warrantyYears} ปี`;
-      const deliveryInStockDays = matchedRule ? matchedRule.delivery_in_stock_days : 3;
-      const deliveryOutOfStockDays = matchedRule ? matchedRule.delivery_out_of_stock_days : 7;
-
-      snapshotItems.push({
-        internal_reference: finalInternalRef,
-        product_id: finalProductId,
-        model: code,
-        name: finalName,
-        sales_description: finalSalesDesc,
-        price: Number(item.price) || 0,
-        quantity: Number(item.quantity ?? item.qty) || 0,
-        discount_1: Number(item.discount_1) || 0,
-        discount_2: Number(item.discount_2) || 0,
-        remark: item.remark || '',
-        brand: iBrand,
-        series: iSeries,
-        production: iProduction,
-        warranty_display: warrantyDisplay,
-        delivery_in_stock_days: deliveryInStockDays,
-        delivery_out_of_stock_days: deliveryOutOfStockDays,
-        is_optional: !!item.is_optional
-      });
-    }
+    const snapshotItems = await buildItemSnapshots(resultItems);
 
     let customerDetailsPayload = null;
     let finalStatus = quote.status;
@@ -1103,10 +999,7 @@ app.post('/api/quotation/:id/confirm', express.json(), async (req: any, res: any
         for (const item of quote.items) {
           const itemKey = item.model || item.product_code;
           const minPrice = minPriceMap[itemKey] || 0;
-          const price = parseFloat(item.price) || 0;
-          const disc1 = parseFloat(item.discount_1) || 0;
-          const disc2 = parseFloat(item.discount_2) || 0;
-          const discountedPrice = price * (1 - disc1 / 100) * (1 - disc2 / 100);
+          const discountedPrice = calcNetPrice(item.price, item.discount_1, item.discount_2);
 
           if (discountedPrice < minPrice - 0.01) {
             // หากไม่ผ่านขั้นต่ำปกติ ให้ไปตรวจสอบสิทธิ์จากโปรโมชัน
@@ -2145,6 +2038,7 @@ app.post('/api/admin/quotation-rules', adminAuthMiddleware, express.json(), asyn
       delivery_in_stock_days !== undefined ? parseInt(delivery_in_stock_days) : 3,
       delivery_out_of_stock_days !== undefined ? parseInt(delivery_out_of_stock_days) : 7
     ]);
+    invalidateRuleCache('quotation_rules');
     res.status(201).json(result.rows[0]);
   } catch (err: any) {
     console.error("Create quotation rule error:", err);
@@ -2205,6 +2099,7 @@ app.put('/api/admin/quotation-rules/:id', adminAuthMiddleware, express.json(), a
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'ไม่พบเงื่อนไขใบเสนอราคาที่ต้องการแก้ไข' });
     }
+    invalidateRuleCache('quotation_rules');
     res.json(result.rows[0]);
   } catch (err: any) {
     console.error("Update quotation rule error:", err);
@@ -2220,6 +2115,7 @@ app.delete('/api/admin/quotation-rules/:id', adminAuthMiddleware, async (req: an
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'ไม่พบเงื่อนไขใบเสนอราคาที่ต้องการลบ' });
     }
+    invalidateRuleCache('quotation_rules');
     res.json({ success: true, message: 'ลบเงื่อนไขใบเสนอราคาสำเร็จ', deletedRule: result.rows[0] });
   } catch (err: any) {
     console.error("Delete quotation rule error:", err);

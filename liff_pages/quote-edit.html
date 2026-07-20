@@ -1467,6 +1467,9 @@
         };
       }
 
+      // ⚠️ mirror ของ calcNetPrice()/calcLineTotal() ใน utils/pricing.ts
+      // หน้านี้เป็น vanilla JS ไม่มี bundler (ตาม AGENTS.md) จึง import ไม่ได้
+      // เป็น duplication จุดเดียวที่ยอมรับโดยตั้งใจ — แก้สูตรที่ utils/pricing.ts แล้วต้องมา sync ที่นี่ด้วยมือ
       function calcItemTotal(item) {
         const net =
           item.price *

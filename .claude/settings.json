@@ -17,7 +17,21 @@
       "PowerShell(try { $r = Invoke-WebRequest -Uri \"http://localhost:3011/api/products/search?q=A\" -UseBasicParsing -TimeoutSec 8; \"UP: $\\($r.StatusCode\\)\" } catch { \"DOWN or error: $\\($_.Exception.Message\\)\" })",
       "PowerShell(curl.exe -s -w \"`nHTTP_STATUS:%{http_code}`n\" -X POST \"http://localhost:3011/api/quotation/draft-cart\" -H \"Content-Type: application/json\" -d $body)",
       "PowerShell($body = '{\"userId\":\"DEBUG_TEST_USER_ZZZ\",\"items\":[{\"product_code\":\"A-000014\",\"model\":\"A-000014\",\"name\":\"test\",\"price\":100,\"quantity\":1}]}')",
-      "PowerShell(npx tsx scripts/diag/probeDraftCart.ts)"
+      "PowerShell(npx tsx scripts/diag/probeDraftCart.ts)",
+      "Bash(awk 'NR>2728' index.ts)",
+      "Bash(awk 'NR>=1737 && NR<=2761' index.ts)",
+      "Read(//c/Users/bcozf/.claude/plans/**)",
+      "PowerShell(npx tsc --noEmit -p tsconfig.json 2>&1)",
+      "PowerShell(npx tsx scripts/diag/ruleResolutionDiff.ts domain 2>&1)",
+      "PowerShell(npx tsx scripts/diag/ruleResolutionDiff.ts ambiguity 2>&1)",
+      "PowerShell(npx tsx scripts/diag/ruleResolutionDiff.ts replay 2>&1)",
+      "PowerShell(npx tsx -e \"import {pool} from './config/db.js'; const r = await pool.query\\(`SELECT id, production, brand, series, is_locked, quote_company FROM quotation_rules WHERE production = '__NULL__'`\\); console.log\\('sentinel rules:', r.rowCount\\); console.table\\(r.rows\\); await pool.end\\(\\);\")",
+      "PowerShell(npx tsx ./_chk_sentinel.ts)",
+      "PowerShell(npx tsx ./_smoke.ts)",
+      "PowerShell(Move-Item ./_smoke.ts ./scripts/diag/ruleEngineSmoke.ts -Force)",
+      "PowerShell(npx tsc --noEmit -p tsconfig.json; if \\($?\\) { Write-Output \"TYPECHECK OK\" }; npx tsx scripts/diag/ruleEngineSmoke.ts 2>&1 | Select-String -Pattern \"FAIL|✓\" | Measure-Object | ForEach-Object { Write-Output \"checks: $\\($_.Count\\)\" }; npx tsx scripts/diag/ruleEngineSmoke.ts 2>&1 | Select-String -Pattern \"FAIL\")",
+      "PowerShell($env:PORT=\"3999\"; $p = Start-Process -FilePath \"npx\" -ArgumentList \"tsx\",\"index.ts\" -PassThru -RedirectStandardOutput \"$env:TEMP\\\\boot.log\" -RedirectStandardError \"$env:TEMP\\\\booterr.log\" -NoNewWindow; Start-Sleep -Seconds 20; if \\(-not $p.HasExited\\) { Write-Output \"=== SERVER RUNNING \\(pid $\\($p.Id\\)\\) ===\"; Stop-Process -Id $p.Id -Force } else { Write-Output \"=== SERVER EXITED code=$\\($p.ExitCode\\) ===\" }; Write-Output \"--- stdout ---\"; Get-Content \"$env:TEMP\\\\boot.log\" -Tail 20; Write-Output \"--- stderr ---\"; Get-Content \"$env:TEMP\\\\booterr.log\" -Tail 20)",
+      "PowerShell(npx tsc --noEmit 2>&1)"
     ]
   }
 }
