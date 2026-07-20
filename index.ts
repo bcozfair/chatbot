@@ -2000,12 +2000,27 @@ app.get('/api/admin/quotation-rules', adminAuthMiddleware, async (req: any, res:
   }
 });
 
+// วันจัดส่งตามจำนวน (tier) — ว่าง/null = ไม่ใช้ tier ต้องเก็บเป็น NULL ไม่ใช่ 0
+// คืน undefined เมื่อค่าที่ส่งมาไม่ถูกต้อง เพื่อให้ผู้เรียกตอบ 400 ได้
+function parseDeliveryQtyDays(raw: any): number | null | undefined {
+  if (raw === undefined || raw === null || String(raw).trim() === '') return null;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) return undefined;
+  return n;
+}
+
 // 3. POST /api/admin/quotation-rules - สร้างกฎเงื่อนไขใหม่
 app.post('/api/admin/quotation-rules', adminAuthMiddleware, express.json(), async (req: any, res: any) => {
-  const { production, brand, series, quote_company, warranty_years, warranty_unit, is_locked, delivery_in_stock_days, delivery_out_of_stock_days } = req.body;
-  
+  const { production, brand, series, quote_company, warranty_years, warranty_unit, is_locked, delivery_in_stock_days, delivery_out_of_stock_days,
+    delivery_days_qty_10, delivery_days_qty_20, delivery_days_qty_50, delivery_days_qty_100 } = req.body;
+
   if (warranty_unit && !['month', 'year'].includes(warranty_unit)) {
     return res.status(400).json({ error: 'warranty_unit must be "month" or "year"' });
+  }
+
+  const qtyDays = [delivery_days_qty_10, delivery_days_qty_20, delivery_days_qty_50, delivery_days_qty_100].map(parseDeliveryQtyDays);
+  if (qtyDays.some(v => v === undefined)) {
+    return res.status(400).json({ error: 'วันจัดส่งตามจำนวนต้องเป็นจำนวนเต็ม 0 ขึ้นไป หรือเว้นว่าง' });
   }
 
   try {
@@ -2022,9 +2037,10 @@ app.post('/api/admin/quotation-rules', adminAuthMiddleware, express.json(), asyn
     }
 
     const insertQuery = `
-      INSERT INTO quotation_rules 
-        (production, brand, series, quote_company, warranty_years, warranty_unit, is_locked, delivery_in_stock_days, delivery_out_of_stock_days)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      INSERT INTO quotation_rules
+        (production, brand, series, quote_company, warranty_years, warranty_unit, is_locked, delivery_in_stock_days, delivery_out_of_stock_days,
+         delivery_days_qty_10, delivery_days_qty_20, delivery_days_qty_50, delivery_days_qty_100)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
       RETURNING *
     `;
     const result = await pool.query(insertQuery, [
@@ -2036,7 +2052,8 @@ app.post('/api/admin/quotation-rules', adminAuthMiddleware, express.json(), asyn
       warranty_unit || 'year',
       is_locked || false,
       delivery_in_stock_days !== undefined ? parseInt(delivery_in_stock_days) : 3,
-      delivery_out_of_stock_days !== undefined ? parseInt(delivery_out_of_stock_days) : 7
+      delivery_out_of_stock_days !== undefined ? parseInt(delivery_out_of_stock_days) : 7,
+      ...qtyDays
     ]);
     invalidateRuleCache('quotation_rules');
     res.status(201).json(result.rows[0]);
@@ -2049,10 +2066,16 @@ app.post('/api/admin/quotation-rules', adminAuthMiddleware, express.json(), asyn
 // 4. PUT /api/admin/quotation-rules/:id - แก้ไขกฎเงื่อนไข
 app.put('/api/admin/quotation-rules/:id', adminAuthMiddleware, express.json(), async (req: any, res: any) => {
   const { id } = req.params;
-  const { production, brand, series, quote_company, warranty_years, warranty_unit, is_locked, delivery_in_stock_days, delivery_out_of_stock_days } = req.body;
+  const { production, brand, series, quote_company, warranty_years, warranty_unit, is_locked, delivery_in_stock_days, delivery_out_of_stock_days,
+    delivery_days_qty_10, delivery_days_qty_20, delivery_days_qty_50, delivery_days_qty_100 } = req.body;
 
   if (warranty_unit && !['month', 'year'].includes(warranty_unit)) {
     return res.status(400).json({ error: 'warranty_unit must be "month" or "year"' });
+  }
+
+  const qtyDays = [delivery_days_qty_10, delivery_days_qty_20, delivery_days_qty_50, delivery_days_qty_100].map(parseDeliveryQtyDays);
+  if (qtyDays.some(v => v === undefined)) {
+    return res.status(400).json({ error: 'วันจัดส่งตามจำนวนต้องเป็นจำนวนเต็ม 0 ขึ้นไป หรือเว้นว่าง' });
   }
 
   try {
@@ -2080,8 +2103,12 @@ app.put('/api/admin/quotation-rules/:id', adminAuthMiddleware, express.json(), a
         is_locked = $7,
         delivery_in_stock_days = $8,
         delivery_out_of_stock_days = $9,
+        delivery_days_qty_10 = $10,
+        delivery_days_qty_20 = $11,
+        delivery_days_qty_50 = $12,
+        delivery_days_qty_100 = $13,
         updated_at = CURRENT_TIMESTAMP
-      WHERE id = $10
+      WHERE id = $14
       RETURNING *
     `;
     const result = await pool.query(updateQuery, [
@@ -2094,6 +2121,7 @@ app.put('/api/admin/quotation-rules/:id', adminAuthMiddleware, express.json(), a
       is_locked || false,
       delivery_in_stock_days !== undefined ? parseInt(delivery_in_stock_days) : 3,
       delivery_out_of_stock_days !== undefined ? parseInt(delivery_out_of_stock_days) : 7,
+      ...qtyDays,
       id
     ]);
     if (result.rows.length === 0) {
@@ -2450,11 +2478,15 @@ app.delete('/api/admin/optional-links/:id', adminAuthMiddleware, async (req: any
 // GET /api/admin/stock-rules
 app.get('/api/admin/stock-rules', adminAuthMiddleware, async (req: any, res: any) => {
   try {
+    // JOIN ตรง ๆ — internal_reference ไม่ซ้ำใน products (มี unique index บังคับไว้)
+    // อย่าเปลี่ยนเป็น LEFT JOIN LATERAL: ที่ 5 พันกฎช้าจาก 95ms เป็น 61 วินาที
     const { rows } = await pool.query(`
-      SELECT 
+      SELECT
         sr.*,
         p.model,
         p.name,
+        p.brand,
+        p.production,
         p.actual_quantity,
         p.product_template_id AS product_id
       FROM product_stock_rules sr
@@ -2468,28 +2500,135 @@ app.get('/api/admin/stock-rules', adminAuthMiddleware, async (req: any, res: any
   }
 });
 
+// เงื่อนไขสินค้าที่นำมาตั้งกฎระงับได้ (ตัดกลุ่ม Buy to sell ออกให้ตรงกับ /api/products/search)
+const STOCK_RULE_PRODUCT_FILTER = `(p.production IS NULL OR LOWER(REPLACE(p.production, ' ', '')) NOT LIKE '%buytosell%')`;
+const STOCK_RULE_HAS_REF = `(p.internal_reference IS NOT NULL AND TRIM(p.internal_reference) <> '' AND p.internal_reference <> 'N/A')`;
+
+// GET /api/admin/stock-rules/productions - รายชื่อสายการผลิตพร้อมจำนวนสินค้าที่ตั้งกฎได้
+app.get('/api/admin/stock-rules/productions', adminAuthMiddleware, async (req: any, res: any) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        p.production,
+        COUNT(DISTINCT TRIM(p.internal_reference))::int AS total
+      FROM products p
+      WHERE p.production IS NOT NULL AND TRIM(p.production) <> ''
+        AND ${STOCK_RULE_PRODUCT_FILTER}
+        AND ${STOCK_RULE_HAS_REF}
+      GROUP BY p.production
+      ORDER BY p.production
+    `);
+    res.json(rows);
+  } catch (err: any) {
+    console.error("GET /api/admin/stock-rules/productions error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/stock-rules/product-lookup - ค้นหาสินค้าเพื่อตั้งกฎ (ค้นได้ทั้งรุ่น ชื่อ แบรนด์ และสายการผลิต)
+// การเลือกยกทั้งสายการผลิตไม่ผ่าน endpoint นี้ — ส่งชื่อ production ไปที่ POST แล้วให้ DB ขยายเอง
+app.get('/api/admin/stock-rules/product-lookup', adminAuthMiddleware, async (req: any, res: any) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    if (!q) {
+      return res.json({ items: [], total: 0, truncated: false });
+    }
+
+    const limit = Math.min(Math.max(parseInt(req.query.limit) || 250, 1), 1000);
+    const params: any[] = [`%${q}%`];
+    const where = `${STOCK_RULE_PRODUCT_FILTER} AND (` +
+      `p.model ILIKE $1 OR p.name ILIKE $1 OR p.internal_reference ILIKE $1 ` +
+      `OR p.brand ILIKE $1 OR p.production ILIKE $1)`;
+
+    // นับจากจำนวนสินค้าที่ถูก dedupe แล้ว เพื่อให้ตรงกับรายการที่ส่งกลับ
+    const countRes = await pool.query(
+      `SELECT COUNT(*)::int AS total FROM (
+         SELECT DISTINCT COALESCE(NULLIF(TRIM(p.internal_reference), ''), 'PID:' || p.product_template_id) AS dedupe_key
+         FROM products p
+         WHERE ${where}
+       ) d`,
+      params
+    );
+    const total = countRes.rows[0]?.total ?? 0;
+
+    params.push(limit);
+    const { rows } = await pool.query(
+      `SELECT product_id, model, name, internal_reference, brand, production, actual_quantity
+       FROM (
+         SELECT DISTINCT ON (COALESCE(NULLIF(TRIM(p.internal_reference), ''), 'PID:' || p.product_template_id))
+           p.product_template_id AS product_id,
+           p.model,
+           p.name,
+           p.internal_reference,
+           p.brand,
+           p.production,
+           p.actual_quantity
+         FROM products p
+         WHERE ${where}
+         ORDER BY COALESCE(NULLIF(TRIM(p.internal_reference), ''), 'PID:' || p.product_template_id), p.product_template_id
+       ) u
+       ORDER BY production NULLS LAST, brand NULLS LAST, model
+       LIMIT $${params.length}`,
+      params
+    );
+
+    res.json({ items: rows, total, truncated: total > rows.length });
+  } catch (err: any) {
+    console.error("GET /api/admin/stock-rules/product-lookup error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/admin/stock-rules
 app.post('/api/admin/stock-rules', adminAuthMiddleware, express.json(), async (req: any, res: any) => {
   try {
-    const { internal_reference, internal_references, is_active } = req.body;
-    
+    const { internal_reference, internal_references, productions, is_active } = req.body;
+
+    // ตั้งกฎยกทั้งสายการผลิต — ขยายรายการฝั่ง DB เลย ไม่ต้องส่ง reference หลักหมื่นตัวมาทาง payload
+    if (productions && Array.isArray(productions) && productions.length > 0) {
+      const names = productions.filter((p: unknown): p is string => typeof p === 'string' && p.trim() !== '');
+      if (names.length === 0) {
+        return res.status(400).json({ error: 'Missing productions' });
+      }
+
+      const extraRefs = Array.isArray(internal_references)
+        ? internal_references.filter((r: unknown): r is string => typeof r === 'string' && r.trim() !== '').map((r: string) => r.trim())
+        : [];
+
+      const { rowCount } = await pool.query(`
+        INSERT INTO product_stock_rules (internal_reference, is_active)
+        SELECT DISTINCT TRIM(p.internal_reference), $3::boolean
+        FROM products p
+        WHERE (p.production = ANY($1::text[]) OR TRIM(p.internal_reference) = ANY($2::text[]))
+          AND p.internal_reference IS NOT NULL
+          AND TRIM(p.internal_reference) <> ''
+          AND p.internal_reference <> 'N/A'
+        ON CONFLICT (internal_reference) DO UPDATE SET is_active = EXCLUDED.is_active, updated_at = NOW()
+      `, [names, extraRefs, is_active !== false]);
+
+      return res.json({ count: rowCount, productions: names });
+    }
+
     if (internal_references && Array.isArray(internal_references)) {
-      if (internal_references.length === 0) {
+      // dedupe + ตัดค่าว่างออก ก่อน insert ทีเดียวด้วย UNNEST
+      // (เลือกยกทั้งสายการผลิตอาจมีหลักหมื่นรายการ — วนยิงทีละ query ไม่ไหว)
+      const refs = Array.from(new Set(
+        internal_references
+          .filter((ref: unknown): ref is string => typeof ref === 'string' && ref.trim() !== '')
+          .map((ref: string) => ref.trim())
+      ));
+
+      if (refs.length === 0) {
         return res.status(400).json({ error: 'Missing internal_references' });
       }
-      
-      const results = [];
-      for (const ref of internal_references) {
-        if (!ref) continue;
-        const { rows } = await pool.query(`
-          INSERT INTO product_stock_rules (internal_reference, is_active)
-          VALUES ($1, $2)
-          ON CONFLICT (internal_reference) DO UPDATE SET is_active = EXCLUDED.is_active, updated_at = NOW()
-          RETURNING *
-        `, [ref, is_active !== false]);
-        results.push(rows[0]);
-      }
-      return res.json(results);
+
+      const { rows } = await pool.query(`
+        INSERT INTO product_stock_rules (internal_reference, is_active)
+        SELECT ref, $2 FROM UNNEST($1::text[]) AS ref
+        ON CONFLICT (internal_reference) DO UPDATE SET is_active = EXCLUDED.is_active, updated_at = NOW()
+        RETURNING *
+      `, [refs, is_active !== false]);
+      return res.json(rows);
     }
 
     if (!internal_reference) {

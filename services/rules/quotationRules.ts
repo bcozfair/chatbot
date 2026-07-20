@@ -7,6 +7,22 @@ import { loadCached } from './cache.js';
 import { selectRule } from './scopeMatch.js';
 import type { ProductScope, ScopedRule } from './types.js';
 
+/** จุดตัดจำนวนของ tier วันจัดส่ง — เรียงจากมากไปน้อยเพื่อให้ไล่หาตัวแรกที่เข้าเงื่อนไขได้เลย */
+export const DELIVERY_QTY_BREAKPOINTS = [100, 50, 20, 10] as const;
+
+export type DeliveryQtyColumn =
+  | 'delivery_days_qty_10'
+  | 'delivery_days_qty_20'
+  | 'delivery_days_qty_50'
+  | 'delivery_days_qty_100';
+
+export const DELIVERY_QTY_COLUMNS: Record<number, DeliveryQtyColumn> = {
+  10: 'delivery_days_qty_10',
+  20: 'delivery_days_qty_20',
+  50: 'delivery_days_qty_50',
+  100: 'delivery_days_qty_100'
+};
+
 export interface QuotationRule extends ScopedRule {
   warranty_years: number;
   warranty_unit: 'year' | 'month';
@@ -14,6 +30,16 @@ export interface QuotationRule extends ScopedRule {
   delivery_in_stock_days: number;
   delivery_out_of_stock_days: number;
   quote_company: 'PM' | 'THT' | null;
+  delivery_days_qty_10: number | null;
+  delivery_days_qty_20: number | null;
+  delivery_days_qty_50: number | null;
+  delivery_days_qty_100: number | null;
+}
+
+/** tier หนึ่งขั้น — `สั่ง >= min_qty ชิ้น แล้วสต็อกไม่พอ ให้ใช้ days วัน` */
+export interface DeliveryQtyTier {
+  min_qty: number;
+  days: number;
 }
 
 export interface QuotationRuleOutcome {
@@ -25,6 +51,8 @@ export interface QuotationRuleOutcome {
   delivery_out_of_stock_days: number;
   quote_company: 'PM' | 'THT' | null;
   matched_rule_id: number | null;
+  /** tier ที่กรอกไว้ เรียง min_qty จากมากไปน้อย — ว่าง = กฏนี้ไม่ใช้ tier */
+  delivery_qty_tiers: DeliveryQtyTier[];
 }
 
 /** ค่าเริ่มต้นเมื่อไม่มีกฏใด match — ตรงกับค่าที่ hardcode อยู่เดิมทุกจุด (warranty 1 ปี, in 3 วัน, out 7 วัน) */
@@ -36,7 +64,8 @@ export const QUOTATION_RULE_DEFAULTS: QuotationRuleOutcome = {
   delivery_in_stock_days: 3,
   delivery_out_of_stock_days: 7,
   quote_company: null,
-  matched_rule_id: null
+  matched_rule_id: null,
+  delivery_qty_tiers: []
 };
 
 /**
@@ -61,6 +90,16 @@ function warrantyDisplayOf(years: number, unit: 'year' | 'month'): string {
   return unit === 'month' ? `${years} เดือน` : `${years} ปี`;
 }
 
+/** ดึง tier ที่กรอกไว้จริงออกมา เรียง min_qty มาก→น้อย (ช่องที่เว้นว่างถูกข้าม) */
+function tiersOf(rule: QuotationRule): DeliveryQtyTier[] {
+  const tiers: DeliveryQtyTier[] = [];
+  for (const minQty of DELIVERY_QTY_BREAKPOINTS) {
+    const days = rule[DELIVERY_QTY_COLUMNS[minQty]];
+    if (days !== null && days !== undefined) tiers.push({ min_qty: minQty, days: Number(days) });
+  }
+  return tiers;
+}
+
 /** แปลงกฏที่ชนะ (หรือไม่มีเลย) เป็นค่าที่เอาไปใช้ได้ตรง ๆ */
 export function resolveQuotationRule(rules: QuotationRule[], scope: ProductScope): QuotationRuleOutcome {
   const rule = selectRule(rules, scope);
@@ -77,8 +116,31 @@ export function resolveQuotationRule(rules: QuotationRule[], scope: ProductScope
     delivery_in_stock_days: rule.delivery_in_stock_days,
     delivery_out_of_stock_days: rule.delivery_out_of_stock_days,
     quote_company: rule.quote_company ?? null,
-    matched_rule_id: rule.id
+    matched_rule_id: rule.id,
+    delivery_qty_tiers: tiersOf(rule)
   };
+}
+
+/**
+ * วันจัดส่งเมื่อ "สต็อกไม่พอ" โดยคิดจากจำนวนที่สั่งของรายการนั้น
+ *
+ * ไล่ tier จากจุดตัดมากไปน้อย เจอตัวแรกที่ `qty >= min_qty` ชนะ
+ * ไม่เข้า tier ไหนเลย (หรือกฏไม่ได้กรอก tier) → ใช้ delivery_out_of_stock_days เดิม
+ *
+ * ⚠️ ใช้กับกรณีสต็อกไม่พอเท่านั้น — ถ้าของพอส่ง ผู้เรียกต้องใช้ delivery_in_stock_days
+ * ไม่ว่าจะสั่งกี่ชิ้นก็ตาม (ยืนยันกับฝ่ายขายแล้ว)
+ */
+export function resolveDeliveryOutOfStockDays(
+  outcome: QuotationRuleOutcome,
+  qty: number
+): { days: number; source: string } {
+  const quantity = Number(qty) || 0;
+  for (const tier of outcome.delivery_qty_tiers) {
+    if (quantity >= tier.min_qty) {
+      return { days: tier.days, source: `qty_${tier.min_qty}` };
+    }
+  }
+  return { days: outcome.delivery_out_of_stock_days, source: 'base' };
 }
 
 /**

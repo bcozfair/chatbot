@@ -12,11 +12,14 @@ export { invalidateRuleCache, type RuleCacheKey } from './cache.js';
 export {
   loadQuotationRules,
   resolveQuotationRule,
+  resolveDeliveryOutOfStockDays,
   findBlockingRule,
   findCompanyRule,
   buildBlockedMessage,
   buildBlockedPdfMessage,
   QUOTATION_RULE_DEFAULTS,
+  DELIVERY_QTY_BREAKPOINTS,
   type QuotationRule,
-  type QuotationRuleOutcome
+  type QuotationRuleOutcome,
+  type DeliveryQtyTier
 } from './quotationRules.js';

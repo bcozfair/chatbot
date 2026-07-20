@@ -17,6 +17,8 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Layers,
+  PackageCheck,
 } from 'lucide-react';
 
 // ── ComboBox ─────────────────────────────────────────────────────────────
@@ -128,9 +130,30 @@ interface QuotationRule {
   is_locked: boolean;
   delivery_in_stock_days: number;
   delivery_out_of_stock_days: number;
+  // วันจัดส่งเมื่อสั่งจำนวนมากและสต็อกไม่พอ — null = ไม่ใช้ tier ขั้นนั้น
+  delivery_days_qty_10: number | null;
+  delivery_days_qty_20: number | null;
+  delivery_days_qty_50: number | null;
+  delivery_days_qty_100: number | null;
   created_at: string;
   updated_at: string;
 }
+
+/** จุดตัดจำนวนของ tier วันจัดส่ง เรียงน้อย→มาก (ต้องตรงกับ services/rules/quotationRules.ts) */
+const QTY_TIERS = [
+  { minQty: 10, field: 'delivery_days_qty_10' },
+  { minQty: 20, field: 'delivery_days_qty_20' },
+  { minQty: 50, field: 'delivery_days_qty_50' },
+  { minQty: 100, field: 'delivery_days_qty_100' }
+] as const;
+
+/** ขั้น tier ที่กรอกไว้จริง (ข้ามช่องที่เว้นว่าง) */
+const filledTiersOf = (rule: QuotationRule) =>
+  QTY_TIERS
+    .map(t => ({ minQty: t.minQty as number, days: rule[t.field] }))
+    .filter((t): t is { minQty: number; days: number } => t.days != null);
+
+const countTiers = (rule: QuotationRule) => filledTiersOf(rule).length;
 
 interface ProductRelation {
   production: string | null;
@@ -163,6 +186,8 @@ export function QuotationRules() {
   // Modal & Form State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingRule, setEditingRule] = useState<QuotationRule | null>(null);
+  // กฏที่กำลังเปิดดูรายละเอียดวันจัดส่งตามจำนวน (null = ปิด)
+  const [tierDetailRule, setTierDetailRule] = useState<QuotationRule | null>(null);
   const [formData, setFormData] = useState({
     production: '',
     brand: '',
@@ -172,7 +197,12 @@ export function QuotationRules() {
     warranty_unit: 'year' as 'month' | 'year',
     is_locked: false,
     delivery_in_stock_days: 3,
-    delivery_out_of_stock_days: 7
+    delivery_out_of_stock_days: 7,
+    // เก็บเป็น string เพราะ '' = เว้นว่าง = ไม่ใช้ tier (ต่างจาก 0 ที่แปลว่าส่งวันเดียวกัน)
+    delivery_days_qty_10: '',
+    delivery_days_qty_20: '',
+    delivery_days_qty_50: '',
+    delivery_days_qty_100: ''
   });
 
   const relations = options.relations || EMPTY_RELATIONS;
@@ -306,7 +336,11 @@ export function QuotationRules() {
       warranty_unit: 'year',
       is_locked: false,
       delivery_in_stock_days: 3,
-      delivery_out_of_stock_days: 7
+      delivery_out_of_stock_days: 7,
+      delivery_days_qty_10: '',
+      delivery_days_qty_20: '',
+      delivery_days_qty_50: '',
+      delivery_days_qty_100: ''
     });
     setIsModalOpen(true);
   };
@@ -322,7 +356,11 @@ export function QuotationRules() {
       warranty_unit: rule.warranty_unit || 'year',
       is_locked: rule.is_locked,
       delivery_in_stock_days: rule.delivery_in_stock_days,
-      delivery_out_of_stock_days: rule.delivery_out_of_stock_days
+      delivery_out_of_stock_days: rule.delivery_out_of_stock_days,
+      delivery_days_qty_10: rule.delivery_days_qty_10 != null ? String(rule.delivery_days_qty_10) : '',
+      delivery_days_qty_20: rule.delivery_days_qty_20 != null ? String(rule.delivery_days_qty_20) : '',
+      delivery_days_qty_50: rule.delivery_days_qty_50 != null ? String(rule.delivery_days_qty_50) : '',
+      delivery_days_qty_100: rule.delivery_days_qty_100 != null ? String(rule.delivery_days_qty_100) : ''
     });
     setIsModalOpen(true);
   };
@@ -352,6 +390,21 @@ export function QuotationRules() {
       return;
     }
 
+    // tier ที่กรอกแล้วต้องไม่ลดลงเมื่อจำนวนมากขึ้น (สั่งเยอะแต่ส่งเร็วกว่าไม่สมเหตุสมผล)
+    const filledTiers = QTY_TIERS
+      .map(t => ({ minQty: t.minQty, days: Number(formData[t.field]) }))
+      .filter((t, i) => formData[QTY_TIERS[i].field] !== '' && Number.isFinite(t.days));
+    for (let i = 1; i < filledTiers.length; i++) {
+      if (filledTiers[i].days < filledTiers[i - 1].days) {
+        showToast(
+          `วันจัดส่งของ ≥${filledTiers[i].minQty} ชิ้น (${filledTiers[i].days} วัน) ` +
+          `น้อยกว่าของ ≥${filledTiers[i - 1].minQty} ชิ้น (${filledTiers[i - 1].days} วัน)`,
+          'error'
+        );
+        return;
+      }
+    }
+
     const requestData = {
       production: formData.production || null,
       brand: formData.brand || null,
@@ -361,7 +414,12 @@ export function QuotationRules() {
       warranty_unit: formData.warranty_unit,
       is_locked: formData.is_locked,
       delivery_in_stock_days: formData.delivery_in_stock_days,
-      delivery_out_of_stock_days: formData.delivery_out_of_stock_days
+      delivery_out_of_stock_days: formData.delivery_out_of_stock_days,
+      // '' → null = ไม่ใช้ tier ขั้นนั้น
+      delivery_days_qty_10: formData.delivery_days_qty_10 === '' ? null : Number(formData.delivery_days_qty_10),
+      delivery_days_qty_20: formData.delivery_days_qty_20 === '' ? null : Number(formData.delivery_days_qty_20),
+      delivery_days_qty_50: formData.delivery_days_qty_50 === '' ? null : Number(formData.delivery_days_qty_50),
+      delivery_days_qty_100: formData.delivery_days_qty_100 === '' ? null : Number(formData.delivery_days_qty_100)
     };
 
     try {
@@ -559,6 +617,7 @@ export function QuotationRules() {
                   <th onClick={() => handleSort('delivery_out_of_stock_days')} className="px-4 py-3 text-center cursor-pointer hover:bg-slate-100 transition-colors w-40">
                     จัดส่ง (ไม่มีสต็อก) {renderSortIcon('delivery_out_of_stock_days')}
                   </th>
+                  <th className="px-4 py-3 text-center w-36">จัดส่งตามจำนวน</th>
                   <th onClick={() => handleSort('is_locked')} className="px-4 py-3 text-center cursor-pointer hover:bg-slate-100 transition-colors w-28">
                     สถานะ {renderSortIcon('is_locked')}
                   </th>
@@ -629,6 +688,22 @@ export function QuotationRules() {
                           <span className="inline-flex items-center gap-1.5">
                             {rule.delivery_out_of_stock_days} วัน
                           </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-center align-top">
+                        {rule.is_locked ? (
+                          <span className="text-slate-300 text-xs">—</span>
+                        ) : countTiers(rule) === 0 ? (
+                          <span className="text-slate-300 text-xs italic">ไม่กำหนด</span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setTierDetailRule(rule)}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-amber-50 border border-amber-200 text-amber-800 hover:bg-amber-100 hover:border-amber-300 rounded-lg text-[11px] font-semibold transition-colors active:scale-95"
+                          >
+                            <Layers className="w-3 h-3 text-amber-500" />
+                            {countTiers(rule)} ขั้น
+                          </button>
                         )}
                       </td>
                       <td className="px-4 py-2.5 text-center align-top">
@@ -720,6 +795,102 @@ export function QuotationRules() {
                 className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* รายละเอียดวันจัดส่งตามจำนวน — อ่านอย่างเดียว เปิดจากปุ่มในตาราง */}
+      {tierDetailRule && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setTierDetailRule(null)}
+        >
+          <div
+            className="bg-white rounded-2xl border border-slate-200 w-full max-w-md shadow-2xl flex flex-col max-h-[90vh]"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between px-5 py-3.5 border-b border-slate-100">
+              <div className="min-w-0">
+                <h3 className="font-bold text-slate-900 text-sm">จัดส่งตามจำนวน</h3>
+                <p className="text-[11px] text-slate-400 mt-0.5 truncate">
+                  {getRuleLabel(tierDetailRule)}
+                </p>
+              </div>
+              <button
+                onClick={() => setTierDetailRule(null)}
+                className="w-7 h-7 flex-shrink-0 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-400 hover:text-slate-600 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+              <div className="flex items-start gap-2 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl">
+                <PackageCheck className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0 mt-0.5" />
+                <p className="text-[11px] text-slate-600 leading-relaxed">
+                  ถ้า<span className="font-semibold text-slate-800">สต็อกพอส่ง</span> จะเป็น{' '}
+                  <span className="font-bold text-emerald-700">{tierDetailRule.delivery_in_stock_days} วัน</span>{' '}
+                  เสมอ ไม่ว่าจะสั่งกี่ชิ้น · ตารางด้านล่างใช้เฉพาะตอน
+                  <span className="font-semibold text-slate-800">สต็อกไม่พอ</span> และคิดจากจำนวน
+                  <span className="font-semibold text-slate-800">ต่อรายการสินค้า</span>
+                </p>
+              </div>
+
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-200">
+                    <th className="pb-1.5">จำนวนที่สั่ง</th>
+                    <th className="pb-1.5 text-right">วันจัดส่ง</th>
+                  </tr>
+                </thead>
+                <tbody className="text-[13px]">
+                  {(() => {
+                    const tiers = filledTiersOf(tierDetailRule);
+                    const firstTier = tiers[0];
+                    return (
+                      <>
+                        <tr className="border-b border-slate-100">
+                          <td className="py-2 text-slate-600">
+                            {firstTier ? `น้อยกว่า ${firstTier.minQty} ชิ้น` : 'ทุกจำนวน'}
+                          </td>
+                          <td className="py-2 text-right font-mono text-slate-500">
+                            {tierDetailRule.delivery_out_of_stock_days} วัน
+                            <span className="ml-1.5 text-[10px] font-sans text-slate-400">(ค่าตั้งต้น)</span>
+                          </td>
+                        </tr>
+                        {tiers.map(t => (
+                          <tr key={t.minQty} className="border-b border-slate-100 last:border-0">
+                            <td className="py-2 text-slate-800 font-medium">
+                              ตั้งแต่ {t.minQty} ชิ้นขึ้นไป
+                            </td>
+                            <td className="py-2 text-right font-mono font-bold text-amber-700">
+                              {t.days} วัน
+                            </td>
+                          </tr>
+                        ))}
+                      </>
+                    );
+                  })()}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 px-5 py-3.5 border-t border-slate-100 bg-slate-50/60 rounded-b-2xl">
+              <button
+                type="button"
+                onClick={() => setTierDetailRule(null)}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 border border-slate-200 hover:bg-slate-100 rounded-lg transition-all"
+              >
+                ปิด
+              </button>
+              <button
+                type="button"
+                onClick={() => { const r = tierDetailRule; setTierDetailRule(null); openEditModal(r); }}
+                className="px-4 py-2 text-xs font-bold text-white bg-[#009032] hover:bg-[#007b2b] rounded-lg transition-all active:scale-95 shadow-sm"
+              >
+                แก้ไขเงื่อนไข
               </button>
             </div>
           </div>
@@ -952,6 +1123,50 @@ export function QuotationRules() {
                           <span className="text-[11px] text-slate-500">วัน</span>
                         </div>
                       </div>
+                    </div>
+                  </section>
+                )}
+
+                {/* ── วันจัดส่งเมื่อสั่งจำนวนมาก (tier) ── */}
+                {!formData.is_locked && (
+                  <section>
+                    <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-1">
+                      จัดส่งเมื่อสั่งจำนวนมาก
+                    </p>
+                    <p className="text-[11px] text-slate-500 mb-2 leading-relaxed">
+                      ใช้เฉพาะตอน<span className="font-semibold text-slate-600">สต็อกไม่พอ</span> และคิดจากจำนวน
+                      <span className="font-semibold text-slate-600">ต่อรายการสินค้า</span> ·
+                      เว้นว่าง = ไม่ใช้ขั้นนั้น (ตกไปใช้ค่า “สต็อกไม่พอ” ด้านบน)
+                    </p>
+                    <div className="grid grid-cols-4 gap-2">
+                      {QTY_TIERS.map(tier => (
+                        <div key={tier.minQty} className="bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-2.5">
+                          <div className="flex items-center gap-1.5 mb-1.5">
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 flex-shrink-0" />
+                            <p className="text-[11px] font-semibold text-slate-600 whitespace-nowrap">
+                              ≥ {tier.minQty} ชิ้น
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="number"
+                              min="0"
+                              max="365"
+                              placeholder="—"
+                              value={formData[tier.field]}
+                              onChange={e => {
+                                const raw = e.target.value;
+                                setFormData(p => ({
+                                  ...p,
+                                  [tier.field]: raw === '' ? '' : String(Math.max(0, Math.min(365, parseInt(raw) || 0)))
+                                }));
+                              }}
+                              className="w-11 h-8 text-center text-xs font-bold bg-white border border-slate-200 rounded-lg outline-none focus:border-[#009032] focus:ring-2 focus:ring-[#009032]/10 transition-all placeholder:text-slate-300 placeholder:font-normal"
+                            />
+                            <span className="text-[11px] text-slate-500">วัน</span>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </section>
                 )}

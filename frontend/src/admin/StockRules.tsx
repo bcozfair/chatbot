@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   AlertTriangle,
   ShieldAlert,
+  Factory,
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
@@ -18,11 +19,18 @@ import {
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 
+const UNGROUPED_KEY = '__no_production__';
+// สายการผลิตหนึ่งมีสินค้าได้ถึงหลักหมื่น จึงเก็บเป็น "ทั้งสายการผลิต" แล้วให้ฝั่ง server ขยายเอง
+// (ไม่ดึงรายการสินค้าทั้งหมดมาไว้ใน state — payload บวมและเรนเดอร์ไม่ไหว)
+const CHIP_RENDER_LIMIT = 100;
+
 interface ProductStockRule {
   product_id: number;
   is_active: boolean;
   model: string;
   name: string;
+  brand?: string;
+  production?: string;
   actual_quantity?: number;
   created_at: string;
   updated_at: string;
@@ -33,17 +41,34 @@ interface ProductSearchResult {
   product_id: number;
   model: string;
   name: string;
-  price: number;
   internal_reference?: string;
   brand?: string;
+  production?: string;
+  actual_quantity?: number;
 }
 
-// Product Multi-Select Component with Search by Brand and Select All
+interface ProductionOption {
+  production: string;
+  total: number;
+}
+
+interface SelectedProduct {
+  id: number;
+  model: string;
+  name: string;
+  internal_reference?: string;
+  brand?: string;
+  production?: string;
+}
+
+// Product Multi-Select Component: ค้นหารายตัว หรือเลือกยกทั้งสายการผลิต (Production)
 interface ProductMultiSelectProps {
   label: string;
   placeholder: string;
-  selectedProducts: Array<{ id: number; model: string; name: string; internal_reference?: string; brand?: string }>;
-  onChange: (vals: Array<{ id: number; model: string; name: string; internal_reference?: string; brand?: string }>) => void;
+  selectedProducts: SelectedProduct[];
+  onChange: (vals: SelectedProduct[]) => void;
+  selectedProductions: ProductionOption[];
+  onChangeProductions: (vals: ProductionOption[]) => void;
   existingReferences: string[];
   error?: boolean;
   disabled?: boolean;
@@ -54,15 +79,26 @@ const ProductMultiSelect: React.FC<ProductMultiSelectProps> = ({
   placeholder,
   selectedProducts,
   onChange,
+  selectedProductions,
+  onChangeProductions,
   existingReferences,
   error,
   disabled
 }) => {
+  const { token } = useAuth();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<ProductSearchResult[]>([]);
+  const [totalFound, setTotalFound] = useState(0);
+  const [isTruncated, setIsTruncated] = useState(false);
+  const [productions, setProductions] = useState<ProductionOption[]>([]);
   const [isOpen, setIsOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const authHeaders = React.useMemo(
+    () => ({ 'Authorization': `Bearer ${token}` }),
+    [token]
+  );
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -74,24 +110,43 @@ const ProductMultiSelect: React.FC<ProductMultiSelectProps> = ({
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
+  // โหลดรายชื่อสายการผลิตไว้ให้เลือกยกกลุ่มตอนยังไม่ได้พิมพ์ค้นหา
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const resp = await fetch('/api/admin/stock-rules/productions', { headers: authHeaders });
+        if (resp.ok && !cancelled) {
+          setProductions(await resp.json());
+        }
+      } catch (err) {
+        console.error("Fetch productions error:", err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [token, authHeaders]);
+
   useEffect(() => {
     if (!query.trim()) {
-      if (results.length > 0) {
-        const timer = setTimeout(() => {
-          setResults([]);
-        }, 0);
-        return () => clearTimeout(timer);
-      }
+      setResults([]);
+      setTotalFound(0);
+      setIsTruncated(false);
       return;
     }
 
     const delayDebounceFn = setTimeout(async () => {
       setIsLoading(true);
       try {
-        const resp = await fetch(`/api/products/search?q=${encodeURIComponent(query)}&limit=250`);
+        const resp = await fetch(
+          `/api/admin/stock-rules/product-lookup?q=${encodeURIComponent(query)}&limit=250`,
+          { headers: authHeaders }
+        );
         if (resp.ok) {
           const data = await resp.json();
-          setResults(data);
+          setResults(data.items || []);
+          setTotalFound(data.total || 0);
+          setIsTruncated(!!data.truncated);
         }
       } catch (err) {
         console.error("Product search error in MultiSelect:", err);
@@ -101,44 +156,59 @@ const ProductMultiSelect: React.FC<ProductMultiSelectProps> = ({
     }, 300);
 
     return () => clearTimeout(delayDebounceFn);
-  }, [query, results.length]);
+  }, [query, authHeaders]);
+
+  const hasValidRef = (prod: ProductSearchResult) =>
+    !!prod.internal_reference && prod.internal_reference.trim() !== '' && prod.internal_reference !== 'N/A';
+
+  const isConfigured = (prod: ProductSearchResult) =>
+    prod.internal_reference ? existingReferences.includes(prod.internal_reference) : false;
+
+  const isSelectable = (prod: ProductSearchResult) => hasValidRef(prod) && !isConfigured(prod);
+
+  const toSelected = (prod: ProductSearchResult): SelectedProduct => ({
+    id: prod.product_id,
+    model: prod.model,
+    name: prod.name,
+    internal_reference: prod.internal_reference,
+    brand: prod.brand,
+    production: prod.production
+  });
 
   const handleToggleProduct = (prod: ProductSearchResult) => {
     const isSelected = selectedProducts.some(p => p.id === prod.product_id);
     if (isSelected) {
       onChange(selectedProducts.filter(p => p.id !== prod.product_id));
     } else {
-      onChange([...selectedProducts, {
-        id: prod.product_id,
-        model: prod.model,
-        name: prod.name,
-        internal_reference: prod.internal_reference,
-        brand: prod.brand
-      }]);
+      onChange([...selectedProducts, toSelected(prod)]);
     }
   };
 
-  const handleSelectAllResults = () => {
-    const validResults = results.filter(prod => {
-      const hasValidRef = prod.internal_reference && prod.internal_reference.trim() !== '' && prod.internal_reference !== 'N/A';
-      const isAlreadyConfigured = prod.internal_reference ? existingReferences.includes(prod.internal_reference) : false;
-      return hasValidRef && !isAlreadyConfigured;
+  // เพิ่มสินค้าหลายรายการพร้อมกัน โดยข้ามตัวที่เลือกไว้แล้ว/ตั้งกฎแล้ว
+  const addProductsBulk = (list: ProductSearchResult[]) => {
+    const next = [...selectedProducts];
+    const seen = new Set(next.map(p => p.id));
+    list.filter(isSelectable).forEach(prod => {
+      if (seen.has(prod.product_id)) return;
+      seen.add(prod.product_id);
+      next.push(toSelected(prod));
     });
-
-    const newSelections = [...selectedProducts];
-    validResults.forEach(prod => {
-      if (!newSelections.some(p => p.id === prod.product_id)) {
-        newSelections.push({
-          id: prod.product_id,
-          model: prod.model,
-          name: prod.name,
-          internal_reference: prod.internal_reference,
-          brand: prod.brand
-        });
-      }
-    });
-    onChange(newSelections);
+    onChange(next);
   };
+
+  // เลือก/ยกเลิก "ทั้งสายการผลิต" — เก็บแค่ชื่อกลุ่ม ให้ server ไปขยายเป็นรายสินค้าตอนบันทึก
+  const isProductionSelected = (production: string) =>
+    selectedProductions.some(p => p.production === production);
+
+  const handleToggleProduction = (option: ProductionOption) => {
+    if (isProductionSelected(option.production)) {
+      onChangeProductions(selectedProductions.filter(p => p.production !== option.production));
+    } else {
+      onChangeProductions([...selectedProductions, option]);
+    }
+  };
+
+  const handleSelectAllResults = () => addProductsBulk(results);
 
   const handleRemoveProduct = (productId: number) => {
     onChange(selectedProducts.filter(p => p.id !== productId));
@@ -146,14 +216,84 @@ const ProductMultiSelect: React.FC<ProductMultiSelectProps> = ({
 
   const handleClearAll = () => {
     onChange([]);
+    onChangeProductions([]);
   };
 
-  const validResults = results.filter(prod => {
-    const hasValidRef = prod.internal_reference && prod.internal_reference.trim() !== '' && prod.internal_reference !== 'N/A';
-    const isAlreadyConfigured = prod.internal_reference ? existingReferences.includes(prod.internal_reference) : false;
-    return hasValidRef && !isAlreadyConfigured;
-  });
+  // ประมาณจำนวนสินค้าที่จะโดนกฎ (ทั้งสายการผลิตอาจซ้อนทับกับที่เลือกรายตัว จึงเป็นค่าประมาณ)
+  const estimatedTotal =
+    selectedProducts.length + selectedProductions.reduce((sum, p) => sum + p.total, 0);
+
+  const validResults = results.filter(isSelectable);
   const isAllResultsSelected = validResults.length > 0 && validResults.every(prod => selectedProducts.some(p => p.id === prod.product_id));
+
+  // จัดกลุ่มผลการค้นหาตามสายการผลิต เพื่อให้กดเลือกยกกลุ่มได้
+  const groupedResults = React.useMemo(() => {
+    const groups = new Map<string, ProductSearchResult[]>();
+    results.forEach(prod => {
+      const key = (prod.production || '').trim() || UNGROUPED_KEY;
+      const bucket = groups.get(key);
+      if (bucket) bucket.push(prod);
+      else groups.set(key, [prod]);
+    });
+    return Array.from(groups.entries());
+  }, [results]);
+
+  const filteredProductions = React.useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return productions;
+    return productions.filter(p => p.production.toLowerCase().includes(q));
+  }, [productions, query]);
+
+  const renderProductRow = (prod: ProductSearchResult) => {
+    const isSelected = selectedProducts.some(p => p.id === prod.product_id);
+    const isAlreadyConfigured = isConfigured(prod);
+    const isChecked = isSelected || isAlreadyConfigured;
+    const isDisabled = !hasValidRef(prod) || isAlreadyConfigured;
+
+    return (
+      <button
+        key={prod.product_id}
+        type="button"
+        disabled={isDisabled}
+        onClick={() => handleToggleProduct(prod)}
+        className={`w-full text-left px-4 py-2.5 text-xs hover:bg-slate-50 transition-colors flex items-center justify-between gap-3 ${isDisabled ? 'opacity-60 cursor-not-allowed bg-slate-55' : ''
+          }`}
+      >
+        <div className="flex flex-col gap-0.5 flex-1 min-w-0">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {prod.brand && (
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-100 text-slate-700 border border-slate-200 uppercase">
+                {prod.brand}
+              </span>
+            )}
+            <span className="font-bold text-slate-800 text-xs font-mono">
+              {prod.internal_reference ? `[${prod.internal_reference}] ` : ''}{prod.model}
+            </span>
+            {isAlreadyConfigured && (
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                ตั้งกฎแล้ว
+              </span>
+            )}
+          </div>
+          <span className="text-slate-500 line-clamp-1">{prod.name}</span>
+          {!hasValidRef(prod) && (
+            <span className="text-red-500 text-[10px] font-semibold mt-0.5">
+              * ไม่มีรหัสอ้างอิงภายใน (Internal Ref.)
+            </span>
+          )}
+        </div>
+        <div className="flex-shrink-0">
+          <input
+            type="checkbox"
+            checked={isChecked}
+            readOnly
+            disabled={isDisabled}
+            className="w-4 h-4 rounded border-slate-300 text-[#009032] focus:ring-[#009032]/20"
+          />
+        </div>
+      </button>
+    );
+  };
 
   return (
     <div className="space-y-1.5" ref={dropdownRef}>
@@ -161,13 +301,13 @@ const ProductMultiSelect: React.FC<ProductMultiSelectProps> = ({
         <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider">
           {label}
         </label>
-        {selectedProducts.length > 0 && (
+        {(selectedProducts.length > 0 || selectedProductions.length > 0) && (
           <button
             type="button"
             onClick={handleClearAll}
             className="text-[11px] font-semibold text-red-500 hover:text-red-700 transition-colors"
           >
-            ล้างทั้งหมด ({selectedProducts.length})
+            ล้างทั้งหมด ({estimatedTotal.toLocaleString()})
           </button>
         )}
       </div>
@@ -206,15 +346,17 @@ const ProductMultiSelect: React.FC<ProductMultiSelectProps> = ({
         </div>
 
         {isOpen && !disabled && (
-          <div className="absolute z-50 mt-1.5 w-full bg-white border border-slate-200 rounded-xl shadow-xl max-h-72 overflow-hidden flex flex-col">
+          <div className="absolute z-50 mt-1.5 w-full bg-white border border-slate-200 rounded-xl shadow-xl max-h-80 overflow-hidden flex flex-col">
             {results.length > 0 && (
-              <div className="p-2 bg-slate-50 flex items-center justify-between text-xs border-b border-slate-150 flex-shrink-0">
-                <span className="text-slate-500 font-medium">พบ {results.length} รายการ</span>
+              <div className="p-2 bg-slate-50 flex items-center justify-between gap-2 text-xs border-b border-slate-150 flex-shrink-0">
+                <span className="text-slate-500 font-medium">
+                  พบ {totalFound} รายการ{isTruncated ? ` (แสดง ${results.length})` : ''}
+                </span>
                 <button
                   type="button"
                   onClick={handleSelectAllResults}
                   disabled={isAllResultsSelected || validResults.length === 0}
-                  className={`px-2 py-1 rounded font-semibold transition-colors ${isAllResultsSelected || validResults.length === 0
+                  className={`px-2 py-1 rounded font-semibold transition-colors flex-shrink-0 ${isAllResultsSelected || validResults.length === 0
                       ? 'text-slate-400 bg-slate-100 cursor-not-allowed'
                       : 'text-white bg-[#009032] hover:bg-emerald-700'
                     }`}
@@ -224,68 +366,86 @@ const ProductMultiSelect: React.FC<ProductMultiSelectProps> = ({
               </div>
             )}
 
-            <div className="overflow-y-auto max-h-56 divide-y divide-slate-100">
+            <div className="overflow-y-auto max-h-64">
               {isLoading ? (
                 <div className="p-4 text-center text-xs text-slate-400 flex items-center justify-center gap-2">
                   <Loader2 className="w-4 h-4 text-[#009032] animate-spin" />
                   กำลังค้นหา...
                 </div>
-              ) : results.length === 0 ? (
-                <div className="p-4 text-center text-xs text-slate-400">
-                  {query.trim() ? 'ไม่พบสินค้าในระบบ' : 'พิมพ์รหัส, รุ่น หรือแบรนด์เพื่อเริ่มค้นหา'}
-                </div>
               ) : (
-                results.map((prod) => {
-                  const isSelected = selectedProducts.some(p => p.id === prod.product_id);
-                  const isAlreadyConfigured = prod.internal_reference ? existingReferences.includes(prod.internal_reference) : false;
-                  const hasValidRef = prod.internal_reference && prod.internal_reference.trim() !== '' && prod.internal_reference !== 'N/A';
-                  const isChecked = isSelected || isAlreadyConfigured;
-                  const isDisabled = !hasValidRef || isAlreadyConfigured;
+                <>
+                  {/* สายการผลิต: เลือกยกทั้งกลุ่มจากฐานข้อมูล (ไม่ขึ้นกับผลค้นหาที่แสดงอยู่) */}
+                  {filteredProductions.length > 0 && (
+                    <div>
+                      <div className="px-3 py-1.5 bg-sky-50/70 border-b border-sky-100 text-[10px] font-bold text-sky-800 uppercase tracking-wider">
+                        {query.trim() ? 'สายการผลิตที่ตรงกับคำค้น' : 'เลือกยกทั้งสายการผลิต'}
+                      </div>
+                      <div className="divide-y divide-slate-100">
+                        {filteredProductions.map(p => {
+                          const picked = isProductionSelected(p.production);
+                          return (
+                            <div key={p.production} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                              <div className="min-w-0 flex items-center gap-2">
+                                <Factory className="w-3.5 h-3.5 text-sky-600 flex-shrink-0" />
+                                <div className="min-w-0">
+                                  <p className="text-xs font-bold text-slate-800 truncate">{p.production}</p>
+                                  <p className="text-[10px] text-slate-400">
+                                    {p.total.toLocaleString()} รายการที่ตั้งกฎได้
+                                  </p>
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleToggleProduction(p)}
+                                className={`flex items-center gap-1 px-2 py-1 rounded text-[11px] font-semibold transition-colors flex-shrink-0 ${picked
+                                  ? 'text-emerald-700 bg-emerald-50 border border-emerald-200'
+                                  : 'text-white bg-[#009032] hover:bg-emerald-700'
+                                  }`}
+                              >
+                                {picked
+                                  ? <><CheckCircle2 className="w-3 h-3" />เลือกไว้แล้ว</>
+                                  : <><Plus className="w-3 h-3" />เลือกทั้งหมด</>}
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
 
-                  return (
-                    <button
-                      key={prod.product_id}
-                      type="button"
-                      disabled={isDisabled}
-                      onClick={() => handleToggleProduct(prod)}
-                      className={`w-full text-left px-4 py-2.5 text-xs hover:bg-slate-50 transition-colors flex items-center justify-between gap-3 ${isDisabled ? 'opacity-60 cursor-not-allowed bg-slate-55' : ''
-                        }`}
-                    >
-                      <div className="flex flex-col gap-0.5 flex-1 min-w-0">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          {prod.brand && (
-                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-100 text-slate-700 border border-slate-200 uppercase">
-                              {prod.brand}
+                  {!query.trim() ? (
+                    <div className="px-3 py-3 text-[11px] text-slate-500 bg-slate-50 border-t border-slate-100 leading-relaxed text-center">
+                      หรือพิมพ์รหัส, รุ่น, ชื่อสินค้า, แบรนด์ หรือสายการผลิต เพื่อค้นหารายตัว
+                    </div>
+                  ) : results.length === 0 ? (
+                    <div className="p-4 text-center text-xs text-slate-400">ไม่พบสินค้าที่ตรงกับคำค้น</div>
+                  ) : (
+                    /* ผลค้นหารายตัว จัดกลุ่มตามสายการผลิตเพื่อให้กดเลือกทั้งกลุ่มที่แสดงอยู่ได้ */
+                    groupedResults.map(([groupKey, items]) => (
+                      <div key={groupKey}>
+                        <div className="sticky top-0 z-10 px-3 py-1.5 bg-slate-100 border-y border-slate-200 flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <Factory className="w-3 h-3 text-slate-500 flex-shrink-0" />
+                            <span className="text-[11px] font-bold text-slate-700 truncate">
+                              {groupKey === UNGROUPED_KEY ? 'ไม่ระบุสายการผลิต' : groupKey}
                             </span>
-                          )}
-                          <span className="font-bold text-slate-800 text-xs font-mono">
-                            {prod.internal_reference ? `[${prod.internal_reference}] ` : ''}{prod.model}
-                          </span>
-                          {isAlreadyConfigured && (
-                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
-                              ตั้งกฎแล้ว
-                            </span>
-                          )}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => addProductsBulk(items)}
+                            className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold text-[#009032] bg-white border border-emerald-200 hover:bg-emerald-50 transition-colors flex-shrink-0"
+                          >
+                            <Plus className="w-2.5 h-2.5" />
+                            เลือก {items.length} รายการนี้
+                          </button>
                         </div>
-                        <span className="text-slate-500 line-clamp-1">{prod.name}</span>
-                        {!hasValidRef && (
-                          <span className="text-red-500 text-[10px] font-semibold mt-0.5">
-                            * ไม่มีรหัสอ้างอิงภายใน (Internal Ref.)
-                          </span>
-                        )}
+                        <div className="divide-y divide-slate-100">
+                          {items.map(renderProductRow)}
+                        </div>
                       </div>
-                      <div className="flex-shrink-0">
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          readOnly
-                          disabled={isDisabled}
-                          className="w-4 h-4 rounded border-slate-300 text-[#009032] focus:ring-[#009032]/20"
-                        />
-                      </div>
-                    </button>
-                  );
-                })
+                    ))
+                  )}
+                </>
               )}
             </div>
           </div>
@@ -293,9 +453,28 @@ const ProductMultiSelect: React.FC<ProductMultiSelectProps> = ({
       </div>
 
       {/* Selected Products Tags Chips */}
-      {selectedProducts.length > 0 && (
+      {(selectedProducts.length > 0 || selectedProductions.length > 0) && (
         <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto p-2 bg-slate-50/50 border border-slate-200 rounded-xl">
-          {selectedProducts.map(prod => (
+          {selectedProductions.map(p => (
+            <div
+              key={`prod-${p.production}`}
+              className="inline-flex items-center gap-1 bg-sky-50 text-sky-900 border border-sky-200 px-2 py-1 rounded-lg text-xs"
+            >
+              <Factory className="w-3 h-3 text-sky-600 flex-shrink-0" />
+              <div className="flex flex-col text-[10px] leading-tight">
+                <span className="font-bold truncate max-w-[150px]">ทั้งสายการผลิต: {p.production}</span>
+                <span className="opacity-70 text-[8px] font-semibold">{p.total.toLocaleString()} รายการ</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => onChangeProductions(selectedProductions.filter(x => x.production !== p.production))}
+                className="w-4 h-4 rounded-full hover:bg-sky-100 flex items-center justify-center text-sky-600 hover:text-sky-800 transition-colors ml-1"
+              >
+                <X className="w-2.5 h-2.5" />
+              </button>
+            </div>
+          ))}
+          {selectedProducts.slice(0, CHIP_RENDER_LIMIT).map(prod => (
             <div
               key={prod.id}
               className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-800 border border-emerald-100/50 px-2 py-1 rounded-lg text-xs"
@@ -304,7 +483,11 @@ const ProductMultiSelect: React.FC<ProductMultiSelectProps> = ({
                 <span className="font-bold font-mono text-emerald-950 truncate max-w-[150px]">
                   {prod.internal_reference ? `[${prod.internal_reference}] ` : ''}{prod.model}
                 </span>
-                {prod.brand && <span className="opacity-70 text-[8px] font-semibold uppercase">{prod.brand}</span>}
+                {(prod.brand || prod.production) && (
+                  <span className="opacity-70 text-[8px] font-semibold truncate max-w-[150px]">
+                    {[prod.brand, prod.production].filter(Boolean).join(' · ')}
+                  </span>
+                )}
               </div>
               <button
                 type="button"
@@ -315,6 +498,11 @@ const ProductMultiSelect: React.FC<ProductMultiSelectProps> = ({
               </button>
             </div>
           ))}
+          {selectedProducts.length > CHIP_RENDER_LIMIT && (
+            <div className="inline-flex items-center px-2 py-1 rounded-lg text-[10px] font-bold bg-slate-200 text-slate-600">
+              และอีก {(selectedProducts.length - CHIP_RENDER_LIMIT).toLocaleString()} รายการ
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -345,7 +533,8 @@ export const StockRules: React.FC = () => {
   const [formError, setFormError] = useState<string | null>(null);
 
   // Form Fields
-  const [selectedProducts, setSelectedProducts] = useState<Array<{ id: number; model: string; name: string; internal_reference?: string; brand?: string }>>([]);
+  const [selectedProducts, setSelectedProducts] = useState<SelectedProduct[]>([]);
+  const [selectedProductions, setSelectedProductions] = useState<ProductionOption[]>([]);
   const [isActive, setIsActive] = useState(true);
 
   // Fetch stock rules
@@ -411,6 +600,7 @@ export const StockRules: React.FC = () => {
   const handleCreateOpen = () => {
     setFormError(null);
     setSelectedProducts([]);
+    setSelectedProductions([]);
     setIsActive(true);
     setIsModalOpen(true);
   };
@@ -424,8 +614,8 @@ export const StockRules: React.FC = () => {
   // Form Submit (Create or Update)
   const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (selectedProducts.length === 0) {
-      setFormError('กรุณาเลือกสินค้าอย่างน้อย 1 รายการ');
+    if (selectedProducts.length === 0 && selectedProductions.length === 0) {
+      setFormError('กรุณาเลือกสินค้าหรือสายการผลิตอย่างน้อย 1 รายการ');
       return;
     }
 
@@ -433,7 +623,7 @@ export const StockRules: React.FC = () => {
       .map(p => p.internal_reference)
       .filter((ref): ref is string => !!ref && ref.trim() !== '' && ref !== 'N/A');
 
-    if (validReferences.length === 0) {
+    if (validReferences.length === 0 && selectedProductions.length === 0) {
       setFormError('สินค้าที่เลือกไม่มีรหัสอ้างอิงภายใน (Internal Reference) ที่ถูกต้อง');
       return;
     }
@@ -441,8 +631,10 @@ export const StockRules: React.FC = () => {
     setFormError(null);
     setIsSaving(true);
 
+    const productionNames = selectedProductions.map(p => p.production);
     const payload = {
       internal_references: validReferences,
+      ...(productionNames.length > 0 ? { productions: productionNames } : {}),
       is_active: isActive
     };
 
@@ -466,7 +658,11 @@ export const StockRules: React.FC = () => {
       }
 
       setIsModalOpen(false);
-      showToast(`สร้างกฎสต็อกใหม่สำหรับสินค้า ${validReferences.length} รายการสำเร็จ`);
+      // ฝั่ง server ขยายสายการผลิตเป็นรายสินค้าเอง จึงเชื่อจำนวนที่ตอบกลับมาแทนการนับฝั่ง client
+      const savedCount = typeof data?.count === 'number'
+        ? data.count
+        : Array.isArray(data) ? data.length : validReferences.length;
+      showToast(`สร้างกฎสต็อกใหม่สำหรับสินค้า ${savedCount.toLocaleString()} รายการสำเร็จ`);
       fetchRules();
     } catch (err: unknown) {
       console.error("Save stock rule error:", err);
@@ -526,7 +722,7 @@ export const StockRules: React.FC = () => {
       }
 
       setRules(prev => prev.map(r => r.internal_reference === rule.internal_reference ? { ...r, is_active: !r.is_active } : r));
-      showToast(`แก้ไขสถานะกฎของรุ่น "${rule.model}" สำเร็จ`);
+      showToast(`แก้ไขสถานะกฎของรุ่น "${rule.model || rule.internal_reference}" สำเร็จ`);
     } catch (err: unknown) {
       console.error("Toggle active error:", err);
       const errMsg = err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการแก้ไขสถานะ';
@@ -539,8 +735,10 @@ export const StockRules: React.FC = () => {
     const q = searchQuery.toLowerCase().trim();
     if (!q) return true;
     return (
-      rule.model.toLowerCase().includes(q) ||
-      rule.name.toLowerCase().includes(q) ||
+      (rule.model || '').toLowerCase().includes(q) ||
+      (rule.name || '').toLowerCase().includes(q) ||
+      (rule.brand || '').toLowerCase().includes(q) ||
+      (rule.production || '').toLowerCase().includes(q) ||
       (rule.internal_reference && rule.internal_reference.toLowerCase().includes(q))
     );
   });
@@ -553,11 +751,17 @@ export const StockRules: React.FC = () => {
       aVal = a.internal_reference || '';
       bVal = b.internal_reference || '';
     } else if (sortField === 'model') {
-      aVal = a.model;
-      bVal = b.model;
+      aVal = a.model || '';
+      bVal = b.model || '';
     } else if (sortField === 'name') {
-      aVal = a.name;
-      bVal = b.name;
+      aVal = a.name || '';
+      bVal = b.name || '';
+    } else if (sortField === 'brand') {
+      aVal = a.brand || '';
+      bVal = b.brand || '';
+    } else if (sortField === 'production') {
+      aVal = a.production || '';
+      bVal = b.production || '';
     } else if (sortField === 'is_active') {
       aVal = a.is_active ? 1 : 0;
       bVal = b.is_active ? 1 : 0;
@@ -663,11 +867,17 @@ export const StockRules: React.FC = () => {
             <table className="w-full border-collapse text-left">
               <thead className="sticky top-0 z-10">
                 <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 text-[11px] font-semibold uppercase tracking-wider select-none">
-                  <th className="px-4 py-3 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('internal_reference')}>
-                    รหัสสินค้า (Internal Ref.) {renderSortIcon('internal_reference')}
+                  <th className="px-4 py-3 cursor-pointer hover:bg-slate-100 transition-colors w-52" onClick={() => handleSort('internal_reference')}>
+                    รหัสสินค้า {renderSortIcon('internal_reference')}
                   </th>
-                  <th className="px-4 py-3 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('model')}>
-                    รหัสรุ่น (Model) {renderSortIcon('model')}
+                  <th className="px-4 py-3 cursor-pointer hover:bg-slate-100 transition-colors w-48" onClick={() => handleSort('model')}>
+                    รหัสรุ่น {renderSortIcon('model')}
+                  </th>
+                  <th className="px-4 py-3 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('brand')}>
+                    แบรนด์ {renderSortIcon('brand')}
+                  </th>
+                  <th className="px-4 py-3 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('production')}>
+                    Production {renderSortIcon('production')}
                   </th>
                   <th className="px-4 py-3 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('name')}>
                     ชื่อสินค้า {renderSortIcon('name')}
@@ -682,8 +892,22 @@ export const StockRules: React.FC = () => {
                 {paginatedRules.map((rule) => (
                   <tr key={rule.internal_reference} className="hover:bg-slate-50/50 transition-colors">
                     <td className="px-4 py-2.5 font-mono font-bold text-slate-800">{rule.internal_reference}</td>
-                    <td className="px-4 py-2.5 font-bold text-slate-800 font-mono">{rule.model}</td>
-                    <td className="px-4 py-2.5 text-slate-600 line-clamp-1">{rule.name}</td>
+                    <td className="px-4 py-2.5 font-bold text-slate-800 font-mono">{rule.model || <span className="text-slate-300 font-sans font-normal">—</span>}</td>
+                    <td className="px-4 py-2.5">
+                      {rule.brand
+                        ? <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200 uppercase">{rule.brand}</span>
+                        : <span className="text-slate-300">—</span>}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      {rule.production
+                        ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-sky-50 text-sky-700 border border-sky-100"><Factory className="w-2.5 h-2.5" />{rule.production}</span>
+                        : <span className="text-slate-300">—</span>}
+                    </td>
+                    <td className="px-4 py-2.5 text-slate-600 max-w-[320px]">
+                      <div className="truncate" title={rule.name || ''}>
+                        {rule.name || <span className="text-slate-300">—</span>}
+                      </div>
+                    </td>
                     <td className="px-4 py-2.5 text-center">
                       <button
                         onClick={() => handleToggleActive(rule)}
@@ -802,11 +1026,13 @@ export const StockRules: React.FC = () => {
                 {/* Product MultiSelect */}
                 <ProductMultiSelect
                   label="เลือกสินค้าหมดสต็อกที่จะทำกฎ"
-                  placeholder="พิมพ์รุ่น, ชื่อสินค้า หรือแบรนด์เพื่อค้นหา..."
+                  placeholder="ค้นหารุ่น, ชื่อสินค้า, แบรนด์ หรือสายการผลิต..."
                   selectedProducts={selectedProducts}
                   onChange={setSelectedProducts}
+                  selectedProductions={selectedProductions}
+                  onChangeProductions={setSelectedProductions}
                   existingReferences={rules.map(r => r.internal_reference).filter(Boolean)}
-                  error={!!formError && selectedProducts.length === 0}
+                  error={!!formError && selectedProducts.length === 0 && selectedProductions.length === 0}
                 />
 
                 {/* Active toggle */}
@@ -859,7 +1085,7 @@ export const StockRules: React.FC = () => {
               </div>
               <h3 className="font-bold text-slate-900 text-sm">ยืนยันการลบกฎระงับสต็อก</h3>
               <p className="text-xs text-slate-500 mt-1">
-                ต้องการลบกฎระงับเสนอขายของสินค้า <span className="font-bold text-slate-800">"{ruleToDelete.model}"</span> หรือไม่?
+                ต้องการลบกฎระงับเสนอขายของสินค้า <span className="font-bold text-slate-800">"{ruleToDelete.model || ruleToDelete.internal_reference}"</span> หรือไม่?
                 การลบจะทำให้เซลส์กลับมาทำใบเสนอราคาสินค้านี้ได้ตามปกติ
               </p>
             </div>

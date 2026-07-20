@@ -504,8 +504,18 @@ CREATE TABLE public.quotation_rules (
     updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
     warranty_unit character varying(10) DEFAULT 'year'::character varying NOT NULL,
     quote_company character varying(10) DEFAULT NULL::character varying,
+    delivery_days_qty_10 integer,
+    delivery_days_qty_20 integer,
+    delivery_days_qty_50 integer,
+    delivery_days_qty_100 integer,
     CONSTRAINT quotation_rules_quote_company_check CHECK (((quote_company)::text = ANY ((ARRAY['PM'::character varying, 'THT'::character varying])::text[]))),
-    CONSTRAINT quotation_rules_warranty_unit_check CHECK (((warranty_unit)::text = ANY ((ARRAY['month'::character varying, 'year'::character varying])::text[])))
+    CONSTRAINT quotation_rules_warranty_unit_check CHECK (((warranty_unit)::text = ANY ((ARRAY['month'::character varying, 'year'::character varying])::text[]))),
+    CONSTRAINT quotation_rules_delivery_qty_days_check CHECK (
+        ((delivery_days_qty_10 IS NULL) OR (delivery_days_qty_10 >= 0)) AND
+        ((delivery_days_qty_20 IS NULL) OR (delivery_days_qty_20 >= 0)) AND
+        ((delivery_days_qty_50 IS NULL) OR (delivery_days_qty_50 >= 0)) AND
+        ((delivery_days_qty_100 IS NULL) OR (delivery_days_qty_100 >= 0))
+    )
 );
 
 

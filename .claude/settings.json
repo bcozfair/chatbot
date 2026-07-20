@@ -31,7 +31,30 @@
       "PowerShell(Move-Item ./_smoke.ts ./scripts/diag/ruleEngineSmoke.ts -Force)",
       "PowerShell(npx tsc --noEmit -p tsconfig.json; if \\($?\\) { Write-Output \"TYPECHECK OK\" }; npx tsx scripts/diag/ruleEngineSmoke.ts 2>&1 | Select-String -Pattern \"FAIL|✓\" | Measure-Object | ForEach-Object { Write-Output \"checks: $\\($_.Count\\)\" }; npx tsx scripts/diag/ruleEngineSmoke.ts 2>&1 | Select-String -Pattern \"FAIL\")",
       "PowerShell($env:PORT=\"3999\"; $p = Start-Process -FilePath \"npx\" -ArgumentList \"tsx\",\"index.ts\" -PassThru -RedirectStandardOutput \"$env:TEMP\\\\boot.log\" -RedirectStandardError \"$env:TEMP\\\\booterr.log\" -NoNewWindow; Start-Sleep -Seconds 20; if \\(-not $p.HasExited\\) { Write-Output \"=== SERVER RUNNING \\(pid $\\($p.Id\\)\\) ===\"; Stop-Process -Id $p.Id -Force } else { Write-Output \"=== SERVER EXITED code=$\\($p.ExitCode\\) ===\" }; Write-Output \"--- stdout ---\"; Get-Content \"$env:TEMP\\\\boot.log\" -Tail 20; Write-Output \"--- stderr ---\"; Get-Content \"$env:TEMP\\\\booterr.log\" -Tail 20)",
-      "PowerShell(npx tsc --noEmit 2>&1)"
+      "PowerShell(npx tsc --noEmit 2>&1)",
+      "PowerShell(npx tsx ./_probe.ts 2>&1)",
+      "PowerShell(npx tsx scripts/runMigration.ts migrations/changes/2026-07-20_01_delivery_qty_tiers.sql)",
+      "PowerShell(npx tsx ./_verify.ts 2>&1)",
+      "PowerShell(npx tsx ./_chk.ts)",
+      "Bash(awk 'NR>=1112 && NR<=1330' services/quotationService.ts)",
+      "PowerShell(npx vite build --config frontend/vite.config.ts 2>&1)",
+      "PowerShell(npm --prefix frontend run build 2>&1)",
+      "Bash(node -e \"let d='';process.stdin.on\\('data',c=>d+=c\\).on\\('end',\\(\\)=>{const j=JSON.parse\\(d\\);console.log\\({total:j.total,returned:j.items.length,truncated:j.truncated}\\)}\\)\")",
+      "Bash(node -e \"let d='';process.stdin.on\\('data',c=>d+=c\\).on\\('end',\\(\\)=>{const j=JSON.parse\\(d\\);console.log\\({total:j.total,returned:j.items.length,truncated:j.truncated}\\);console.log\\(j.items[0]\\)}\\)\")",
+      "Bash(pkill -f \"tsx index.ts\")",
+      "Bash(npm start *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3011/admin.html)",
+      "Bash(curl -s -o /dev/null -w \"server:%{http_code}\\\\n\" http://localhost:3011/admin.html)",
+      "Bash(node ._smoke_ui3.mjs)",
+      "Bash(curl -s -o /dev/null -w \"server:%{http_code}\\\\n\" --max-time 20 http://localhost:3011/admin.html)",
+      "Bash(node ._perf4.mjs)",
+      "Bash(node -e ' *)",
+      "Bash(curl -s --max-time 90 -w '\\\\ntime:%{time_total}s size:%{size_download}\\\\n' -o ._resp.json -H 'Authorization: Bearer __TRACKED_VAR__' http://localhost:3011/api/admin/stock-rules)",
+      "Bash(node -e \"const d=require\\('./._resp.json'\\);console.log\\('rows:',d.length\\);console.log\\(d[0]\\)\")",
+      "Bash(curl -s --max-time 120 -w 'HTTP total: %{time_total}s\\\\n' -o /dev/null -H 'Authorization: Bearer __TRACKED_VAR__' http://localhost:3011/api/admin/stock-rules)",
+      "PowerShell(Get-NetTCPConnection -LocalPort 3011 -State Listen | Select-Object LocalAddress,LocalPort,OwningProcess; Write-Output \"--- node processes ---\"; Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Select-Object ProcessId,CreationDate,@{n='cmd';e={$_.CommandLine.Substring\\(0,[Math]::Min\\(90,$_.CommandLine.Length\\)\\)}} | Format-Table -AutoSize)",
+      "PowerShell(Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'chatbot' } | Select-Object ProcessId,ParentProcessId,CreationDate,@{n='cmd';e={ if \\($_.CommandLine.Length -gt 150\\) { $_.CommandLine.Substring\\(0,150\\) } else { $_.CommandLine } }} | Format-List)",
+      "PowerShell(foreach \\($p in 14828,1948,9304,5924,16076,9332\\) { try { Stop-Process -Id $p -Force -ErrorAction Stop; Write-Output \"killed $p\" } catch { Write-Output \"already gone: $p\" } }; Start-Sleep -Seconds 3; Write-Output \"--- remaining chatbot node procs ---\"; Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'chatbot' } | Select-Object ProcessId,@{n='cmd';e={ if \\($_.CommandLine.Length -gt 100\\) { $_.CommandLine.Substring\\(0,100\\) } else { $_.CommandLine } }} | Format-Table -AutoSize)"
     ]
   }
 }

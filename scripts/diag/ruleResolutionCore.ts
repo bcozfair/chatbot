@@ -6,7 +6,7 @@
 //     ถ้าจะลบสคริปต์นี้ทิ้งเมื่อ Phase 0 จบแล้ว ให้ลบทั้งไฟล์ ไม่ต้อง sync อะไร
 // ─────────────────────────────────────────────────────────────────────────────
 import type { ProductScope } from '../../services/rules/types.js';
-import type { QuotationRuleOutcome } from '../../services/rules/quotationRules.js';
+import { DELIVERY_QTY_BREAKPOINTS, type QuotationRuleOutcome } from '../../services/rules/quotationRules.js';
 
 /**
  * matcher เดิม: Array.find() = "แถวแรกที่ match ชนะ"
@@ -49,7 +49,8 @@ export function outcomeOf(rule: any | null): QuotationRuleOutcome {
       delivery_in_stock_days: 3,
       delivery_out_of_stock_days: 7,
       quote_company: null,
-      matched_rule_id: null
+      matched_rule_id: null,
+      delivery_qty_tiers: []
     };
   }
   const unit = (rule.warranty_unit || 'year') as 'year' | 'month';
@@ -61,11 +62,21 @@ export function outcomeOf(rule: any | null): QuotationRuleOutcome {
     delivery_in_stock_days: rule.delivery_in_stock_days,
     delivery_out_of_stock_days: rule.delivery_out_of_stock_days,
     quote_company: rule.quote_company ?? null,
-    matched_rule_id: rule.id
+    matched_rule_id: rule.id,
+    delivery_qty_tiers: DELIVERY_QTY_BREAKPOINTS
+      .map(minQty => ({ min_qty: minQty, days: rule[`delivery_days_qty_${minQty}`] }))
+      .filter(t => t.days !== null && t.days !== undefined)
+      .map(t => ({ min_qty: t.min_qty, days: Number(t.days) }))
   };
 }
 
-/** คืนรายชื่อ field ที่ค่าต่างกัน — ว่าง = เหมือนกันทุกประการ */
+/**
+ * คืนรายชื่อ field ที่ค่าต่างกัน — ว่าง = เหมือนกันทุกประการ
+ *
+ * ตั้งใจเทียบเฉพาะ field ที่เป็น scalar และตัด delivery_qty_tiers ออก เพราะสคริปต์นี้
+ * ตรวจ "การเลือกกฏ" ว่าเปลี่ยนไหม ไม่ได้ตรวจ tier (tier เป็นฟีเจอร์ที่ matcher เก่าไม่มี
+ * และไม่มีผลต่อการเลือกกฏ) ถ้าเทียบ array ตรง ๆ ด้วย !== จะได้ false positive ทุกแถวด้วย
+ */
 export function diffOutcome(a: QuotationRuleOutcome, b: QuotationRuleOutcome): string[] {
   const fields: Array<keyof QuotationRuleOutcome> = [
     'warranty_years', 'warranty_unit', 'warranty_display', 'is_locked',

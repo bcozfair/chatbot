@@ -17,6 +17,7 @@ import { sumLineTotals } from '../utils/pricing.js';
 import {
   loadQuotationRules,
   resolveQuotationRule,
+  resolveDeliveryOutOfStockDays,
   findBlockingRule,
   findCompanyRule,
   buildBlockedMessage,
@@ -206,6 +207,11 @@ export async function buildItemSnapshots(rawItems: any[], executor: DbExecutor =
       normalizeProductScope({ production: iProduction, brand: iBrand, series: iSeries })
     );
 
+    // วันส่งกรณีสต็อกไม่พอขึ้นกับจำนวนที่สั่งของรายการนี้ (tier) — freeze ค่าที่ผ่าน tier แล้วลง snapshot
+    // ทำที่นี่ได้เพราะ tier ขึ้นกับจำนวนล้วน ๆ ไม่ขึ้นกับสต็อก (สต็อกเป็นตัวเลือกว่าจะใช้ in หรือ out)
+    const quantity = Number(item.quantity ?? item.qty) || 0;
+    const outOfStock = resolveDeliveryOutOfStockDays(outcome, quantity);
+
     snapshotItems.push({
       internal_reference: finalInternalRef,
       product_id: finalProductId,
@@ -213,7 +219,7 @@ export async function buildItemSnapshots(rawItems: any[], executor: DbExecutor =
       name: finalName,
       sales_description: finalSalesDesc,
       price: Number(item.price) || 0,
-      quantity: Number(item.quantity ?? item.qty) || 0,
+      quantity,
       discount_1: Number(item.discount_1) || 0,
       discount_2: Number(item.discount_2) || 0,
       remark: item.remark || '',
@@ -222,7 +228,8 @@ export async function buildItemSnapshots(rawItems: any[], executor: DbExecutor =
       production: iProduction,
       warranty_display: outcome.warranty_display,
       delivery_in_stock_days: outcome.delivery_in_stock_days,
-      delivery_out_of_stock_days: outcome.delivery_out_of_stock_days,
+      delivery_out_of_stock_days: outOfStock.days,
+      delivery_source: outOfStock.source,
       is_optional: !!item.is_optional
     });
   }
@@ -1187,6 +1194,14 @@ export async function enrichQuotationData(quoteDb: any): Promise<any> {
     }
 
     // จัดระเบียบ items เพื่อความเข้ากันได้ย้อนหลังกับ Frontend
+    //
+    // ⚠️ นี่เป็น whitelist — field ที่ไม่อยู่ในลิสต์นี้จะหายตอน round-trip ผ่าน LIFF editor
+    // เกณฑ์ว่าต้องเพิ่มหรือไม่:
+    //   - field ที่ buildItemSnapshots() คำนวณใหม่ได้เอง (warranty_display, delivery_*_days,
+    //     delivery_source) → ไม่ต้องเพิ่ม เพราะ input ของมัน (quantity, production/brand/series)
+    //     อยู่ในลิสต์นี้แล้ว หายไปก็สร้างใหม่ได้ค่าเดิม
+    //   - field ที่เป็นข้อเท็จจริงของบรรทัดนั้นเองและสร้างใหม่ไม่ได้ (เช่นธง is_shipping_fee
+    //     ที่จะมาในอนาคต) → **ต้องเพิ่ม** ไม่งั้นข้อมูลหายถาวร
     const legacyItems = itemDetails.map((item: any) => {
       const stockKey = item.model || item.internal_reference;
       const liveStock = stockKey !== undefined && stockMap[stockKey] !== undefined

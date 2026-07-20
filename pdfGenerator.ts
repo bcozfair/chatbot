@@ -7,6 +7,7 @@ import { resolveQuoteCompany } from "./services/quotationService.js";
 import {
   loadQuotationRules,
   resolveQuotationRule,
+  resolveDeliveryOutOfStockDays,
   buildBlockedPdfMessage,
   normalizeProductScope
 } from "./services/rules/index.js";
@@ -165,7 +166,10 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
         minWarrantyDisplay = outcome.warranty_display;
       }
 
-      const days = hasStock ? outcome.delivery_in_stock_days : outcome.delivery_out_of_stock_days;
+      // สต็อกไม่พอ → วันส่งขึ้นกับจำนวนที่สั่ง (tier) · สต็อกพอ → 3 วันเสมอไม่ว่าสั่งกี่ชิ้น
+      const days = hasStock
+        ? outcome.delivery_in_stock_days
+        : resolveDeliveryOutOfStockDays(outcome, qty).days;
       itemDeliveryDays.push(days);
     });
 

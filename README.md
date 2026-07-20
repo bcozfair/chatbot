@@ -82,6 +82,8 @@ id (SERIAL PK), production (TEXT), brand (TEXT), series (TEXT),
 warranty_years (INT DEFAULT 1), warranty_unit (month/year DEFAULT year),
 is_locked (BOOLEAN DEFAULT false),
 delivery_in_stock_days (INT DEFAULT 3), delivery_out_of_stock_days (INT DEFAULT 7),
+delivery_days_qty_10/20/50/100 (INT NULL) — วันจัดส่งเมื่อสั่ง >= N ชิ้นและสต็อกไม่พอ
+                                            (NULL = ไม่ใช้ tier ขั้นนั้น)
 created_at, updated_at
 ```
 
@@ -299,7 +301,7 @@ user_id, message_id, type, content, reply_token, reply_content, created_at
 - `admin_users` — ผู้ดูแลระบบ (id, username, password_hash, name, role)
 - `quotations` — ใบเสนอราคา (id, user_id, quotation_no, status, customer_name, items JSONB, total_sum, salesperson_name, salesperson_phone, salesperson_employee_code)
 - `promotions` — โปรโมชัน (id, code, name, discount_type, discount_value, product_code, customer_type, customer_refs, min_qty, start_date, end_date)
-- `quotation_rules` — เงื่อนไขใบเสนอ (id, production, brand, series, warranty_years, warranty_unit, is_locked, delivery_in_stock_days, delivery_out_of_stock_days)
+- `quotation_rules` — เงื่อนไขใบเสนอ (id, production, brand, series, warranty_years, warranty_unit, is_locked, delivery_in_stock_days, delivery_out_of_stock_days, delivery_days_qty_10/20/50/100)
 - `salesperson` — พนักงานขายที่ลงทะเบียนใน LINE (user_id, name, phone, salesperson_id, branch_code)
 
 **ตาราง Odoo sync (read-only views):**
