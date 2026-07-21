@@ -312,6 +312,50 @@ export function resolveQuotationDeliveryDays(
 }
 
 /**
+ * วันจัดส่งของรายการที่ "ยังไม่ได้บันทึก" — หน้า LIFF เรียกระหว่างเซลล์แก้จำนวน/เพิ่มสินค้า
+ *
+ * สร้าง snapshot ชั่วคราวด้วย buildItemSnapshots ตัวเดียวกับตอนบันทึกจริง แล้วอ่านสต๊อกสดจาก DB
+ * (ไม่เชื่อ stock ที่ client ส่งมา เพราะอาจค้างตั้งแต่ตอนเปิดหน้า) → เลขที่โชว์ระหว่างแก้
+ * จึงเท่ากับเลขที่จะได้หลังกดบันทึก ทั้งใน Flex และใน PDF
+ */
+export async function previewQuotationDeliveryDays(
+  rawItems: any[]
+): Promise<{ days: number; all_in_stock: boolean }> {
+  const snapshots = await buildItemSnapshots(rawItems);
+
+  const stockKeys = snapshots.map((s: any) => s.model || s.internal_reference).filter(Boolean);
+  const stockMap: Record<string, number> = {};
+  if (stockKeys.length > 0) {
+    try {
+      const { rows } = await pool.query(
+        'SELECT model AS code, actual_quantity AS stock FROM products WHERE model = ANY($1)',
+        [stockKeys]
+      );
+      rows.forEach((p: any) => {
+        const s = p.stock !== undefined && p.stock !== null ? Number(p.stock) : 0;
+        // เผื่อมีหลายแถวชื่อ model เดียวกัน ให้ใช้สต๊อกสูงสุด (เหมือนที่ enrichQuotationData ทำ)
+        if (stockMap[p.code] === undefined || s > stockMap[p.code]) stockMap[p.code] = s;
+      });
+    } catch (err) {
+      console.error('[previewQuotationDeliveryDays] ดึงสต๊อกสดไม่สำเร็จ — ใช้ค่าที่ client ส่งมาแทน', err);
+    }
+  }
+
+  const itemsWithStock = snapshots.map((snap: any, idx: number) => {
+    const key = snap.model || snap.internal_reference;
+    const clientStock = rawItems[idx]?.stock;
+    return {
+      quantity: snap.quantity,
+      stock: stockMap[key] !== undefined
+        ? stockMap[key]
+        : (clientStock !== undefined && clientStock !== null ? Number(clientStock) : 0)
+    };
+  });
+
+  return resolveQuotationDeliveryDays(itemsWithStock, snapshots);
+}
+
+/**
  * ตรวจค่า "วันจัดส่งที่เซลล์แก้เอง" ที่ส่งมาจาก client
  * คืน number = ใช้ค่านี้, null = ล้างกลับไปใช้ค่าอัตโนมัติ, undefined = client ไม่ได้ส่งมา (คงค่าเดิม)
  * โยน Error พร้อมข้อความภาษาไทยเมื่อค่าไม่ผ่าน — ผู้เรียกเอาไปตอบ 400

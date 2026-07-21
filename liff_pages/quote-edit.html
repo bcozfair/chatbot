@@ -28,6 +28,9 @@
         --text-light: #9ab89a;
         --danger: #d42b2b;
         --danger-bg: #fff0f0;
+        /* น้ำเงิน = "เพิ่มสินค้า" — แยกจากเขียว (บันทึก) และแดง (ยกเลิก) ให้ชัดว่าเป็นคนละงาน */
+        --blue: #1565c0;
+        --blue-dark: #0d47a1;
         --warning: #b85c00;
         --warning-bg: rgba(184, 92, 0, 0.08);
         --success: #1e8f1e;
@@ -790,41 +793,6 @@
         border: 1px solid #ffffff;
       }
 
-      /* ─── ADD PRODUCT ─── */
-      /* ปุ่มเดียวของทั้งหน้า — สินค้าถูกจัดเข้าใบ PM/THT อัตโนมัติจาก prod.quote_company
-         จึงไม่ต้องมีช่องค้นหาแยกรายการ์ดอีก (ดู addProductToQuote) */
-      .btn-add-product {
-        font-family: "Sarabun", sans-serif;
-        font-size: 14px;
-        font-weight: 700;
-        color: var(--green-dark);
-        background: var(--green-pale);
-        border: 1.5px dashed var(--border-strong);
-        border-radius: var(--radius);
-        width: 100%;
-        padding: 12px;
-        margin-bottom: 10px;
-        cursor: pointer;
-        transition:
-          background 0.15s,
-          border-color 0.15s;
-      }
-      .btn-add-product:hover {
-        background: var(--green-light);
-        border-color: var(--green);
-      }
-      .btn-add-product:active {
-        opacity: 0.88;
-      }
-
-      /* ปุ่มเดียวกันในเวอร์ชันเล็ก สำหรับ empty state ของใบที่ยังไม่มีสินค้า */
-      .btn-add-product.compact {
-        width: auto;
-        padding: 9px 18px;
-        margin: 10px 0 0;
-        font-size: 13px;
-      }
-
       /* ─── PRODUCT SHEET (bottom sheet เพิ่มสินค้า) ───
          z-index ต้องต่ำกว่า .alert-modal-overlay (2000) เพราะ addProductToQuote
          เด้ง showCustomAlert ตอนสต๊อกไม่พอ ซึ่งต้องอยู่ทับ sheet */
@@ -845,7 +813,8 @@
         max-width: 520px;
         background: var(--white);
         border-radius: 20px 20px 0 0;
-        max-height: 85vh;
+        /* ครึ่งจอพอดี — เห็นการ์ดใบเสนอราคาข้างหลังไปด้วยว่าของที่เพิ่มไปแล้วเข้าใบไหน */
+        height: 50vh;
         display: flex;
         flex-direction: column;
         box-shadow: var(--shadow-lg);
@@ -880,18 +849,27 @@
         color: var(--text);
       }
       .btn-close {
-        width: 30px;
-        height: 30px;
+        width: 32px;
+        height: 32px;
         border: none;
         border-radius: 50%;
-        background: var(--surface);
-        color: var(--text-muted);
-        font-size: 15px;
+        background: var(--text-mid);
+        color: var(--white);
+        font-size: 16px;
+        font-weight: 700;
+        line-height: 1;
         cursor: pointer;
         display: flex;
         align-items: center;
         justify-content: center;
         flex-shrink: 0;
+        transition: background 0.15s;
+      }
+      .btn-close:hover {
+        background: var(--text);
+      }
+      .btn-close:active {
+        opacity: 0.85;
       }
       .sheet-search {
         padding: 0 14px 10px;
@@ -1105,15 +1083,16 @@
       .btn {
         font-family: "Sarabun", sans-serif;
         font-weight: 700;
-        font-size: 14px;
-        padding: 12px 14px;
+        font-size: 13px;
+        padding: 12px 6px;
         border: none;
         border-radius: var(--radius);
         cursor: pointer;
         display: flex;
         align-items: center;
         justify-content: center;
-        gap: 5px;
+        gap: 4px;
+        white-space: nowrap;
         transition:
           background 0.15s,
           opacity 0.15s;
@@ -1144,6 +1123,26 @@
       .btn-cancel:hover {
         background: var(--danger);
         color: var(--white);
+      }
+
+      /* เพิ่มสินค้า — อยู่ใน footer ให้กดได้ตลอดไม่ว่าเลื่อนจออยู่ตรงไหน
+         สีน้ำเงินแยกจากเขียว (บันทึก) / แดง (ยกเลิก) ให้เห็นว่าเป็นคนละงานกัน */
+      .btn-add {
+        background: var(--blue);
+        color: var(--white);
+        box-shadow: 0 3px 10px rgba(21, 101, 192, 0.25);
+      }
+      .btn-add:hover:not(:disabled) {
+        background: var(--blue-dark);
+      }
+
+      /* ปุ่มเดียวกันเวอร์ชันวางในเนื้อหา (empty state ของใบที่ยังไม่มีสินค้า) */
+      .btn.btn-inline {
+        flex: 0 0 auto;
+        display: inline-flex;
+        width: auto;
+        margin-top: 12px;
+        padding: 9px 18px;
       }
 
       /* ─── TOAST ─── */
@@ -1465,10 +1464,6 @@
     <!-- Main Content -->
     <div class="container" id="mainContent" style="display: none">
       <div id="quotesContainer"></div>
-      <!-- อยู่นอก #quotesContainer จึงไม่ถูก render() ทำลาย → ผูก listener ครั้งเดียว -->
-      <button type="button" class="btn-add-product" id="btnOpenProductSheet">
-        ➕ เพิ่มสินค้า
-      </button>
       <div class="footer-note">Powered by Primus Co., Ltd.</div>
     </div>
 
@@ -1509,6 +1504,8 @@
     <!-- Sticky Footer -->
     <div class="sticky-footer" id="stickyFooter" style="display: none">
       <button class="btn btn-cancel" id="btnCancel">❌ ยกเลิก</button>
+      <!-- อยู่ใน footer ที่ sticky อยู่แล้ว → กดเพิ่มสินค้าได้ตลอดไม่ว่าเลื่อนจออยู่ตรงไหน -->
+      <button class="btn btn-add" id="btnOpenProductSheet">+ เพิ่มสินค้า</button>
       <button class="btn btn-confirm" id="btnSave">💾 บันทึก</button>
     </div>
 
@@ -1935,9 +1932,7 @@
           : "In_stock.";
       }
 
-      // ปุ่มรีเซ็ต + ข้อความเตือนโผล่เฉพาะตอนมีค่าที่แก้เองค้างอยู่
-      // ส่วนคำเตือน "ค่าอัตโนมัติยังไม่อัปเดต" โผล่เฉพาะตอนที่ตัวเลข auto เริ่มเก่า
-      // (= มีของแก้ค้างยังไม่บันทึก และยังไม่ได้ตั้งค่าทับ) ไม่งั้นก็ไม่ต้องรก
+      // ปุ่มรีเซ็ต + ข้อความ "แก้เอง" โผล่เฉพาะตอนมีค่าที่แก้เองค้างอยู่
       function updateDeliveryUI(qIdx) {
         const quote = quotesData[qIdx];
         const box = document.getElementById(`delivery-box-${qIdx}`);
@@ -1945,10 +1940,109 @@
         const on = hasDeliveryOverride(quote);
         const btn = box.querySelector(".btn-delivery-reset");
         const note = box.querySelector(".delivery-note");
-        const stale = box.querySelector(".delivery-stale");
         if (btn) btn.hidden = !on;
         if (note) note.hidden = !on;
-        if (stale) stale.hidden = on || !hasChanges;
+      }
+
+      // ── คำนวณวันจัดส่งใหม่ระหว่างแก้ (ยังไม่กดบันทึก) ──
+      // กฎ tier ตามจำนวน (เช่น สั่ง ≥10 ชิ้นแล้วสต๊อกไม่พอ → 20 วัน) อยู่ใน quotation_rules
+      // ฝั่ง server หน้านี้คำนวณเองไม่ได้ จึงถาม /api/quotations/delivery-preview ซึ่งใช้
+      // buildItemSnapshots ชุดเดียวกับตอนบันทึก → เลขที่เห็นตรงกับ Flex สรุปและ PDF เสมอ
+      const deliverySigByQuote = {};
+      let deliveryRefreshTimer = null;
+
+      // มีผลกับวันจัดส่งแค่ รุ่น · จำนวน · สต๊อก (แก้ราคา/ส่วนลด/หมายเหตุ ไม่ต้องยิง)
+      function deliverySignature(quote) {
+        return (quote.items || [])
+          .map((i) => `${i.model || i.product_code}|${i.quantity}|${i.stock}`)
+          .join(";");
+      }
+
+      function seedDeliverySignatures() {
+        quotesData.forEach((q) => {
+          deliverySigByQuote[q.id] = deliverySignature(q);
+        });
+      }
+
+      function scheduleDeliveryRefresh() {
+        if (deliveryRefreshTimer) clearTimeout(deliveryRefreshTimer);
+        deliveryRefreshTimer = setTimeout(refreshDeliveryAuto, 450);
+      }
+
+      // แถวสถานะใต้ช่องวันจัดส่ง (กำลังคำนวณ / คำนวณไม่สำเร็จ) — ว่าง = ซ่อน
+      function setDeliveryStatus(qIdx, text) {
+        const box = document.getElementById(`delivery-box-${qIdx}`);
+        if (!box) return;
+        const el = box.querySelector(".delivery-stale");
+        if (!el) return;
+        el.textContent = text;
+        el.hidden = !text;
+      }
+
+      async function refreshDeliveryAuto() {
+        const targets = quotesData
+          .map((quote, qIdx) => ({ quote, qIdx, sig: deliverySignature(quote) }))
+          .filter(({ quote, sig }) => deliverySigByQuote[quote.id] !== sig);
+        if (targets.length === 0) return;
+
+        targets.forEach(({ qIdx }) =>
+          setDeliveryStatus(qIdx, "⏳ กำลังคำนวณวันจัดส่งใหม่..."),
+        );
+
+        await Promise.all(
+          targets.map(async ({ quote, qIdx, sig }) => {
+            try {
+              const resp = await fetchWithTimeout(
+                "/api/quotations/delivery-preview",
+                {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ items: quote.items }),
+                },
+                12000,
+              );
+              if (!resp.ok) throw new Error(`สถานะ ${resp.status}`);
+              const data = await resp.json();
+              // ระหว่างรอ ผู้ใช้อาจแก้ต่อจนรายการเปลี่ยนไปอีก — ผลลัพธ์ของรอบเก่าใช้ไม่ได้แล้ว
+              // ไม่จำ signature ไว้ด้วย เพื่อให้รอบถัดไปยิงซ้ำจนกว่าจะได้ค่าที่ตรงกับของจริง
+              if (deliverySignature(quote) !== sig) return;
+              deliverySigByQuote[quote.id] = sig;
+              quote.delivery_days_auto = data.days;
+              quote.delivery_all_in_stock = data.all_in_stock;
+              applyDeliveryAuto(qIdx);
+              setDeliveryStatus(qIdx, "");
+            } catch (err) {
+              console.error("Delivery preview error:", err);
+              setDeliveryStatus(
+                qIdx,
+                "⚠️ คำนวณวันจัดส่งใหม่ไม่สำเร็จ — ตัวเลขจะอัปเดตหลังกดบันทึก",
+              );
+            }
+          }),
+        );
+      }
+
+      // เขียนค่าอัตโนมัติล่าสุดลงหน้าจอโดยไม่ re-render (กัน focus หลุดตอนกำลังพิมพ์จำนวน)
+      function applyDeliveryAuto(qIdx) {
+        const quote = quotesData[qIdx];
+        const box = document.getElementById(`delivery-box-${qIdx}`);
+        if (!quote || !box) return;
+
+        const badge = box.querySelector(".delivery-mode-badge");
+        if (badge) {
+          badge.textContent = deliveryModeText(quote);
+          badge.className = `delivery-mode-badge ${
+            quote.delivery_all_in_stock === false ? "make-order" : "in-stock"
+          }`;
+        }
+        const note = box.querySelector(".delivery-note");
+        if (note)
+          note.textContent = `✏️ แก้เอง — ค่าอัตโนมัติ ${deliveryAutoDays(quote)} วัน (จะไม่เปลี่ยนตามสินค้าที่แก้ทีหลัง)`;
+
+        // ช่องที่เซลล์ตั้งค่าเอง หรือกำลังพิมพ์อยู่ ห้ามเขียนทับ
+        const input = box.querySelector(".delivery-input");
+        if (input && !hasDeliveryOverride(quote) && document.activeElement !== input)
+          input.value = deliveryAutoDays(quote);
       }
 
       function onDeliveryDaysInput(e) {
@@ -2006,8 +2100,10 @@
           hasChanges ? "⚠️ ยังไม่ได้บันทึก" : "",
           hasChanges ? "dirty" : "",
         );
-        // คำเตือน "ค่าอัตโนมัติยังไม่อัปเดต" ผูกกับ hasChanges จึงต้องรีเฟรชที่นี่ด้วย
         quotesData.forEach((_, i) => updateDeliveryUI(i));
+        // ถูกเรียกหลังการแก้ไขทุกชนิด — refreshDeliveryAuto() กรองเองด้วย signature
+        // ให้ยิง server เฉพาะตอนที่รุ่น/จำนวน/สต๊อกเปลี่ยนจริง
+        scheduleDeliveryRefresh();
       }
 
       // ── Render ──
@@ -2095,9 +2191,8 @@
             <div class="delivery-note" ${hasDeliveryOverride(quote) ? "" : "hidden"}>
               ✏️ แก้เอง — ค่าอัตโนมัติ ${deliveryAutoDays(quote)} วัน (จะไม่เปลี่ยนตามสินค้าที่แก้ทีหลัง)
             </div>
-            <div class="delivery-stale" hidden>
-              ⓘ ตัวเลขอัตโนมัติจะอัปเดตหลังกดบันทึก
-            </div>
+            <!-- แถวสถานะ: setDeliveryStatus() เติมข้อความตอนกำลังคำนวณ/คำนวณไม่สำเร็จ -->
+            <div class="delivery-stale" hidden></div>
           </div>
           <div class="total-bar">
             <span class="total-label">💰 ยอดรวม</span>
@@ -2162,9 +2257,9 @@
           <div class="empty-state" style="padding:20px 16px;">
             <div class="icon">🛒</div>
             <div class="msg">ยังไม่มีสินค้าในใบนี้</div>
-            <button type="button" class="btn-add-product compact">➕ เพิ่มสินค้า</button>
+            <button type="button" class="btn btn-add btn-inline">+ เพิ่มสินค้า</button>
           </div>`;
-          const emptyAddBtn = container.querySelector(".btn-add-product");
+          const emptyAddBtn = container.querySelector(".btn-add");
           if (emptyAddBtn)
             emptyAddBtn.addEventListener("click", openProductSheet);
           return;
@@ -2388,7 +2483,7 @@
             val > (Number(item.stock) || 0)
           ) {
             showCustomAlert(
-              `ระวัง: สินค้าไม่เพียงพอ (พร้อมส่ง ${item.stock} ชิ้น, ต้องการ ${val} ชิ้น) ขาดอีก ${val - item.stock} ชิ้นจะต้องรอการผลิตหรือสั่งซื้อ`,
+              `สินค้าไม่เพียงพอ (พร้อมส่ง ${item.stock} ชิ้น)`,
             );
           }
           item.quantity = val;
@@ -2608,6 +2703,7 @@
         <div class="info-row"><span class="info-label">📧 อีเมล</span><span class="info-value">${show(meta.email)}</span></div>
         <div class="info-row"><span class="info-label">🏠 ที่อยู่</span><span class="info-value">${show(meta.address)}</span></div>
         <div class="info-row"><span class="info-label">🚚 สถานที่ส่ง</span><span class="info-value">${show(meta.delivery)}</span></div>
+        <div class="info-row"><span class="info-label">💳 เครดิต</span><span class="info-value">${show(quotesData[0].payment_terms)}</span></div>
       `;
       }
 
@@ -2795,6 +2891,9 @@
         quotesData.forEach((quote) => {
           quote.customer_id = cust.id;
           quote.customer_name = `${cust.display_name} | `;
+          // เครดิตเป็นของระดับบริษัท เปลี่ยนบริษัทแล้วต้องเปลี่ยนตาม
+          // (ค่านี้มากับ /api/customers/search — ดู searchCustomersAdmin ใน db/repositories.ts)
+          quote.payment_terms = cust.payment_terms || "";
         });
         const searchInput = document.getElementById("company-search-global");
         if (searchInput) searchInput.value = cust.display_name;
@@ -2892,7 +2991,7 @@
             <input type="number" class="edit-input sheet-qty" min="0" value="${qty}">
             <button type="button" class="qty-btn btn-sheet-inc">+</button>
           </div>`;
-        return `<button type="button" class="btn-add-cart">➕ เพิ่ม</button>`;
+        return `<button type="button" class="btn-add-cart">+ เพิ่ม</button>`;
       }
 
       function renderSheetResults(products) {
@@ -3080,7 +3179,7 @@
         };
         if (1 > stock)
           showCustomAlert(
-            `ระวัง: สินค้าไม่เพียงพอ (พร้อมส่ง ${stock} ชิ้น, ต้องการ 1 ชิ้น) ขาดอีก ${1 - stock} ชิ้นจะต้องรอการผลิตหรือสั่งซื้อ`,
+            `สินค้าไม่เพียงพอ (พร้อมส่ง ${stock} ชิ้น)`,
           );
 
         // ── ไม่มีใบของบริษัทสินค้านี้ → แยกใบใหม่ (สร้างพร้อมสินค้าเลย + ห้ามลบ draft เดิม) ──
@@ -3126,6 +3225,8 @@
 
             const newQuote = await resp.json();
             quotesData.push(newQuote); // ใบใหม่มีสินค้าอยู่แล้ว ไม่ต้อง push ซ้ำ
+            // ใบใหม่มาพร้อมวันจัดส่งที่ server คำนวณให้ตรงกับสินค้าชิ้นนั้นแล้ว
+            deliverySigByQuote[newQuote.id] = deliverySignature(newQuote);
 
             const url = new URL(window.location);
             url.searchParams.set(
@@ -3168,6 +3269,7 @@
             quotesData.forEach((quote) => {
               quote.customer_id = "";
               quote.customer_name = " | ";
+              quote.payment_terms = "";
             });
             // สั่งปิด dropdown และอัปเดต UI รายละเอียดลูกค้า
             const compDropdown = document.getElementById(
@@ -3373,6 +3475,8 @@
             );
           quotesData = data;
           originalData = JSON.parse(JSON.stringify(data));
+          // ค่าที่ server ส่งมาตรงกับรายการปัจจุบันอยู่แล้ว — จำไว้กัน render() แรกยิงถามซ้ำฟรี ๆ
+          seedDeliverySignatures();
           mainContent.style.display = "block";
           stickyFooter.style.display = "flex";
           render();

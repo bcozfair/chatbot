@@ -341,15 +341,19 @@ export async function getBranches(): Promise<any[]> {
 /** ค้นหาลูกค้าหน้าแอดมิน/LIFF (ชื่อหรือรหัส) */
 export async function searchCustomersAdmin(q: string, limit = 30): Promise<any[]> {
   try {
+    // payment_terms ติดมาด้วยเพื่อให้หน้า LIFF อัปเดตช่อง "เครดิต" ได้ทันทีที่เปลี่ยนบริษัท
+    // (ค่าตอนโหลดครั้งแรกมาจาก enrichQuotationData แต่ตอนเลือกบริษัทใหม่มีแค่ผลค้นหานี้)
     if (q.trim()) {
       const { rows } = await pool.query(
-        `SELECT id, display_name, reference, branch AS branch_code, salesperson
+        `SELECT id, display_name, reference, branch AS branch_code, salesperson,
+                customer_payment_terms AS payment_terms
          FROM customers_view WHERE display_name ILIKE $1 OR reference ILIKE $1 LIMIT $2`,
         [`%${q}%`, limit]);
       return rows;
     }
     const { rows } = await pool.query(
-      `SELECT id, display_name, reference, branch AS branch_code, salesperson
+      `SELECT id, display_name, reference, branch AS branch_code, salesperson,
+              customer_payment_terms AS payment_terms
        FROM customers_view LIMIT $1`, [limit]);
     return rows;
   } catch (err) { logErr('searchCustomersAdmin', err); return []; }

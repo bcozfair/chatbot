@@ -633,7 +633,7 @@ export function isCustomerInfoIncomplete(quote: any): boolean {
  * fallback 3/7 วัน กับคำว่า In_stock./Make to order. ตรงกับ pdfGenerator และหน้า LIFF
  * เซลล์จะได้เห็นเลขเดียวกันทั้งในแชท ในหน้าแก้ไข และในไฟล์ PDF
  */
-function formatDeliveryTime(quote: any): string {
+function formatDeliveryTime(quote: any): { text: string; allInStock: boolean } {
   const raw = quote?.delivery_days_override;
   const overrideDays = (raw === null || raw === undefined || raw === '' || !Number.isFinite(Number(raw)))
     ? null
@@ -643,7 +643,10 @@ function formatDeliveryTime(quote: any): string {
   const autoDays = Number.isFinite(autoRaw) ? autoRaw : (allInStock ? 3 : 7);
   const days = overrideDays !== null ? overrideDays : autoDays;
   const mode = allInStock ? 'In_stock.' : 'Make to order.';
-  return `${mode} ภายใน ${days} วัน${overrideDays !== null ? ' (ตั้งค่าเอง)' : ''}`;
+  return {
+    text: `${mode} ภายใน ${days} วัน${overrideDays !== null ? ' (ตั้งค่าเอง)' : ''}`,
+    allInStock
+  };
 }
 
 export async function getQuotationSummaryMessage(quotes: any[]) {
@@ -1013,16 +1016,27 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
     });
 
     // กำหนดส่งเป็นค่าระดับ "ใบ" (ช้าสุดของทุกรายการ) จึงโชว์ท้ายรายการของแต่ละใบ
-    const deliveryText = formatDeliveryTime(quote);
-    summaryText += `🚚 กำหนดส่ง: ${deliveryText}\n`;
+    // ไฮไลท์: In_stock. = น้ำเงิน / Make to order. = เหลือง
+    const delivery = formatDeliveryTime(quote);
+    summaryText += `🚚 กำหนดส่ง: ${delivery.text}\n`;
 
     bodyContents.push({
-      type: "text",
-      text: `🚚 กำหนดส่ง: ${deliveryText}`,
-      size: "xs",
-      color: "#4B5563",
-      wrap: true,
-      margin: "md"
+      type: "box",
+      layout: "vertical",
+      margin: "md",
+      paddingAll: "xs",
+      cornerRadius: "md",
+      backgroundColor: delivery.allInStock ? "#EFF6FF" : "#FFFBEB",
+      contents: [
+        {
+          type: "text",
+          text: `🚚 กำหนดส่ง: ${delivery.text}`,
+          size: "xs",
+          color: delivery.allInStock ? "#1D4ED8" : "#B45309",
+          weight: "bold",
+          wrap: true
+        }
+      ]
     });
 
     const totalSumVal = typeof quote.total_sum === 'number' ? quote.total_sum : (parseFloat(quote.total_sum) || 0);

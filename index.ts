@@ -275,6 +275,23 @@ app.get('/api/quotations', async (req: any, res: any) => {
   }
 });
 
+// --- API: คำนวณวันจัดส่งสด ระหว่างแก้ไขในหน้า LIFF (ยังไม่บันทึก) ---
+// กฎ tier ตามจำนวนอยู่ใน quotation_rules ฝั่ง server หน้า LIFF คำนวณเองไม่ได้
+// endpoint นี้ใช้ buildItemSnapshots ชุดเดียวกับตอน PUT → เลขที่โชว์ตอนแก้ = เลขที่ได้ตอนบันทึก
+app.post('/api/quotations/delivery-preview', express.json(), async (req: any, res: any) => {
+  try {
+    const { items } = req.body;
+    if (!Array.isArray(items)) return res.status(400).json({ error: 'Missing items' });
+    if (items.length > 200) return res.status(400).json({ error: 'รายการสินค้ามากเกินไป' });
+
+    const { previewQuotationDeliveryDays } = await import('./services/quotationService.js');
+    res.json(await previewQuotationDeliveryDays(items));
+  } catch (err: any) {
+    console.error('API delivery-preview error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- API: ค้นหาสินค้าแบบ Real-time ---
 app.get('/api/products/search', async (req: any, res: any) => {
   try {

@@ -875,7 +875,7 @@
 
       const stock = Number(prod.stock) || 0;
       if (stock <= 0) {
-        showAlert(`ระวัง: สินค้า ${code} หมดสต็อก (พร้อมส่ง 0 ชิ้น) จะต้องรอการผลิตหรือสั่งซื้อ`);
+        showAlert(`สินค้าไม่เพียงพอ (พร้อมส่ง ${stock} ชิ้น)`);
       }
       cart.push({ product_code: code, model: code, name: prod.name, price: Number(prod.price)||0, quantity: 1, stock });
       renderProducts();
@@ -889,7 +889,7 @@
       const newQty = item.quantity + delta;
       if (newQty <= 0) { cart.splice(idx, 1); renderProducts(); updateCartBar(); return; }
       if (item.quantity <= item.stock && newQty > item.stock) {
-        showAlert(`ระวัง: สินค้าไม่เพียงพอ (พร้อมส่ง ${item.stock} ชิ้น, ต้องการ ${newQty} ชิ้น) ขาดอีก ${newQty - item.stock} ชิ้น`);
+        showAlert(`สินค้าไม่เพียงพอ (พร้อมส่ง ${item.stock} ชิ้น)`);
       }
       item.quantity = newQty;
       renderProducts();
@@ -903,7 +903,7 @@
       const item = cart[idx];
       const newQty = Math.max(1, val);
       if (item.quantity <= item.stock && newQty > item.stock) {
-        showAlert(`ระวัง: สินค้าไม่เพียงพอ (พร้อมส่ง ${item.stock} ชิ้น, ต้องการ ${newQty} ชิ้น) ขาดอีก ${newQty - item.stock} ชิ้น`);
+        showAlert(`สินค้าไม่เพียงพอ (พร้อมส่ง ${item.stock} ชิ้น)`);
       }
       item.quantity = newQty;
       renderProducts();
