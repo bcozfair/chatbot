@@ -70,7 +70,10 @@
       "Read(//tmp/**)",
       "Bash(netstat -ano)",
       "Bash(curl -s -o /dev/null -w \"server: %{http_code}\\\\n\" http://localhost:3011/)",
-      "Bash(grep -vE \"injected env|^>|^$\")"
+      "Bash(grep -vE \"injected env|^>|^$\")",
+      "Bash(git diff *)",
+      "Bash(awk 'NR>=264 && NR<=520 && \\(/RETURNING/ || /^\\\\s*return /\\)' services/quotationService.ts)",
+      "Bash(awk 'NR>=1330 && NR<=1460 && \\(/^\\\\s*return \\\\{/ || /\\\\.\\\\.\\\\.quoteDb/ || /user_id/\\)' services/quotationService.ts)"
     ]
   }
 }

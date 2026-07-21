@@ -182,8 +182,10 @@ user_id, message_id, type, content, reply_token, reply_content, created_at
 - ดึงข้อมูลใบเสนอราคาจาก `/api/quotations?ids=`
 - ค้นหาและเลือกลูกค้า/ผู้ติดต่อ
 - แก้ไข qty, ราคา, discount ของแต่ละสินค้า
-- บันทึกผ่าน `PUT /api/quotation/:id`
-- ยืนยัน → ส่งข้อความ "📄 ยืนยันใบเสนอราคาสำเร็จ ..." กลับ LINE
+- ไม่มี auto-save — บันทึกเมื่อกดปุ่ม "💾 บันทึก" เท่านั้น (`PUT /api/quotation/:id`)
+- บันทึกสำเร็จ → ส่งข้อความ "📝 บันทึกร่างใบเสนอราคาแล้ว (รหัส: ...)" กลับ LINE → บอทตอบ Flex สรุปร่าง
+- ยืนยันออกเอกสารทำผ่านปุ่มใน Flex สรุปนั้นเท่านั้น (postback `action=confirm`) — หน้า LIFF ไม่ยืนยันเอง
+- ปุ่ม "❌ ยกเลิก" = ปิดหน้าแก้ไข (เตือนถ้ายังไม่ได้บันทึก) ไม่ใช่การยกเลิกร่างใบเสนอราคา
 
 ---
 
@@ -328,7 +330,7 @@ user_id, message_id, type, content, reply_token, reply_content, created_at
 - ใส่ลายเซ็นพนักงานขาย + แอดมิน จากไฟล์ `{employee_code}.png`
 
 **Promotion Validation:**
-- ตรวจสอบทั้งฝั่ง LIFF (UI) และ Backend ก่อน confirm
+- ราคาหลังหักส่วนลดต้อง ≥ `minimum_sales_price` เว้นแต่เข้าเงื่อนไขโปรโมชัน — กฎอยู่ที่ `checkMinSalesPrice()` ใน `services/quotationService.ts` **ที่เดียว** ใช้ทั้งตอนบันทึกจาก LIFF (`PUT /api/quotation/:id` → 422) และตอนยืนยัน (`POST /api/quotation/:id/confirm`, postback `action=confirm`)
 - รองรับ 3 ประเภท: `percent`, `fixed`, `override`
 - กรองตาม product_code, customer_type, customer_refs, min_qty, start_date/end_date
 

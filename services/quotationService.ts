@@ -13,7 +13,8 @@ import {
   createUnregisteredCustomerFlex
 } from '../utils/flexTemplates.js';
 import { expandOptionalProducts, checkStockRules, StockViolation } from './productService.js';
-import { sumLineTotals } from '../utils/pricing.js';
+import { sumLineTotals, calcNetPrice } from '../utils/pricing.js';
+import { validateProductPriceWithPromotions } from '../utils/promotionValidator.js';
 import {
   loadQuotationRules,
   resolveQuotationRule,
@@ -655,6 +656,108 @@ export async function checkMinOrderQty(
   return violations;
 }
 
+export interface MinPriceViolation {
+  type: 'MIN_PRICE_VIOLATION';
+  model: string;
+  price: number;      // ราคาต่อหน่วยหลังหักส่วนลดแล้ว
+  min_price: number;  // minimum_sales_price ของสินค้า
+  warn_msg: string;
+}
+
+/**
+ * ตรวจว่าราคาหลังหักส่วนลดของทุกบรรทัด >= minimum_sales_price ของสินค้านั้น
+ * ยกเว้นเข้าเงื่อนไขโปรโมชันที่ active อยู่ (validateProductPriceWithPromotions)
+ *
+ * ⚠️ เป็นจุดเดียวของกฎ "ห้ามขายต่ำกว่าราคาขั้นต่ำ" — ใช้ทั้งตอนบันทึกจาก LIFF (PUT /api/quotation/:id)
+ * และตอนยืนยันออกเอกสาร (POST /api/quotation/:id/confirm, postback action=confirm)
+ * ห้ามก๊อปตรรกะนี้ไปเขียนซ้ำที่อื่น ไม่งั้นกฎจะเพี้ยนกันคนละที่
+ *
+ * โยน error เมื่อดึงราคาขั้นต่ำไม่ได้ (fail-closed — ห้ามปล่อยผ่านทั้งที่ยังไม่ได้ตรวจ)
+ * ส่วนข้อมูลลูกค้า/โปรโมชันถ้าดึงไม่ได้จะถือว่าไม่มีโปรโมชันช่วย (เข้มไว้ก่อน)
+ */
+export async function checkMinSalesPrice(
+  items: any[] | null,
+  customerName?: string | null
+): Promise<MinPriceViolation[]> {
+  if (!items || items.length === 0) return [];
+
+  const productCodes = items.map((item: any) => item.model || item.product_code).filter(Boolean);
+  if (productCodes.length === 0) return [];
+
+  const prodRes = await pool.query(
+    'SELECT model AS code, minimum_sales_price FROM products WHERE model = ANY($1)',
+    [productCodes]
+  );
+  const minPriceMap: Record<string, number> = {};
+  prodRes.rows.forEach((p: any) => {
+    minPriceMap[p.code] = parseFloat(p.minimum_sales_price) || 0;
+  });
+
+  // ชื่อบริษัทใช้เช็คสิทธิ์โปรโมชัน (customer_type / reference)
+  let companyName = customerName || 'ลูกค้าทั่วไป';
+  if (companyName.includes(' | ')) {
+    companyName = companyName.split(' | ')[0].trim();
+  }
+
+  let customerData = null;
+  if (companyName && companyName !== 'ลูกค้าทั่วไป') {
+    try {
+      const custRes = await pool.query(
+        'SELECT customer_type, reference FROM customers_view WHERE display_name = $1 LIMIT 1',
+        [companyName]
+      );
+      if (custRes.rows.length > 0) {
+        customerData = {
+          customer_type: custRes.rows[0].customer_type,
+          reference: custRes.rows[0].reference
+        };
+      }
+    } catch (err) {
+      console.error('[checkMinSalesPrice] fetch customer error:', err);
+    }
+  }
+
+  let activePromos: any[] = [];
+  try {
+    const promoRes = await pool.query('SELECT * FROM promotions WHERE is_active = true');
+    activePromos = promoRes.rows;
+  } catch (err) {
+    console.error('[checkMinSalesPrice] fetch promotions error:', err);
+  }
+
+  const violations: MinPriceViolation[] = [];
+  for (const item of items) {
+    const itemKey = item.model || item.product_code;
+    if (!itemKey) continue;
+    const minPrice = minPriceMap[itemKey] || 0;
+    if (minPrice <= 0) continue;
+
+    const discountedPrice = calcNetPrice(item.price, item.discount_1, item.discount_2);
+    if (discountedPrice >= minPrice - 0.01) continue;
+
+    // ไม่ผ่านขั้นต่ำปกติ → ยังผ่านได้ถ้าเข้าเงื่อนไขโปรโมชัน
+    const promoResult = validateProductPriceWithPromotions(
+      itemKey,
+      item.quantity || 1,
+      discountedPrice,
+      minPrice,
+      customerData,
+      activePromos
+    );
+    if (promoResult.allowed) continue;
+
+    violations.push({
+      type: 'MIN_PRICE_VIOLATION',
+      model: itemKey,
+      price: discountedPrice,
+      min_price: minPrice,
+      warn_msg: `ราคาหลังลด ฿${discountedPrice.toFixed(2)} ต่ำกว่าขั้นต่ำ ฿${minPrice.toFixed(2)} และไม่เข้าเงื่อนไขโปรโมชัน`
+    });
+  }
+
+  return violations;
+}
+
 export type ValidationError = StockViolation | MoqViolation;
 
 export async function validateAndPrepareItems(items: any[] | null): Promise<{
@@ -785,7 +888,7 @@ export async function processQuotationRequest(userId: string, rawCustomerQuery: 
     if (!insertedQuotes || insertedQuotes.length === 0) {
       return { text: "❌ ไม่สามารถบันทึกข้อมูลใบเสนอราคาได้" };
     }
-    return createUnregisteredCustomerFlex(cleanCust, insertedQuotes.map((q: any) => q.id).join(','));
+    return createUnregisteredCustomerFlex(cleanCust, insertedQuotes.map((q: any) => q.id).join(','), userId);
   }
 
   // Case 3: Multiple customer candidates found

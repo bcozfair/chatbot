@@ -128,7 +128,7 @@ export async function handleQuotationEditRequest(params: {
     return { messages: [{ type: 'text', text: t }], replyText: t };
   }
 
-  const flexMsg = createRevisionFlex(activeQuote.quotation_no, newQuote.id);
+  const flexMsg = createRevisionFlex(activeQuote.quotation_no, newQuote.id, userId);
   const replyText = `📄 เตรียมแก้ไขใบเสนอราคา ${activeQuote.quotation_no} (กดปุ่มเพื่อแก้ไขรายการ/จำนวน/ส่วนลด)`;
   return { messages: [flexMsg as any], replyText };
 }

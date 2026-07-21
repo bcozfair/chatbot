@@ -145,9 +145,23 @@ export function createBranchSelectionFlex(selectedCodesStr = '', userId = '') {
   };
 }
 
-export function createUnregisteredCustomerFlex(companyName: string, quoteIdsStr: string) {
+/**
+ * URL หน้า LIFF แก้ไขใบเสนอราคา — จุดเดียวที่ประกอบลิงก์นี้
+ *
+ * ⚠️ ต้องแนบ userId เสมอ: หน้า LIFF ใช้ userId ยืนยันความเป็นเจ้าของใบตอน PUT/cancel
+ * (`isQuotationOwner` ใน index.ts) ถ้าไม่แนบ หน้าเว็บต้องไปพึ่ง `liff.getProfile()`
+ * ซึ่งพลาดได้ (scope ไม่ครบ / เปิดนอก LINE client) แล้วผู้ใช้จะเจอ 403 "ไม่มีสิทธิ์เข้าถึงใบเสนอราคานี้"
+ * ตอนกดบันทึก — ไม่ใช่ security boundary (ดูคอมเมนต์ที่ isQuotationOwner) แต่ต้องมีให้ครบ
+ */
+export function buildQuoteEditLiffUrl(quoteIdsStr: string, userId?: string | null) {
   const liffQuoteId = process.env.LIFF_QUOTE_ID || process.env.LIFF_ID || '';
-  const liffUrl = `https://liff.line.me/${liffQuoteId}?quoteIds=${encodeURIComponent(quoteIdsStr)}`;
+  const params = new URLSearchParams({ quoteIds: quoteIdsStr });
+  if (userId) params.set('userId', userId);
+  return `https://liff.line.me/${liffQuoteId}?${params.toString()}`;
+}
+
+export function createUnregisteredCustomerFlex(companyName: string, quoteIdsStr: string, userId?: string | null) {
+  const liffUrl = buildQuoteEditLiffUrl(quoteIdsStr, userId);
 
   return {
     type: "flex",
@@ -592,7 +606,6 @@ function parseCustomerNameMeta(fullName: string) {
 }
 
 export async function getQuotationSummaryMessage(quotes: any[]) {
-  const liffQuoteId = process.env.LIFF_QUOTE_ID || process.env.LIFF_ID || '';
   const quoteIds = quotes.map(q => q.id).join(',');
 
   // Fetch current stock for all items in the quotes
@@ -945,8 +958,8 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
     });
   }
 
-  // Build LIFF URL for editing
-  const liffUrl = `https://liff.line.me/${liffQuoteId}?quoteIds=${encodeURIComponent(quoteIds)}`;
+  // Build LIFF URL for editing (แนบ userId เจ้าของใบ ไม่งั้นหน้า LIFF บันทึกไม่ผ่าน 403)
+  const liffUrl = buildQuoteEditLiffUrl(quoteIds, quotes[0].user_id);
 
   // Build unified Flex Message
   const combinedFlexMessage = {
@@ -1076,9 +1089,8 @@ export function appendReviseFrom(customerName: string, originalQuoteNo: string) 
   return `${company} | ${contact} | ${metaStr}`;
 }
 
-export function createRevisionFlex(quoteNo: string, quoteId: string) {
-  const liffQuoteId = process.env.LIFF_QUOTE_ID || process.env.LIFF_ID || '';
-  const liffUrl = `https://liff.line.me/${liffQuoteId}?quoteIds=${quoteId}`;
+export function createRevisionFlex(quoteNo: string, quoteId: string, userId?: string | null) {
+  const liffUrl = buildQuoteEditLiffUrl(quoteId, userId);
   return {
     type: "flex",
     altText: "ดึงข้อมูลใบเสนอราคาสำเร็จ",
@@ -1136,9 +1148,8 @@ export function createRevisionFlex(quoteNo: string, quoteId: string) {
   };
 }
 
-export function createCartConfirmationFlex(quoteIdsStr: string, itemCount: number) {
-  const liffQuoteId = process.env.LIFF_QUOTE_ID || process.env.LIFF_ID || '';
-  const liffUrl = `https://liff.line.me/${liffQuoteId}?quoteIds=${encodeURIComponent(quoteIdsStr)}`;
+export function createCartConfirmationFlex(quoteIdsStr: string, itemCount: number, userId?: string | null) {
+  const liffUrl = buildQuoteEditLiffUrl(quoteIdsStr, userId);
 
   return {
     type: "flex",

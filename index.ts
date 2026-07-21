@@ -20,7 +20,7 @@ import {
   getBranchesByCodes,
   getBranches,
 } from './db/repositories.js';
-import { confirmQuotationAtomic, enrichQuotationData, buildItemSnapshots } from './services/quotationService.js';
+import { confirmQuotationAtomic, enrichQuotationData, buildItemSnapshots, checkMinSalesPrice } from './services/quotationService.js';
 import {
   loadQuotationRules,
   findBlockingRule,
@@ -36,8 +36,7 @@ import jwt from 'jsonwebtoken';
 import { pool } from './config/db.js';
 import { getJwtSecret } from './config/jwt.js';
 import { adminAuthMiddleware } from './config/auth.js';
-import { validateProductPriceWithPromotions } from './utils/promotionValidator.js';
-import { calcNetPrice, sumLineTotals } from './utils/pricing.js';
+import { sumLineTotals } from './utils/pricing.js';
 import {
   startSync,
   isRunning,
@@ -710,6 +709,14 @@ app.put('/api/quotation/:id', express.json(), async (req: any, res: any) => {
     // ผนวกรายการสินค้าใหม่ที่ผ่านการตรวจสอบแล้ว
     resultItems.push(...expandedNew);
 
+    // ราคาหลังหักส่วนลดต้องไม่ต่ำกว่าขั้นต่ำ — ตรวจ "ทุกบรรทัด" ไม่ใช่แค่สินค้าที่เพิ่งเพิ่ม
+    // เพราะเคสหลักคือผู้ใช้ไปลดราคา/เพิ่มส่วนลดของรายการเดิมในหน้า LIFF
+    // (กฎเดียวกับตอนยืนยัน — ดักตั้งแต่ตอนบันทึก จะได้ไม่มีร่างที่ยืนยันไม่ได้ค้างอยู่)
+    const minPriceViolations = await checkMinSalesPrice(resultItems, customer_name ?? quote.customer_name);
+    if (minPriceViolations.length > 0) {
+      return res.status(422).json({ error: 'VALIDATION_ERROR', violations: minPriceViolations });
+    }
+
     // คำนวณราคายอดรวมสุทธิของใบเสนอราคาใหม่
     const finalSum = sumLineTotals(resultItems);
 
@@ -979,89 +986,19 @@ app.post('/api/quotation/:id/confirm', express.json(), async (req: any, res: any
       return res.status(400).json({ error: 'ไม่สามารถยืนยันใบเสนอราคาที่ไม่มีสินค้าได้' });
     }
 
-    // ตรวจสอบราคาสินค้าแต่ละรายการหลังรวมส่วนลดแล้วต้อง >= minimum_sales_price หรือตรงเงื่อนไขโปรโมชัน
-    if (quote.items && Array.isArray(quote.items)) {
-      const productCodes = quote.items.map((item: any) => item.model || item.product_code).filter(Boolean);
-      if (productCodes.length > 0) {
-        // คิวรีดึงขั้นต่ำสินค้าด้วย pool.query (ตามกฎงดใช้ Supabase-style query สำหรับการพัฒนาใหม่)
-        let productsData: any[] = [];
-        try {
-          const prodRes = await pool.query(
-            'SELECT model AS code, minimum_sales_price FROM products WHERE model = ANY($1)',
-            [productCodes]
-          );
-          productsData = prodRes.rows;
-        } catch (prodError) {
-          console.error("Error fetching minimum_sales_price for confirmation:", prodError);
-          return res.status(500).json({ error: 'ไม่สามารถตรวจสอบราคาขั้นต่ำได้' });
-        }
-
-        const minPriceMap: Record<string, number> = {};
-        if (productsData) {
-          productsData.forEach((p: any) => {
-            minPriceMap[p.code] = parseFloat(p.minimum_sales_price) || 0;
-          });
-        }
-
-        // คิวรีข้อมูลลูกค้า (customer_type, reference)
-        let companyName = quote.customer_name || 'ลูกค้าทั่วไป';
-        if (quote.customer_name && quote.customer_name.includes(' | ')) {
-          companyName = quote.customer_name.split(' | ')[0].trim();
-        }
-
-        let customerData = null;
-        if (companyName && companyName !== 'ลูกค้าทั่วไป') {
-          try {
-            const custRes = await pool.query(
-              'SELECT customer_type, reference FROM customers_view WHERE display_name = $1 LIMIT 1',
-              [companyName]
-            );
-            if (custRes.rows.length > 0) {
-              customerData = {
-                customer_type: custRes.rows[0].customer_type,
-                reference: custRes.rows[0].reference
-              };
-            }
-          } catch (err) {
-            console.error("Error fetching customer for promo check:", err);
-          }
-        }
-
-        // คิวรีข้อมูลโปรโมชันที่กำลัง active ทั้งหมด
-        let activePromos: any[] = [];
-        try {
-          const promoRes = await pool.query(
-            'SELECT * FROM promotions WHERE is_active = true'
-          );
-          activePromos = promoRes.rows;
-        } catch (err) {
-          console.error("Error fetching promotions for validation:", err);
-        }
-
-        for (const item of quote.items) {
-          const itemKey = item.model || item.product_code;
-          const minPrice = minPriceMap[itemKey] || 0;
-          const discountedPrice = calcNetPrice(item.price, item.discount_1, item.discount_2);
-
-          if (discountedPrice < minPrice - 0.01) {
-            // หากไม่ผ่านขั้นต่ำปกติ ให้ไปตรวจสอบสิทธิ์จากโปรโมชัน
-            const promoResult = validateProductPriceWithPromotions(
-              itemKey,
-              item.quantity || 1,
-              discountedPrice,
-              minPrice,
-              customerData,
-              activePromos
-            );
-
-            if (!promoResult.allowed) {
-              return res.status(400).json({ 
-                error: `ไม่สามารถยืนยันได้เนื่องจากราคาหลังหักส่วนลดของสินค้า ${itemKey} (฿${discountedPrice.toFixed(2)}) ต่ำกว่าราคาขั้นต่ำที่กำหนด (฿${minPrice.toFixed(2)}) และไม่เข้าเงื่อนไขโปรโมชันใดๆ` 
-              });
-            }
-          }
-        }
-      }
+    // ราคาหลังหักส่วนลดต้อง >= minimum_sales_price หรือเข้าเงื่อนไขโปรโมชัน (กฎเดียวกับตอนบันทึก)
+    let minPriceViolationsOnConfirm;
+    try {
+      minPriceViolationsOnConfirm = await checkMinSalesPrice(quote.items, quote.customer_name);
+    } catch (minPriceErr) {
+      console.error("Error fetching minimum_sales_price for confirmation:", minPriceErr);
+      return res.status(500).json({ error: 'ไม่สามารถตรวจสอบราคาขั้นต่ำได้' });
+    }
+    if (minPriceViolationsOnConfirm.length > 0) {
+      const v = minPriceViolationsOnConfirm[0];
+      return res.status(400).json({
+        error: `ไม่สามารถยืนยันได้เนื่องจากราคาหลังหักส่วนลดของสินค้า ${v.model} (฿${v.price.toFixed(2)}) ต่ำกว่าราคาขั้นต่ำที่กำหนด (฿${v.min_price.toFixed(2)}) และไม่เข้าเงื่อนไขโปรโมชันใดๆ`
+      });
     }
 
     const protocol = req.headers['x-forwarded-proto'] || req.protocol;

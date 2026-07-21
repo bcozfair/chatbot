@@ -613,7 +613,8 @@
         gap: 3px;
         margin-left: auto;
       }
-      .save-status.saving {
+      .save-status.saving,
+      .save-status.dirty {
         background: rgba(255, 255, 255, 0.2);
         color: #ffffff;
         border: 1px solid rgba(255, 255, 255, 0.4);
@@ -817,6 +818,8 @@
       .toast .toast-message {
         margin-bottom: 16px;
         line-height: 1.5;
+        /* ข้อความ error หลายบรรทัด (เช่น violation หลายรายการ) ต้องขึ้นบรรทัดจริง */
+        white-space: pre-line;
       }
 
       .toast .toast-close-btn {
@@ -1074,12 +1077,12 @@
       </div>
     </div>
 
-    <!-- Success Modal (หลังยืนยันสำเร็จ — ใช้ได้ทุกแพลตฟอร์ม) -->
+    <!-- Save Modal (หลังบันทึกสำเร็จ — ใช้ได้ทุกแพลตฟอร์ม) -->
     <div id="successModal" class="alert-modal-overlay" style="display: none">
       <div class="alert-modal-card">
         <div class="alert-modal-header">
-          <span class="alert-modal-icon">✅</span>
-          <h3 class="alert-modal-title">ยืนยันใบเสนอราคาสำเร็จ</h3>
+          <span class="alert-modal-icon">💾</span>
+          <h3 class="alert-modal-title">บันทึกร่างใบเสนอราคาแล้ว</h3>
         </div>
         <div
           class="alert-modal-body"
@@ -1113,7 +1116,7 @@
     <!-- Sticky Footer -->
     <div class="sticky-footer" id="stickyFooter" style="display: none">
       <button class="btn btn-cancel" id="btnCancel">❌ ยกเลิก</button>
-      <button class="btn btn-confirm" id="btnConfirm">✅ ยืนยัน</button>
+      <button class="btn btn-confirm" id="btnSave">💾 บันทึก</button>
     </div>
 
     <!-- LIFF SDK -->
@@ -1143,6 +1146,7 @@
       let globalContacts = [];
       let userId = null;
       let hasChanges = false;
+      let isSaving = false;
 
       function showCustomAlert(message) {
         const modal = document.getElementById("alertModal");
@@ -1216,17 +1220,6 @@
         });
       }
 
-      // เปิดลิงก์ (PDF) ให้รองรับทั้งใน LINE client และเบราว์เซอร์ปกติ
-      function openExternal(url) {
-        try {
-          if (liff.isInClient() && liff.openWindow) {
-            liff.openWindow({ url, external: true });
-            return;
-          }
-        } catch (e) {}
-        window.open(url, "_blank");
-      }
-
       // คัดลอกข้อความลง clipboard (fallback: textarea + execCommand สำหรับ webview เก่า)
       async function copyToClipboard(text) {
         try {
@@ -1250,45 +1243,21 @@
         }
       }
 
-      // Success modal หลังยืนยัน — path ของ LINE PC / เบราว์เซอร์ (liff.sendMessages ใช้ไม่ได้)
-      // ให้ user คัดลอกข้อความ trigger ไปส่งในแชทเอง → บอท reply ปุ่ม PDF = มีประวัติในแชทเหมือนมือถือ
-      // results = [{ quotation_no, pdf_link }, ...]; triggerMessage = ข้อความกระตุ้นให้บอท reply PDF
-      function showConfirmSuccessModal(results, triggerMessage) {
+      // Modal หลัง "บันทึก" — path ของ LINE PC / เบราว์เซอร์ (liff.sendMessages ใช้ไม่ได้)
+      // ให้ user คัดลอกข้อความ trigger ไปวางส่งในแชทเอง → บอท reply Flex สรุปร่างใบเสนอราคา
+      // (การยืนยันออกเอกสารทำผ่านปุ่มใน Flex นั้นเท่านั้น หน้านี้ไม่ยืนยันเองแล้ว)
+      function showSaveSuccessModal(triggerMessage) {
         const modal = document.getElementById("successModal");
         const body = document.getElementById("successModalBody");
         const btnCopy = document.getElementById("successModalCopy");
         const btnClose = document.getElementById("successModalClose");
         if (!modal || !body) return;
 
-        const list = (results || []).filter(Boolean);
-        const nos = list
-          .map((r) => r.quotation_no)
-          .filter(Boolean)
-          .join(", ");
-
-        // ลิงก์ดาวน์โหลด PDF ตรง — แสดงเป็นตัวเลือกเสริมเสมอ
-        const pdfLinksHtml = list
-          .filter((r) => r.pdf_link)
-          .map(
-            (r) =>
-              `<a href="#" class="success-pdf-link" data-url="${r.pdf_link}" style="display:inline-flex;align-items:center;gap:4px;margin:4px 6px 0 0;padding:6px 12px;border-radius:8px;background:var(--green-light);color:var(--green-dark);font-weight:700;font-size:12px;text-decoration:none;">📥 ${r.quotation_no || "ดาวน์โหลด PDF"}</a>`,
-          )
-          .join("");
-
         body.innerHTML = `
-          <div style="font-weight:700;color:var(--green-dark);">เลขที่: ${nos || "-"}</div>
-          <div style="margin-top:8px;font-size:12px;color:var(--text-muted);">📋 คัดลอกข้อความ → วางส่งในแชท เพื่อรับลิงก์ PDF</div>
+          <div style="font-weight:700;color:var(--green-dark);">บันทึกข้อมูลที่แก้ไขเรียบร้อยแล้ว</div>
+          <div style="margin-top:8px;font-size:12px;color:var(--text-muted);">📋 คัดลอกข้อความ → วางส่งในแชท เพื่อดูสรุปร่างใบเสนอราคาและกดยืนยันออกเอกสาร</div>
           <div id="successTriggerBox" style="display:none;margin-top:6px;padding:6px 8px;background:var(--white);border:1px dashed var(--border-strong);border-radius:6px;font-size:11px;color:var(--text);white-space:pre-wrap;word-break:break-word;">${triggerMessage || ""}</div>
-          <div id="successPdfWrap" style="margin-top:10px;">${pdfLinksHtml}</div>
         `;
-
-        // ผูก event ลิงก์ PDF
-        body.querySelectorAll(".success-pdf-link").forEach((a) => {
-          a.addEventListener("click", (e) => {
-            e.preventDefault();
-            openExternal(a.dataset.url);
-          });
-        });
 
         const closeModal = () => {
           modal.classList.remove("show");
@@ -1339,7 +1308,7 @@
       const mainContent = document.getElementById("mainContent");
       const quotesContainer = document.getElementById("quotesContainer");
       const stickyFooter = document.getElementById("stickyFooter");
-      const btnConfirm = document.getElementById("btnConfirm");
+      const btnSave = document.getElementById("btnSave");
       const btnCancel = document.getElementById("btnCancel");
       const toastEl = document.getElementById("toast");
 
@@ -1495,12 +1464,18 @@
         return true;
       }
 
+      // เทียบ state ปัจจุบันกับข้อมูลที่บันทึกล่าสุด → อัปเดตธง hasChanges + ป้ายสถานะบนหัวการ์ด
+      // (หน้านี้ไม่บันทึกอัตโนมัติแล้ว ผู้ใช้ต้องกด "บันทึก" เอง จึงต้องเห็นชัดว่ายังมีของค้างไม่ได้บันทึก)
       function checkDirty() {
         hasChanges =
           JSON.stringify(quotesData.map((q) => q.items)) !==
             JSON.stringify(originalData.map((q) => q.items)) ||
           JSON.stringify(quotesData.map((q) => q.customer_name)) !==
             JSON.stringify(originalData.map((q) => q.customer_name));
+        updateAllSaveStatus(
+          hasChanges ? "● ยังไม่ได้บันทึก" : "",
+          hasChanges ? "dirty" : "",
+        );
       }
 
       // ── Render ──
@@ -1641,8 +1616,8 @@
 
         updateCustomerDetailsUI();
         fetchAndRenderContacts(firstQuote.customer_id, meta.contact);
-        // อัปเดตสถานะปุ่มยืนยันทันที (โดยเฉพาะกรณีจำนวนสินค้าเปลี่ยน) ก่อน fetch contacts เสร็จ
-        validateContactsAndEnableConfirm();
+        // อัปเดตสถานะปุ่มบันทึกทันที (โดยเฉพาะกรณีจำนวนสินค้าเปลี่ยน) ก่อน fetch contacts เสร็จ
+        validateContactsAndEnableSave();
         checkDirty();
       }
 
@@ -1790,7 +1765,6 @@
         if (totalEl)
           totalEl.textContent = `฿${formatNumber(calcQuoteTotal(quotesData[qIdx]), 2)}`;
         checkDirty();
-        triggerAutoSave();
       }
 
       function onCheckboxChange(e) {
@@ -1818,7 +1792,7 @@
           });
         }
 
-        triggerAutoSave();
+        checkDirty();
       }
 
       function onFieldChange(e) {
@@ -1828,7 +1802,6 @@
         if (field === "remark") {
           quotesData[qIdx].items[iIdx].remark = e.target.value;
           checkDirty();
-          triggerAutoSave();
           return;
         }
         let val = parseFloat(e.target.value) || 0;
@@ -1878,7 +1851,6 @@
           }
         }
         checkDirty();
-        triggerAutoSave();
       }
 
       async function onDeleteItem(e) {
@@ -1893,9 +1865,8 @@
         if (!confirmed) return;
         quotesData[qIdx].items.splice(iIdx, 1);
         // ไม่ยกเลิกใบอัตโนมัติเมื่อสินค้าหมด — เก็บการ์ดไว้ในสถานะว่างให้เพิ่มสินค้ากลับได้
-        // (ใบว่างจะถูกเก็บกวาดตอนกดยืนยัน ดู confirmQuotes)
+        // (ใบว่างจะถูกเก็บกวาดตอนกดบันทึก ดู saveQuotes)
         render();
-        triggerAutoSave();
       }
 
       // fetch ที่มี timeout กันหน้าค้างไม่รู้จบเมื่อ backend ช้า/ตัน (default 20 วิ)
@@ -1921,32 +1892,6 @@
         }
       }
 
-      let autoSaveTimeout = null,
-        isSaving = false;
-
-      function triggerAutoSave() {
-        updateAllSaveStatus("⏳ กำลังบันทึก...", "saving");
-        hasChanges = true;
-        if (autoSaveTimeout) clearTimeout(autoSaveTimeout);
-        autoSaveTimeout = setTimeout(async () => {
-          try {
-            await silentSaveChanges();
-            updateAllSaveStatus("✓ บันทึกสำเร็จ", "saved");
-            await refetchQuotationDataSilently();
-          } catch (err) {
-            if (err && err.isConflict) {
-              // ใบถูกยืนยัน/ยกเลิกไปแล้ว — โหลดหน้าใหม่ ไม่ปล่อยให้ค้างแก้ไขต่อไม่ได้
-              hasChanges = false;
-              updateAllSaveStatus("⚠️ ใบถูกยืนยัน/ยกเลิกแล้ว", "error");
-              showToast(err.message + " กำลังโหลดใหม่...", "error");
-              setTimeout(() => location.reload(), 2000);
-              return;
-            }
-            updateAllSaveStatus("⚠️ บันทึกไม่สำเร็จ", "error");
-          }
-        }, 1000);
-      }
-
       function updateAllSaveStatus(text, cls) {
         quotesData.forEach((_, qIdx) => {
           const el = document.getElementById(`save-status-${qIdx}`);
@@ -1957,8 +1902,42 @@
         });
       }
 
-      async function silentSaveChanges() {
-        isSaving = true;
+      // แปลง violation จาก /api/quotation/:id (422 VALIDATION_ERROR) เป็นข้อความที่บอกได้ว่า
+      // "ติดกฎอะไร ที่รายการไหน" — warn_msg ดิบเป็นแค่ท่อนสั้น ๆ ("สินค้าหมดสต็อก") ไม่มีรุ่นสินค้า
+      // ใช้ถ้อยคำชุดเดียวกับที่ flow ใน LINE ใช้ (processQuotationRequest ใน quotationService.ts)
+      function formatViolation(v) {
+        if (!v) return "";
+        const model = v.model || v.product_code || "-";
+        if (v.type === "OUT_OF_STOCK") {
+          const optionalNote =
+            v.is_optional && v.linked_to_model
+              ? ` (สินค้าเสริมของ ${v.linked_to_model})`
+              : "";
+          return `📦 ห้ามเสนอราคาเมื่อไม่มีสินค้า รายการ ${model}${optionalNote}`;
+        }
+        if (v.type === "MIN_PRICE_VIOLATION") {
+          const price = Number(v.price ?? 0).toLocaleString("en-US", {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          });
+          const minPrice = Number(v.min_price ?? 0).toLocaleString("en-US", {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          });
+          return `💰 ห้ามขายต่ำกว่าราคาขั้นต่ำ รายการ ${model} (ราคาหลังลด ฿${price} < ขั้นต่ำ ฿${minPrice})`;
+        }
+        if (v.type === "MOQ_VIOLATION") {
+          // warn_msg ของ MOQ เป็นข้อความที่แอดมินตั้งเองในตาราง product_moq_rules — ใช้ของแอดมินก่อน
+          const detail = v.warn_msg
+            ? `: ${v.warn_msg}`
+            : ` (สั่งขั้นต่ำ ${v.min_order_qty ?? "-"} ชิ้น, ใส่มา ${v.qty ?? "-"} ชิ้น)`;
+          return `⬇️ จำนวนไม่ถึงขั้นต่ำ รายการ ${model}${detail}`;
+        }
+        return v.warn_msg || v.message || "";
+      }
+
+      // บันทึกทุกใบขึ้น server — เรียกจากปุ่ม "บันทึก" เท่านั้น (ไม่มี auto-save แล้ว)
+      async function saveChangesToServer() {
         try {
           for (const quote of quotesData) {
             const totalSum = calcQuoteTotal(quote);
@@ -1995,15 +1974,30 @@
               conflictErr.isConflict = true;
               throw conflictErr;
             }
-            if (!resp.ok) throw new Error("Network response was not ok");
+            if (resp.status === 403) {
+              // userId ที่หน้านี้ใช้ ไม่ตรงกับเจ้าของใบ (isQuotationOwner ฝั่ง server)
+              throw new Error(
+                "ไม่มีสิทธิ์เข้าถึงใบเสนอราคานี้ — บัญชี LINE ที่เปิดหน้านี้ไม่ตรงกับเจ้าของใบ กรุณาเปิดจากปุ่มในแชทของบัญชีที่สร้างใบนี้",
+              );
+            }
+            if (!resp.ok) {
+              // ดึงสาเหตุจริงจาก backend มาแสดง (เช่น 422 = ผิดกฎ MOQ/สต๊อก, 400 = สินค้าถูกบล็อก)
+              const errBody = await resp.json().catch(() => ({}));
+              const violations = Array.isArray(errBody.violations)
+                ? errBody.violations.map(formatViolation).filter(Boolean)
+                : [];
+              throw new Error(
+                violations.length
+                  ? violations.join("\n")
+                  : errBody.error || `เซิร์ฟเวอร์ตอบกลับรหัสสถานะ: ${resp.status}`,
+              );
+            }
           }
           originalData = JSON.parse(JSON.stringify(quotesData));
           hasChanges = false;
         } catch (err) {
-          console.error("Silent save error:", err);
+          console.error("Save error:", err);
           throw err;
-        } finally {
-          isSaving = false;
         }
       }
 
@@ -2040,7 +2034,7 @@
               warningEl.style.display = "block";
             }
           }
-          validateContactsAndEnableConfirm();
+          validateContactsAndEnableSave();
           return;
         }
         try {
@@ -2092,25 +2086,25 @@
             selectEl.innerHTML =
               '<option value="">-- เกิดข้อผิดพลาดในการโหลดผู้ติดต่อ --</option>';
         } finally {
-          validateContactsAndEnableConfirm();
+          validateContactsAndEnableSave();
         }
       }
 
-      function validateContactsAndEnableConfirm() {
+      function validateContactsAndEnableSave() {
         const selectEl = document.getElementById("contact-select-global");
         const warningEl = document.getElementById("contact-warning-global");
         if (!quotesData[0]) return;
         const meta = parseCustomerMeta(quotesData[0]);
-        // ต้องมีสินค้าอย่างน้อย 1 รายการในบางใบ ถึงจะกดยืนยันได้
+        // ต้องมีสินค้าอย่างน้อย 1 รายการในบางใบ ถึงจะกดบันทึกได้
         const hasAnyItems = quotesData.some(
           (q) => q.items && q.items.length > 0,
         );
         if (meta.revise_from) {
           if (warningEl) warningEl.style.display = "none";
-          if (btnConfirm) {
-            btnConfirm.disabled = !hasAnyItems;
-            btnConfirm.style.opacity = hasAnyItems ? "1" : "0.5";
-            btnConfirm.style.pointerEvents = hasAnyItems ? "auto" : "none";
+          if (btnSave) {
+            btnSave.disabled = !hasAnyItems;
+            btnSave.style.opacity = hasAnyItems ? "1" : "0.5";
+            btnSave.style.pointerEvents = hasAnyItems ? "auto" : "none";
           }
           return;
         }
@@ -2136,10 +2130,10 @@
             warningEl.style.display = "none";
           }
         }
-        if (btnConfirm) {
-          btnConfirm.disabled = !allValid;
-          btnConfirm.style.opacity = allValid ? "1" : "0.5";
-          btnConfirm.style.pointerEvents = allValid ? "auto" : "none";
+        if (btnSave) {
+          btnSave.disabled = !allValid;
+          btnSave.style.opacity = allValid ? "1" : "0.5";
+          btnSave.style.pointerEvents = allValid ? "auto" : "none";
         }
       }
 
@@ -2188,6 +2182,20 @@
         dropdown.style.display = "block";
       }
 
+      // อัปเดตข้อมูลติดต่อใน state จากผู้ติดต่อที่เลือก (ไม่ยิง server — หน้านี้บันทึกตอนกดปุ่มเท่านั้น)
+      // ค่าที่ได้มาจาก /api/customer/:id/contacts ตอน fetchAndRenderContacts จึงตรงกับที่ backend จะ snapshot ให้
+      function applyContactDetailsToState(contact) {
+        quotesData.forEach((quote) => {
+          quote.contact_phone = contact
+            ? contact.phone || contact.mobile || "-"
+            : "-";
+          quote.contact_email = contact ? contact.email || "-" : "-";
+          quote.contact_address = contact ? contact.address_complete || "-" : "-";
+          quote.delivery_address = contact ? contact.address_complete || "-" : "-";
+        });
+        updateCustomerDetailsUI();
+      }
+
       async function selectCompanyForQuote(cust) {
         quotesData.forEach((quote) => {
           quote.customer_id = cust.id;
@@ -2195,7 +2203,8 @@
         });
         const searchInput = document.getElementById("company-search-global");
         if (searchInput) searchInput.value = cust.display_name;
-        triggerAutoSave();
+        applyContactDetailsToState(null);
+        checkDirty();
         fetchAndRenderContacts(cust.id, "");
       }
 
@@ -2208,41 +2217,9 @@
           quote.customer_name = `${meta.company} | ${selectVal}`;
           quote.contact_id = contactId;
         });
-        triggerAutoSave();
-        validateContactsAndEnableConfirm();
-      }
-
-      async function refetchQuotationDataSilently() {
-        try {
-          const quoteIds = quotesData.map((q) => q.id).join(",");
-          const resp = await fetch(
-            `/api/quotations?ids=${encodeURIComponent(quoteIds)}`,
-          );
-          if (resp.ok) {
-            const data = await resp.json();
-            data.forEach((updated) => {
-              const local = quotesData.find((q) => q.id === updated.id);
-              if (local) {
-                Object.assign(local, {
-                  customer_name: updated.customer_name,
-                  customer_id: updated.customer_id,
-                  contact_id: updated.contact_id,
-                  customer_code: updated.customer_code,
-                  customer_tax_id: updated.customer_tax_id,
-                  contact_name: updated.contact_name,
-                  contact_phone: updated.contact_phone,
-                  contact_email: updated.contact_email,
-                  contact_address: updated.contact_address,
-                  delivery_address: updated.delivery_address,
-                });
-              }
-            });
-            originalData = JSON.parse(JSON.stringify(quotesData));
-            updateCustomerDetailsUI();
-          }
-        } catch (err) {
-          console.error("Refetch error:", err);
-        }
+        applyContactDetailsToState(matchedContact || null);
+        checkDirty();
+        validateContactsAndEnableSave();
       }
 
       let searchTimeout = null;
@@ -2397,11 +2374,10 @@
                 (targetIsTht ? "THT" : "PM"),
             );
             render();
-            triggerAutoSave();
           } catch (err) {
             console.error("Create new quotation error:", err);
             showToast("❌ ไม่สามารถแยกใบเสนอราคาได้: " + err.message, "error");
-            updateAllSaveStatus("⚠️ บันทึกไม่สำเร็จ", "error");
+            updateAllSaveStatus("⚠️ แยกใบไม่สำเร็จ", "error");
           }
           return;
         }
@@ -2411,7 +2387,6 @@
         if (!quote.items) quote.items = [];
         quote.items.push(newItem);
         render();
-        triggerAutoSave();
       }
 
       document.addEventListener("click", (e) => {
@@ -2437,8 +2412,9 @@
               compDropdown.style.display = "none";
               compDropdown.innerHTML = "";
             }
-            // บันทึกและดึงข้อมูลติดต่อใหม่
-            triggerAutoSave();
+            // ล้างข้อมูลติดต่อในหน้าจอ (ยังไม่บันทึก — รอผู้ใช้กดปุ่มบันทึก)
+            applyContactDetailsToState(null);
+            checkDirty();
             fetchAndRenderContacts("", "");
           }
           return;
@@ -2497,36 +2473,28 @@
         }
       });
 
-      async function confirmQuotes() {
+      // ── บันทึก ──
+      // บันทึกอย่างเดียว ไม่ออกใบเสนอราคา → ส่ง trigger ให้บอทตอบ Flex "สรุปร่างใบเสนอราคา"
+      // การยืนยันออกเอกสารทำผ่านปุ่มใน Flex นั้นเท่านั้น
+      async function saveQuotes() {
+        // กันกดซ้ำ — render() ระหว่างบันทึกจะปลดล็อกปุ่มให้เอง (validateContactsAndEnableSave)
+        if (isSaving) return;
         // ต้องมีสินค้าอย่างน้อย 1 รายการ (backup เผื่อสถานะปุ่มไม่ sync)
         if (!quotesData.some((q) => q.items && q.items.length > 0)) {
-          showCustomAlert("กรุณาเพิ่มสินค้าอย่างน้อย 1 รายการก่อนยืนยัน");
+          showCustomAlert("กรุณาเพิ่มสินค้าอย่างน้อย 1 รายการก่อนบันทึก");
           return;
         }
-        if (autoSaveTimeout || hasChanges) {
-          if (autoSaveTimeout) clearTimeout(autoSaveTimeout);
-          updateAllSaveStatus("⏳ กำลังบันทึก...", "saving");
-          try {
-            await silentSaveChanges();
-            updateAllSaveStatus("✓ บันทึกสำเร็จ", "saved");
-          } catch (err) {
-            updateAllSaveStatus("⚠️ บันทึกไม่สำเร็จ", "error");
-            showToast(
-              "❌ ไม่สามารถยืนยันได้เนื่องจากบันทึกข้อมูลล้มเหลว: " +
-                err.message,
-              "error",
-            );
-            return;
-          }
-        }
-        btnConfirm.disabled = true;
-        btnConfirm.innerHTML = "⏳ กำลังยืนยัน...";
-        loaderText.textContent = "กำลังยืนยันและออกเลขที่ใบเสนอราคา...";
+        isSaving = true;
+        btnSave.disabled = true;
+        btnSave.innerHTML = "⏳ กำลังบันทึก...";
+        updateAllSaveStatus("⏳ กำลังบันทึก...", "saving");
+        loaderText.textContent = "กำลังบันทึกร่างใบเสนอราคา...";
         loaderScreen.style.opacity = "1";
         loaderScreen.style.pointerEvents = "auto";
         loaderScreen.style.display = "flex";
         try {
-          // เก็บกวาดใบที่ว่าง (เช่นเคส PM+THT ที่ล้างสินค้าไปใบหนึ่ง) ก่อนยืนยัน
+          // เก็บกวาดใบที่ว่าง (เช่นเคส PM+THT ที่ล้างสินค้าไปใบหนึ่ง) ก่อนบันทึก
+          // เพื่อไม่ให้ใบเปล่าหลุดไปอยู่ใน Flex สรุปแล้วถูกกดยืนยัน
           const emptyQuotes = quotesData.filter(
             (q) => !q.items || q.items.length === 0,
           );
@@ -2537,159 +2505,125 @@
             const emptyIds = new Set(emptyQuotes.map((q) => q.id));
             quotesData = quotesData.filter((q) => !emptyIds.has(q.id));
             originalData = originalData.filter((q) => !emptyIds.has(q.id));
-          }
-          // ยืนยันทีละใบ แต่ไม่ทิ้งใบที่สำเร็จเมื่อใบถัดไปพัง (การยืนยันเป็น idempotent ฝั่ง server
-          // อยู่แล้ว ลองใหม่ได้ปลอดภัย) — เก็บผลสำเร็จไว้ ส่วนใบที่พังค่อยเตือนตอนท้าย
-          const results = [];
-          const failures = [];
-          for (const quote of quotesData) {
-            try {
-              const resp = await fetchWithTimeout(`/api/quotation/${quote.id}/confirm`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ userId }),
-              });
-              if (!resp.ok) {
-                const errBody = await resp.json().catch(() => ({}));
-                failures.push(errBody.error || `เซิร์ฟเวอร์ตอบกลับรหัสสถานะ: ${resp.status}`);
-                continue;
-              }
-              results.push(await resp.json());
-            } catch (e) {
-              failures.push(
-                e.name === "AbortError" ? "หมดเวลาเชื่อมต่อ กรุณาลองใหม่อีกครั้ง" : (e.message || String(e)),
-              );
-            }
-          }
-          if (results.length === 0) {
-            // ไม่มีใบไหนสำเร็จเลย → โยน error ให้ catch ด้านล่างแสดงผล
-            throw new Error(failures[0] || "ยืนยันไม่สำเร็จ");
-          }
-          if (failures.length > 0) {
-            showToast("⚠️ บางใบยืนยันไม่สำเร็จ: " + failures.join("; "), "error");
-          }
-          const quoteNos = results
-            .map((r) => r.quotation_no)
-            .filter(Boolean)
-            .join(", ");
-          const triggerMessage = `📄 ยืนยันใบเสนอราคาสำเร็จ\n(เลขที่: ${quoteNos})`;
-
-          // ── แจ้งผล/ปิดหน้าต่าง ให้ได้ผลลัพธ์เหมือนกันทั้งมือถือ & LINE PC ──
-          const os = (() => {
-            try {
-              return liff.getOS();
-            } catch (e) {
-              return "web";
-            }
-          })();
-          const mobileInClient =
-            liff.isInClient() && (os === "ios" || os === "android");
-
-          if (mobileInClient) {
-            // มือถือใน LINE: auto ส่ง trigger (บอท reply PDF) แล้วปิดหน้าเอง
-            let sent = false;
-            try {
-              await liff.sendMessages([{ type: "text", text: triggerMessage }]);
-              sent = true;
-            } catch (e) {
-              console.error("sendMessages error:", e);
-            }
-            if (sent) {
-              liff.closeWindow();
-              return;
-            }
-            // auto ส่งไม่ได้ → ตกไปแสดง modal (กันหน้าค้าง)
+            render();
           }
 
-          // LINE PC / web / เบราว์เซอร์นอก (หรือมือถือที่ auto ส่งไม่ได้):
-          // แสดง modal ให้ผู้ใช้กดปุ่มส่งเข้าแชทเอง (user gesture) + มีลิงก์ PDF สำรอง
-          loaderScreen.style.display = "none";
-          showConfirmSuccessModal(results, triggerMessage);
+          await saveChangesToServer();
+          updateAllSaveStatus("✓ บันทึกสำเร็จ", "saved");
         } catch (err) {
-          console.error("Confirm error:", err);
-          showToast("❌ ยืนยันไม่สำเร็จ: " + err.message, "error");
+          console.error("Save error:", err);
+          isSaving = false;
           loaderScreen.style.display = "none";
-          btnConfirm.disabled = false;
-          btnConfirm.innerHTML = "✅ ยืนยัน";
+          btnSave.disabled = false;
+          btnSave.innerHTML = "💾 บันทึก";
+          if (err && err.isConflict) {
+            // ใบถูกยืนยัน/ยกเลิกไปแล้ว — โหลดหน้าใหม่ ไม่ปล่อยให้ค้างแก้ไขต่อไม่ได้
+            hasChanges = false;
+            updateAllSaveStatus("⚠️ ใบถูกยืนยัน/ยกเลิกแล้ว", "error");
+            showToast(err.message + " กำลังโหลดใหม่...", "error");
+            setTimeout(() => location.reload(), 2000);
+            return;
+          }
+          updateAllSaveStatus("⚠️ บันทึกไม่สำเร็จ", "error");
+          showToast("❌ บันทึกไม่สำเร็จ: " + err.message, "error");
+          return;
         }
+
+        // trigger ให้บอท reply Flex สรุปร่างใบเสนอราคา (มีปุ่มยืนยัน/ยกเลิก/แก้ไข)
+        const triggerMessage = `📝 บันทึกร่างใบเสนอราคาแล้ว\n(รหัส: ${quotesData
+          .map((q) => q.id)
+          .join(",")})`;
+
+        const os = (() => {
+          try {
+            return liff.getOS();
+          } catch (e) {
+            return "web";
+          }
+        })();
+        const mobileInClient =
+          liff.isInClient() && (os === "ios" || os === "android");
+
+        if (mobileInClient) {
+          // มือถือใน LINE: auto ส่ง trigger แล้วปิดหน้าเอง
+          let sent = false;
+          try {
+            await liff.sendMessages([{ type: "text", text: triggerMessage }]);
+            sent = true;
+          } catch (e) {
+            console.error("sendMessages error:", e);
+          }
+          if (sent) {
+            liff.closeWindow();
+            return;
+          }
+          // auto ส่งไม่ได้ → ตกไปแสดง modal (กันหน้าค้าง)
+        }
+
+        // LINE PC / web / เบราว์เซอร์นอก (หรือมือถือที่ auto ส่งไม่ได้):
+        // ให้ผู้ใช้คัดลอกข้อความไปวางในแชทเอง เพื่อให้บอทตอบ Flex สรุป
+        isSaving = false;
+        loaderScreen.style.display = "none";
+        btnSave.disabled = false;
+        btnSave.innerHTML = "💾 บันทึก";
+        showSaveSuccessModal(triggerMessage);
       }
 
-      async function cancelQuotes() {
-        const confirmed = await showCustomConfirm(
-          "ยกเลิกใบเสนอราคา",
-          "ต้องการยกเลิกใบเสนอราคาทั้งหมดหรือไม่? การดำเนินการนี้ไม่สามารถย้อนกลับได้",
-          {
-            isDestructive: true,
-            okText: "ยกเลิก",
-            cancelText: "ย้อนกลับ",
-            icon: "⚠️",
-          },
-        );
-        if (!confirmed) return;
-        btnCancel.disabled = true;
-        loaderText.textContent = "กำลังยกเลิก...";
-        loaderScreen.style.opacity = "1";
-        loaderScreen.style.pointerEvents = "auto";
-        loaderScreen.style.display = "flex";
+      // ── ยกเลิก = ปิดหน้าแก้ไขเฉย ๆ (ไม่ยกเลิกร่างใบเสนอราคา) ──
+      // ถ้ายังมีของที่แก้ค้างไว้ ต้องเตือนก่อนว่าจะไม่ถูกบันทึก
+      async function closeEditor() {
+        if (hasChanges) {
+          const confirmed = await showCustomConfirm(
+            "ปิดหน้าแก้ไข",
+            "การแก้ไขนี้ยังไม่ถูกบันทึก หากปิดตอนนี้ข้อมูลที่แก้ไขจะหายไป (ร่างใบเสนอราคาเดิมยังอยู่ในระบบ) ต้องการปิดหน้าแก้ไขหรือไม่?",
+            {
+              isDestructive: true,
+              okText: "ปิดโดยไม่บันทึก",
+              cancelText: "แก้ไขต่อ",
+              icon: "⚠️",
+            },
+          );
+          if (!confirmed) return;
+        }
         try {
-          for (const quote of quotesData)
-            await fetchWithTimeout(`/api/quotation/${quote.id}/cancel`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ userId }),
-            });
           if (liff.isInClient()) {
-            try {
-              await liff.sendMessages([
-                {
-                  type: "text",
-                  text: "❌ ยกเลิกการออกใบเสนอราคาเรียบร้อยแล้ว",
-                },
-              ]);
-            } catch (e) {
-              console.error("sendMessages error:", e);
-            }
+            liff.closeWindow();
+            return;
           }
-          loaderText.innerHTML =
-            '<span style="color:var(--danger)">❌</span> ยกเลิกเรียบร้อยแล้ว';
-          setTimeout(() => {
-            if (liff.isInClient()) {
-              liff.closeWindow();
-            } else {
-              window.open("", "_self", "");
-              window.close();
-            }
-          }, 1200);
-        } catch (err) {
-          console.error("Cancel error:", err);
-          showToast("❌ ยกเลิกไม่สำเร็จ", "error");
-          loaderScreen.style.display = "none";
-          btnCancel.disabled = false;
-        }
+        } catch (e) {}
+        window.open("", "_self", "");
+        window.close();
       }
 
-      btnConfirm.addEventListener("click", confirmQuotes);
-      btnCancel.addEventListener("click", cancelQuotes);
+      btnSave.addEventListener("click", saveQuotes);
+      btnCancel.addEventListener("click", closeEditor);
 
       async function initLIFF() {
         try {
           let urlParams = new URLSearchParams(window.location.search);
           let quoteIds = urlParams.get("quoteIds");
+          let urlUserId = urlParams.get("userId");
           await liff.init({ liffId: "__LIFF_ID__" });
           if (!quoteIds) {
             urlParams = new URLSearchParams(window.location.search);
             quoteIds = urlParams.get("quoteIds");
+            urlUserId = urlUserId || urlParams.get("userId");
           }
           if (!quoteIds) {
+            // เปิดผ่าน liff.line.me → LINE ส่ง query เดิมมาใน liff.state (ต้องดึง userId ด้วย
+            // ไม่ใช่แค่ quoteIds ไม่งั้นตกไปพึ่ง getProfile() ที่พลาดได้ → บันทึกไม่ผ่าน 403)
             const stateQuery = new URLSearchParams(window.location.search).get(
               "liff.state",
             );
             if (stateQuery) {
               const qi = stateQuery.indexOf("?");
-              if (qi !== -1)
-                quoteIds = new URLSearchParams(stateQuery.substring(qi)).get(
-                  "quoteIds",
+              if (qi !== -1) {
+                const stateParams = new URLSearchParams(
+                  stateQuery.substring(qi),
                 );
+                quoteIds = stateParams.get("quoteIds");
+                urlUserId = urlUserId || stateParams.get("userId");
+              }
             }
           }
           if (!quoteIds)
@@ -2698,7 +2632,6 @@
             liff.login();
             return;
           }
-          let urlUserId = urlParams.get("userId");
           if (urlUserId) userId = urlUserId;
           if (!userId) {
             try {
@@ -2708,6 +2641,12 @@
               console.error("getProfile error:", e);
             }
           }
+          // ไม่รู้ว่าใครเป็นคนแก้ = บันทึกไม่ผ่านแน่นอน (403 จาก isQuotationOwner)
+          // ต้องหยุดตั้งแต่ตอนโหลด ไม่ปล่อยให้แก้ไปเรื่อย ๆ แล้วเสียงานตอนกดบันทึก
+          if (!userId)
+            throw new Error(
+              "ระบุตัวตนผู้ใช้ไม่ได้ กรุณาเปิดหน้านี้จากปุ่มในแชท LINE อีกครั้ง",
+            );
           loaderText.textContent = "กำลังโหลดข้อมูลใบเสนอราคา...";
           const resp = await fetch(
             `/api/quotations?ids=${encodeURIComponent(quoteIds)}`,

@@ -13,7 +13,6 @@ import {
   getStaticBranches,
   getBranchesByCodes,
 } from '../db/repositories.js';
-import { validateProductPriceWithPromotions } from '../utils/promotionValidator.js';
 import { calcNetPrice, round2 } from '../utils/pricing.js';
 import { 
   createBranchSelectionFlex, 
@@ -24,7 +23,8 @@ import {
   createProfileConfirmationFlex,
   createCartConfirmationFlex,
   appendReviseFrom,
-  createRevisionFlex
+  createRevisionFlex,
+  buildQuoteEditLiffUrl
 } from '../utils/flexTemplates.js';
 import { findProduct } from '../services/productService.js';
 import { 
@@ -40,7 +40,9 @@ import {
   resolveContactFlow,
   updateQuotationCustomerSnapshot,
   insertDraftQuotations,
-  enrichQuotationData
+  enrichQuotationData,
+  checkMinSalesPrice,
+  type MinPriceViolation
 } from '../services/quotationService.js';
 import { detectQuotationEditIntent, handleQuotationEditRequest } from '../services/quotationAgent.js';
 
@@ -521,86 +523,22 @@ export async function handleEvent(event: any): Promise<any> {
             continue;
           }
 
-          // ตรวจสอบราคาสินค้าแต่ละรายการหลังหักส่วนลดต้อง >= minimum_sales_price หรือตรงเงื่อนไขโปรโมชัน
-          if (currentQuote.items && Array.isArray(currentQuote.items)) {
-            const productCodes = currentQuote.items.map((item: any) => item.model || item.product_code).filter(Boolean);
-            if (productCodes.length > 0) {
-              try {
-                // คิวรีดึงขั้นต่ำสินค้าด้วย pool.query (ตามกฎงดใช้ Supabase-style query สำหรับการพัฒนาใหม่)
-                const prodRes = await pool.query(
-                  'SELECT model AS code, minimum_sales_price FROM products WHERE model = ANY($1)',
-                  [productCodes]
-                );
-                const productsData = prodRes.rows;
-
-                if (productsData) {
-                  const minPriceMap: Record<string, number> = {};
-                  productsData.forEach((p: any) => {
-                    minPriceMap[p.code] = parseFloat(p.minimum_sales_price) || 0;
-                  });
-
-                  // คิวรีข้อมูลลูกค้า (customer_type, reference)
-                  let companyName = currentQuote.customer_name || 'ลูกค้าทั่วไป';
-                  if (currentQuote.customer_name && currentQuote.customer_name.includes(' | ')) {
-                    companyName = currentQuote.customer_name.split(' | ')[0].trim();
-                  }
-
-                  let customerData = null;
-                  if (companyName && companyName !== 'ลูกค้าทั่วไป') {
-                    const custRes = await pool.query(
-                      'SELECT customer_type, reference FROM customers_view WHERE display_name = $1 LIMIT 1',
-                      [companyName]
-                    );
-                    if (custRes.rows.length > 0) {
-                      customerData = {
-                        customer_type: custRes.rows[0].customer_type,
-                        reference: custRes.rows[0].reference
-                      };
-                    }
-                  }
-
-                  // คิวรีข้อมูลโปรโมชันที่กำลัง active ทั้งหมด
-                  const promoRes = await pool.query(
-                    'SELECT * FROM promotions WHERE is_active = true'
-                  );
-                  const activePromos = promoRes.rows;
-
-                  const violations: string[] = [];
-                  for (const item of currentQuote.items) {
-                    const itemKey = item.model || item.product_code;
-                    const minPrice = minPriceMap[itemKey] || 0;
-                    if (minPrice <= 0) continue;
-                    const discountedPrice = calcNetPrice(item.price, item.discount_1, item.discount_2);
-
-                    if (discountedPrice < minPrice - 0.01) {
-                      // หากไม่ผ่านขั้นต่ำปกติ ให้ไปตรวจสอบสิทธิ์จากโปรโมชัน
-                      const promoResult = validateProductPriceWithPromotions(
-                        itemKey,
-                        item.quantity || 1,
-                        discountedPrice,
-                        minPrice,
-                        customerData,
-                        activePromos
-                      );
-
-                      if (!promoResult.allowed) {
-                        violations.push(`• ${itemKey}: ราคาหลังลด ฿${discountedPrice.toFixed(2)} < ขั้นต่ำ ฿${minPrice.toFixed(2)} (ไม่เข้าเงื่อนไขโปรโมชัน)`);
-                      }
-                    }
-                  }
-
-                  if (violations.length > 0) {
-                    replyMessages.push({
-                      type: 'text',
-                      text: `❌ ไม่สามารถยืนยันใบเสนอราคาได้\nราคาหลังหักส่วนลดต่ำกว่าราคาขั้นต่ำที่กำหนด และไม่เข้าเงื่อนไขโปรโมชัน:\n${violations.join('\n')}\n\nกรุณาแก้ไขส่วนลดหรือราคาแล้วลองใหม่อีกครั้ง`
-                    });
-                    continue;
-                  }
-                }
-              } catch (minPriceErr) {
-                console.error("Error checking minimum_sales_price in chatbot confirm:", minPriceErr);
-              }
-            }
+          // ราคาหลังหักส่วนลดต้อง >= minimum_sales_price หรือเข้าเงื่อนไขโปรโมชัน (กฎเดียวกับตอนบันทึกจาก LIFF)
+          let minPriceViolations: MinPriceViolation[] = [];
+          try {
+            minPriceViolations = await checkMinSalesPrice(currentQuote.items, currentQuote.customer_name);
+          } catch (minPriceErr) {
+            console.error("Error checking minimum_sales_price in chatbot confirm:", minPriceErr);
+          }
+          if (minPriceViolations.length > 0) {
+            const lines = minPriceViolations.map(
+              v => `• ${v.model}: ราคาหลังลด ฿${v.price.toFixed(2)} < ขั้นต่ำ ฿${v.min_price.toFixed(2)} (ไม่เข้าเงื่อนไขโปรโมชัน)`
+            );
+            replyMessages.push({
+              type: 'text',
+              text: `❌ ไม่สามารถยืนยันใบเสนอราคาได้\nราคาหลังหักส่วนลดต่ำกว่าราคาขั้นต่ำที่กำหนด และไม่เข้าเงื่อนไขโปรโมชัน:\n${lines.join('\n')}\n\nกรุณาแก้ไขส่วนลดหรือราคาแล้วลองใหม่อีกครั้ง`
+            });
+            continue;
           }
 
           // 2. ยืนยันแบบ atomic + idempotent (ออกเลข + เปลี่ยน status ใน transaction เดียว
@@ -952,10 +890,51 @@ export async function handleEvent(event: any): Promise<any> {
     if (event.message.type === 'text') {
       content = event.message.text;
 
-      // Ignore status messages sent by LIFF back to the chat to prevent loops
       const trimmedContent = content.trim();
-      if (trimmedContent === '❌ ยกเลิกการออกใบเสนอราคาเรียบร้อยแล้ว') {
-        return null;
+
+      // 📝 Trigger จากหน้า LIFF แก้ไขใบเสนอราคา หลังกดปุ่ม "บันทึก"
+      // หน้า LIFF ไม่ยืนยันออกเอกสารเองแล้ว — บันทึกเสร็จต้องกลับมาสรุปร่างในแชทเสมอ
+      // แล้วให้กดยืนยันจากปุ่มใน Flex สรุปนี้เท่านั้น (action=confirm)
+      if (trimmedContent.startsWith('📝 บันทึกร่างใบเสนอราคา')) {
+        const savedQuoteIds = trimmedContent.match(/[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}/g) || [];
+        if (savedQuoteIds.length > 0) {
+          try {
+            const savedRes = await pool.query(
+              `SELECT * FROM quotations
+               WHERE id = ANY($1) AND user_id = $2 AND status <> 'confirmed' AND status <> 'cancelled'
+               ORDER BY created_at ASC`,
+              [savedQuoteIds, userId]
+            );
+            const savedQuotes = await Promise.all(savedRes.rows.map((q: any) => enrichQuotationData(q)));
+
+            if (savedQuotes.length > 0) {
+              const summary = await getQuotationSummaryMessage(savedQuotes);
+              try {
+                await insertMessage({
+                  user_id: userId,
+                  message_id: messageId,
+                  type: 'text',
+                  content: content,
+                  reply_token: replyToken,
+                  reply_content: summary.summaryText
+                });
+              } catch (dbErr) {
+                console.error("Error logging saved draft message:", dbErr);
+              }
+              return lineClient.replyMessage({
+                replyToken: replyToken,
+                messages: summary.messages as any
+              });
+            }
+          } catch (err) {
+            console.error("Error processing saved draft trigger:", err);
+          }
+
+          return lineClient.replyMessage({
+            replyToken: replyToken,
+            messages: [{ type: 'text', text: '❌ ไม่พบร่างใบเสนอราคาที่บันทึกไว้ (อาจถูกยืนยันหรือยกเลิกไปแล้ว) รบกวนเริ่มรายการใหม่อีกครั้งครับ' }]
+          });
+        }
       }
 
       if (trimmedContent.startsWith('💾 ร่างใบเสนอราคา')) {
@@ -971,8 +950,7 @@ export async function handleEvent(event: any): Promise<any> {
         }
 
         if (quoteIds) {
-          const liffId = process.env.LIFF_QUOTE_ID || process.env.LIFF_ID || '';
-          const liffUrl = `https://liff.line.me/${liffId}?quoteIds=${encodeURIComponent(quoteIds)}`;
+          const liffUrl = buildQuoteEditLiffUrl(quoteIds, userId);
 
           const flexMsg = {
             type: "flex",
@@ -1171,7 +1149,7 @@ export async function handleEvent(event: any): Promise<any> {
         if (match) {
           const quoteIds = match[1];
           const count = parseInt(match[2]);
-          const flexMsg = createCartConfirmationFlex(quoteIds, count);
+          const flexMsg = createCartConfirmationFlex(quoteIds, count, userId);
           return lineClient.replyMessage({
             replyToken: replyToken,
             messages: [flexMsg as any]
@@ -1430,7 +1408,7 @@ export async function handleEvent(event: any): Promise<any> {
 
           await updateSalespersonByUserId(userId, { status: 'active' });
 
-          const flexMsg = createRevisionFlex(quote.quotation_no, newQuote.id);
+          const flexMsg = createRevisionFlex(quote.quotation_no, newQuote.id, userId);
           return lineClient.replyMessage({
             replyToken: replyToken,
             messages: [flexMsg as any]
