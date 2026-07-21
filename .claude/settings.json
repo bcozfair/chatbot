@@ -102,7 +102,12 @@
       "PowerShell(node \"C:\\\\Users\\\\bcozf\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bcozf-Downloads-chatbot\\\\14e65aa4-447d-46ea-bbe0-0af8ab6fce5d\\\\scratchpad\\\\fmt.mjs\")",
       "Bash(node \"C:/Users/bcozf/AppData/Local/Temp/claude/c--Users-bcozf-Downloads-chatbot/6aa56c65-3507-4d9d-a397-ab1a1b4457f3/scratchpad/w.mjs\")",
       "Bash(TMP_OUT=\"C:/Users/bcozf/AppData/Local/Temp/claude/c--Users-bcozf-Downloads-chatbot/d164d555-6e5f-437a-9900-d3b07d3623c2/scratchpad\" npx tsx scripts/diag/_tmp_delivery_pdf.ts)",
-      "Bash(TMP_OUT=\"C:/Users/bcozf/AppData/Local/Temp/claude/c--Users-bcozf-Downloads-chatbot/d164d555-6e5f-437a-9900-d3b07d3623c2/scratchpad\" node scripts/diag/_tmp_preview.mjs)"
+      "Bash(TMP_OUT=\"C:/Users/bcozf/AppData/Local/Temp/claude/c--Users-bcozf-Downloads-chatbot/d164d555-6e5f-437a-9900-d3b07d3623c2/scratchpad\" node scripts/diag/_tmp_preview.mjs)",
+      "Bash(node --check __TRACKED_VAR__/quote-edit-inline.js)",
+      "Bash(python -c ' *)",
+      "Bash(node C:/Users/bcozf/AppData/Local/Temp/claude/c--Users-bcozf-Downloads-chatbot/1566bdae-a979-498c-aceb-b4aba387e808/scratchpad/smoke-quote-edit.mjs C:/Users/bcozf/AppData/Local/Temp/claude/c--Users-bcozf-Downloads-chatbot/1566bdae-a979-498c-aceb-b4aba387e808/scratchpad)",
+      "Bash(node \"C:/Users/bcozf/AppData/Local/Temp/claude/c--Users-bcozf-Downloads-chatbot/1566bdae-a979-498c-aceb-b4aba387e808/scratchpad/deadcheck.mjs\")",
+      "Bash(awk '/^@@/{p=0} /renderItems|onFieldChange|checkDirty|updateDeliveryUI|addProductToQuote|Sheet|remark|focusin|deliveryMode|discount-baht/{p=1} p')"
     ]
   }
 }

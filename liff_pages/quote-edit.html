@@ -286,37 +286,41 @@
 
       /* ─── ITEM BODY ─── */
       .item-body {
-        padding: 8px 10px;
+        padding: 7px 9px;
         display: flex;
         flex-direction: column;
-        gap: 7px;
+        gap: 6px;
       }
 
-      /* price × qty row */
+      /* แถวเดียวจบ: ฿ราคา × จำนวน = ยอดรวม (ไม่มี label ลอยข้างบนแล้ว
+         ใช้เครื่องหมาย ฿ / × นำหน้าแทน ประหยัดความสูงไปครึ่งแถว) */
       .item-pq-row {
         display: flex;
-        align-items: flex-end;
-        gap: 12px;
+        align-items: center;
+        gap: 6px;
       }
 
       .item-pq-col {
         display: flex;
-        flex-direction: column;
+        align-items: center;
         gap: 4px;
         min-width: 0;
       }
       .item-pq-col.price-col {
         flex: 1;
+        min-width: 56px;
       }
       .item-pq-col.qty-col {
-        flex: 1;
+        flex: 0 0 88px;
       }
 
-      .item-total-row {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 5px 8px;
+      /* เครื่องหมายนำหน้า/คั่นในแถวราคา×จำนวน */
+      .item-pq-sign {
+        font-family: "Outfit", sans-serif;
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--text-muted);
+        flex-shrink: 0;
       }
 
       .item-field-label {
@@ -326,17 +330,18 @@
         flex-shrink: 0;
       }
 
-      /* total price — right side, prominent */
+      /* total price — ท้ายแถวราคา×จำนวน */
       .item-total-chip {
         font-family: "Outfit", sans-serif;
-        font-size: 14px;
+        font-size: 13px;
         font-weight: 800;
         color: var(--green-dark);
         background: var(--green-light);
-        padding: 4px 10px;
+        padding: 4px 8px;
         border-radius: 20px;
         white-space: nowrap;
         flex-shrink: 0;
+        margin-left: auto;
       }
 
       /* discount block = แถว input + ปุ่ม "ใช้กับทุกรายการ" อยู่ในกล่องพื้นหลังเดียวกัน */
@@ -346,7 +351,7 @@
         gap: 4px;
         background: var(--surface);
         border-radius: 7px;
-        padding: 5px 8px;
+        padding: 4px 7px;
       }
 
       /* discount row */
@@ -373,6 +378,8 @@
         color: var(--text-muted);
       }
 
+      /* ป้ายส่วนลดเป็นบาท — element มีอยู่เสมอเพื่อให้ onFieldChange อัปเดตได้
+         แต่ซ่อนตอนส่วนลดเป็น 0 (เคสส่วนใหญ่) ไม่ให้รกโดยไม่มีข้อมูล */
       .item-discount-baht-chip {
         font-size: 10px;
         font-weight: 700;
@@ -382,6 +389,36 @@
         border-radius: 20px;
         white-space: nowrap;
         margin-left: auto;
+      }
+      .item-discount-baht-chip.is-hidden {
+        display: none;
+      }
+
+      /* หมายเหตุยุบเป็นปุ่ม — กางเป็น input ต่อเมื่อผู้ใช้แตะ หรือมีข้อความอยู่แล้ว */
+      .item-remark-toggle {
+        font-family: "Sarabun", sans-serif;
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--text-muted);
+        background: transparent;
+        border: 1px dashed var(--border-strong);
+        border-radius: 7px;
+        width: 100%;
+        height: 26px;
+        padding: 0 8px;
+        cursor: pointer;
+        text-align: left;
+        transition:
+          background 0.15s,
+          color 0.15s;
+      }
+      .item-remark-toggle:hover {
+        background: var(--green-pale);
+        color: var(--text-mid);
+      }
+      .item-remark-toggle[hidden],
+      .edit-input.inp-remark[hidden] {
+        display: none;
       }
 
       /* คัดลอกส่วนลดของรายการนี้ไปให้ทุกรายการในใบเดียวกัน (action ครั้งเดียว ไม่ใช่โหมด)
@@ -487,7 +524,7 @@
       .edit-input.inp-remark {
         width: 100%;
         max-width: none;
-        height: 30px;
+        height: 28px;
         padding: 0 8px;
         font-size: 11px;
         border-radius: 7px;
@@ -615,37 +652,46 @@
         color: var(--danger);
       }
 
-      /* ─── DELIVERY BOX (วันจัดส่ง — ทั้งใบ) ─── */
-      .delivery-box {
-        background: var(--green-pale);
-        border: 1.5px solid var(--border);
-        border-radius: var(--radius-sm);
-        padding: 9px 11px;
-        display: flex;
-        flex-direction: column;
-        gap: 7px;
-      }
-
-      .delivery-auto {
-        font-size: 11px;
-        color: var(--text-muted);
-        line-height: 1.5;
-      }
-      .delivery-auto b {
-        color: var(--text-mid);
-        font-weight: 700;
-      }
-
-      .delivery-row {
+      /* ─── DELIVERY STRIP (วันจัดส่ง — ทั้งใบ) ───
+         แถบบางคาดเหนือ .total-bar เพื่อให้อ่านคู่กับยอดรวมเป็นสรุปท้ายใบ */
+      .delivery-strip {
         display: flex;
         align-items: center;
+        flex-wrap: wrap;
         gap: 6px;
+        padding: 7px 14px;
+        background: var(--green-pale);
+        border-top: 1px solid var(--border);
+      }
+      .delivery-strip .item-field-label {
+        font-size: 11px;
+        color: var(--text-mid);
+      }
+
+      /* ถ้อยคำเดียวกับที่พิมพ์ลง PDF (ดู deliveryTimeText ใน pdfGenerator.ts)
+         สถานะมาจากสต๊อกจริงเสมอ เซลล์แก้ไม่ได้ — แก้ได้แค่จำนวนวัน */
+      .delivery-mode-badge {
+        font-family: "Outfit", sans-serif;
+        font-size: 11px;
+        font-weight: 700;
+        padding: 3px 9px;
+        border-radius: 20px;
+        white-space: nowrap;
+        flex-shrink: 0;
+      }
+      .delivery-mode-badge.in-stock {
+        background: rgba(30, 143, 30, 0.12);
+        color: var(--green-dark);
+      }
+      .delivery-mode-badge.make-order {
+        background: var(--warning-bg);
+        color: var(--warning);
       }
 
       .edit-input.inp-delivery {
-        width: 66px;
-        min-width: 66px;
-        height: 30px;
+        width: 58px;
+        min-width: 58px;
+        height: 28px;
         padding: 0 6px;
         font-size: 13px;
         text-align: center;
@@ -655,32 +701,42 @@
 
       .btn-delivery-reset {
         font-family: "Sarabun", sans-serif;
-        font-size: 11px;
+        font-size: 13px;
         font-weight: 700;
         color: var(--green-dark);
         background: var(--white);
         border: 1.5px solid var(--border-strong);
         border-radius: 6px;
-        height: 30px;
-        padding: 0 10px;
+        width: 28px;
+        height: 28px;
+        padding: 0;
         margin-left: auto;
         cursor: pointer;
-        white-space: nowrap;
+        flex-shrink: 0;
         transition: background 0.15s;
       }
       .btn-delivery-reset:hover {
         background: var(--green-light);
       }
 
-      .delivery-note {
+      /* บรรทัดที่ 2 ของ strip — กินเต็มความกว้างเสมอ */
+      .delivery-note,
+      .delivery-stale {
+        width: 100%;
         font-size: 11px;
+        line-height: 1.45;
+      }
+      .delivery-note {
         font-weight: 600;
         color: var(--warning);
-        line-height: 1.5;
+      }
+      .delivery-stale {
+        color: var(--text-muted);
       }
 
       .btn-delivery-reset[hidden],
-      .delivery-note[hidden] {
+      .delivery-note[hidden],
+      .delivery-stale[hidden] {
         display: none;
       }
 
@@ -734,14 +790,192 @@
         border: 1px solid #ffffff;
       }
 
-      /* ─── ADD PRODUCT SECTION ─── */
-      .add-product-section {
+      /* ─── ADD PRODUCT ─── */
+      /* ปุ่มเดียวของทั้งหน้า — สินค้าถูกจัดเข้าใบ PM/THT อัตโนมัติจาก prod.quote_company
+         จึงไม่ต้องมีช่องค้นหาแยกรายการ์ดอีก (ดู addProductToQuote) */
+      .btn-add-product {
+        font-family: "Sarabun", sans-serif;
+        font-size: 14px;
+        font-weight: 700;
+        color: var(--green-dark);
         background: var(--green-pale);
-        border-radius: var(--radius-sm);
-        padding: 12px;
-        margin-top: 10px;
-        margin-bottom: 10px;
         border: 1.5px dashed var(--border-strong);
+        border-radius: var(--radius);
+        width: 100%;
+        padding: 12px;
+        margin-bottom: 10px;
+        cursor: pointer;
+        transition:
+          background 0.15s,
+          border-color 0.15s;
+      }
+      .btn-add-product:hover {
+        background: var(--green-light);
+        border-color: var(--green);
+      }
+      .btn-add-product:active {
+        opacity: 0.88;
+      }
+
+      /* ปุ่มเดียวกันในเวอร์ชันเล็ก สำหรับ empty state ของใบที่ยังไม่มีสินค้า */
+      .btn-add-product.compact {
+        width: auto;
+        padding: 9px 18px;
+        margin: 10px 0 0;
+        font-size: 13px;
+      }
+
+      /* ─── PRODUCT SHEET (bottom sheet เพิ่มสินค้า) ───
+         z-index ต้องต่ำกว่า .alert-modal-overlay (2000) เพราะ addProductToQuote
+         เด้ง showCustomAlert ตอนสต๊อกไม่พอ ซึ่งต้องอยู่ทับ sheet */
+      .sheet-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 30, 0, 0.45);
+        z-index: 900;
+        display: none;
+        align-items: flex-end;
+        justify-content: center;
+      }
+      .sheet-overlay.show {
+        display: flex;
+      }
+      .sheet {
+        width: 100%;
+        max-width: 520px;
+        background: var(--white);
+        border-radius: 20px 20px 0 0;
+        max-height: 85vh;
+        display: flex;
+        flex-direction: column;
+        box-shadow: var(--shadow-lg);
+        animation: sheetUp 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+      }
+      @keyframes sheetUp {
+        from {
+          transform: translateY(100%);
+        }
+        to {
+          transform: translateY(0);
+        }
+      }
+      .sheet-handle {
+        width: 36px;
+        height: 4px;
+        background: var(--border);
+        border-radius: 2px;
+        margin: 10px auto 0;
+        flex-shrink: 0;
+      }
+      .sheet-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 14px 8px;
+        flex-shrink: 0;
+      }
+      .sheet-title {
+        font-size: 15px;
+        font-weight: 700;
+        color: var(--text);
+      }
+      .btn-close {
+        width: 30px;
+        height: 30px;
+        border: none;
+        border-radius: 50%;
+        background: var(--surface);
+        color: var(--text-muted);
+        font-size: 15px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      }
+      .sheet-search {
+        padding: 0 14px 10px;
+        border-bottom: 1px solid var(--border);
+        flex-shrink: 0;
+      }
+      .sheet-hint {
+        font-size: 11px;
+        color: var(--text-muted);
+        margin-top: 6px;
+      }
+      .sheet-results {
+        flex: 1;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        padding: 6px 10px 14px;
+        -webkit-overflow-scrolling: touch;
+      }
+      .sheet-empty {
+        padding: 22px 10px;
+        text-align: center;
+        font-size: 12px;
+        color: var(--text-light);
+      }
+
+      .sheet-result {
+        font-family: "Sarabun", sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        width: 100%;
+        text-align: left;
+        background: var(--white);
+        border: 1.5px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 8px 10px;
+        margin-bottom: 6px;
+        cursor: pointer;
+        transition:
+          background 0.12s,
+          border-color 0.12s;
+      }
+      .sheet-result:hover {
+        background: var(--green-pale);
+        border-color: var(--border-strong);
+      }
+      .sheet-result:active {
+        opacity: 0.85;
+      }
+      .sheet-result-main,
+      .sheet-result-sub {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .sheet-result-main .prod-code {
+        flex: 1;
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .sheet-result-sub .prod-name {
+        flex: 1;
+        min-width: 0; /* จำเป็นสำหรับ text-overflow:ellipsis ในลูก flex */
+      }
+
+      /* chip บอกว่าสินค้าจะถูกจัดเข้าใบไหน */
+      .target-chip {
+        font-family: "Outfit", sans-serif;
+        font-size: 10px;
+        font-weight: 800;
+        padding: 2px 7px;
+        border-radius: 20px;
+        white-space: nowrap;
+        flex-shrink: 0;
+      }
+      .target-chip.pm {
+        background: rgba(30, 143, 30, 0.12);
+        color: var(--green-dark);
+      }
+      .target-chip.tht {
+        background: rgba(156, 33, 33, 0.1);
+        color: #9c2121;
       }
 
       /* ─── SEARCH DROPDOWN ─── */
@@ -790,9 +1024,6 @@
       .dropdown-item:hover {
         background: var(--green-light);
       }
-      .dropdown-item.out-of-stock-item:hover {
-        background: transparent !important;
-      }
 
       .dropdown-item-header {
         display: flex;
@@ -800,20 +1031,24 @@
         align-items: center;
         gap: 8px;
       }
-      .dropdown-item .prod-code {
+      /* ใช้ร่วมกันทั้ง dropdown ค้นหาบริษัท และแถวผลลัพธ์ใน product sheet */
+      .dropdown-item .prod-code,
+      .sheet-result .prod-code {
         font-family: "Outfit", sans-serif;
         font-weight: 700;
         font-size: 13px;
         color: var(--green-dark);
       }
-      .dropdown-item .prod-price {
+      .dropdown-item .prod-price,
+      .sheet-result .prod-price {
         font-family: "Outfit", sans-serif;
         font-weight: 700;
         font-size: 13px;
         color: var(--green-dark);
         white-space: nowrap;
       }
-      .dropdown-item .prod-name {
+      .dropdown-item .prod-name,
+      .sheet-result .prod-name {
         font-size: 11px;
         color: var(--text-muted);
         white-space: nowrap;
@@ -1077,15 +1312,6 @@
         padding-bottom: 14px;
       }
 
-      /* item remark input override */
-      .item-remark-input {
-        background: var(--white) !important;
-        border-color: var(--border) !important;
-      }
-      .item-remark-input:focus {
-        border-color: var(--green) !important;
-        background: var(--green-pale) !important;
-      }
       /* ─── SEARCH CLEAR BUTTON ─── */
       .search-clear {
         position: absolute;
@@ -1209,7 +1435,45 @@
     <!-- Main Content -->
     <div class="container" id="mainContent" style="display: none">
       <div id="quotesContainer"></div>
+      <!-- อยู่นอก #quotesContainer จึงไม่ถูก render() ทำลาย → ผูก listener ครั้งเดียว -->
+      <button type="button" class="btn-add-product" id="btnOpenProductSheet">
+        ➕ เพิ่มสินค้า
+      </button>
       <div class="footer-note">Powered by Primus Co., Ltd.</div>
+    </div>
+
+    <!-- Product Sheet — ช่องค้นหาสินค้าเดียวของทั้งหน้า -->
+    <div class="sheet-overlay" id="productSheetOverlay">
+      <div
+        class="sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="productSheetTitle"
+      >
+        <div class="sheet-handle"></div>
+        <div class="sheet-header">
+          <div class="sheet-title" id="productSheetTitle">🛒 เพิ่มสินค้า</div>
+          <button class="btn-close" id="productSheetClose" aria-label="ปิด">
+            ✕
+          </button>
+        </div>
+        <div class="sheet-search">
+          <div class="search-wrapper">
+            <input
+              type="text"
+              class="edit-input"
+              id="productSheetInput"
+              placeholder="🔍 พิมพ์รุ่น / ชื่อ / แบรนด์..."
+              style="max-width: none; width: 100%; font-size: 13px; padding-right: 34px"
+            />
+            <button class="search-clear" id="productSheetClear">✕</button>
+          </div>
+          <div class="sheet-hint">
+            ระบบจะจัดสินค้าเข้าใบ PM หรือ THT ให้อัตโนมัติ
+          </div>
+        </div>
+        <div class="sheet-results" id="productSheetResults"></div>
+      </div>
     </div>
 
     <!-- Sticky Footer -->
@@ -1567,13 +1831,17 @@
         return o === null ? deliveryAutoDays(quote) : o;
       }
 
-      function deliveryModeLabel(quote) {
+      // ถ้อยคำเดียวกับที่พิมพ์ลง PDF (deliveryTimeText ใน pdfGenerator.ts)
+      // เซลล์จะได้เห็นคำเดียวกับที่ลูกค้าเห็นในเอกสาร ไม่ต้องแปลในหัว
+      function deliveryModeText(quote) {
         return quote.delivery_all_in_stock === false
-          ? "ต้องผลิต/สั่งเข้า"
-          : "มีของพร้อมส่ง";
+          ? "Make to order."
+          : "In_stock.";
       }
 
       // ปุ่มรีเซ็ต + ข้อความเตือนโผล่เฉพาะตอนมีค่าที่แก้เองค้างอยู่
+      // ส่วนคำเตือน "ค่าอัตโนมัติยังไม่อัปเดต" โผล่เฉพาะตอนที่ตัวเลข auto เริ่มเก่า
+      // (= มีของแก้ค้างยังไม่บันทึก และยังไม่ได้ตั้งค่าทับ) ไม่งั้นก็ไม่ต้องรก
       function updateDeliveryUI(qIdx) {
         const quote = quotesData[qIdx];
         const box = document.getElementById(`delivery-box-${qIdx}`);
@@ -1581,8 +1849,10 @@
         const on = hasDeliveryOverride(quote);
         const btn = box.querySelector(".btn-delivery-reset");
         const note = box.querySelector(".delivery-note");
+        const stale = box.querySelector(".delivery-stale");
         if (btn) btn.hidden = !on;
         if (note) note.hidden = !on;
+        if (stale) stale.hidden = on || !hasChanges;
       }
 
       function onDeliveryDaysInput(e) {
@@ -1637,9 +1907,11 @@
           JSON.stringify(quotesData.map(deliveryOverrideDays)) !==
             JSON.stringify(originalData.map(deliveryOverrideDays));
         updateAllSaveStatus(
-          hasChanges ? "● ยังไม่ได้บันทึก" : "",
+          hasChanges ? "⚠️ ยังไม่ได้บันทึก" : "",
           hasChanges ? "dirty" : "",
         );
+        // คำเตือน "ค่าอัตโนมัติยังไม่อัปเดต" ผูกกับ hasChanges จึงต้องรีเฟรชที่นี่ด้วย
+        quotesData.forEach((_, i) => updateDeliveryUI(i));
       }
 
       // ── Render ──
@@ -1707,42 +1979,28 @@
           card.className = "quote-card";
           card.innerHTML = `
           <div class="card-header ${headerClass}">
-            <span>📄 ใบเสนอราคา - ${label}</span>
+            <span>เสนอราคา - ${label}</span>
             <span class="save-status" id="save-status-${qIdx}"></span>
           </div>
           <div class="card-body" style="padding-top:14px;">
             <div class="section-title">🛒 รายการสินค้า (${quote.items.length} รายการ)</div>
             <div id="items-${qIdx}"></div>
           </div>
-          <div class="card-body" style="padding-top:0; padding-bottom:4px;">
-            <div class="add-product-section">      
-              <div class="search-wrapper">
-                <input type="text" class="edit-input add-product-input" placeholder="➕ ค้นหาสินค้าเพิ่ม..."
-                  data-q="${qIdx}" style="max-width:none; font-size:13px; width:100%; padding-right:34px;">
-                <button class="search-clear add-product-clearBtn" data-q="${qIdx}">✕</button>
-                <div class="search-results-dropdown" id="search-results-${qIdx}"></div>
-              </div>
+          <div class="delivery-strip" id="delivery-box-${qIdx}">
+            <span class="delivery-mode-badge ${quote.delivery_all_in_stock === false ? "make-order" : "in-stock"}">${deliveryModeText(quote)}</span>
+            <span class="item-field-label">ภายใน</span>
+            <input type="number" class="edit-input inp-delivery delivery-input"
+              min="0" max="3650" step="1" inputmode="numeric"
+              value="${deliveryEffectiveDays(quote)}" data-q="${qIdx}">
+            <span class="item-field-label">วัน</span>
+            <button type="button" class="btn-delivery-reset" data-q="${qIdx}"
+              title="ใช้ค่าอัตโนมัติ" aria-label="ใช้ค่าอัตโนมัติ"
+              ${hasDeliveryOverride(quote) ? "" : "hidden"}>↺</button>
+            <div class="delivery-note" ${hasDeliveryOverride(quote) ? "" : "hidden"}>
+              ✏️ แก้เอง — ค่าอัตโนมัติ ${deliveryAutoDays(quote)} วัน (จะไม่เปลี่ยนตามสินค้าที่แก้ทีหลัง)
             </div>
-          </div>
-          <div class="card-body" style="padding-top:0; padding-bottom:10px;">
-            <div class="section-title" style="margin-bottom:7px;">🚚 กำหนดส่งสินค้า</div>
-            <div class="delivery-box" id="delivery-box-${qIdx}">
-              <div class="delivery-auto">
-                ระบบคำนวณจากเงื่อนไขสินค้า: <b>${deliveryModeLabel(quote)} · ${deliveryAutoDays(quote)} วัน</b>
-                <span style="color:var(--text-light);">(ค่านี้อัปเดตหลังกดบันทึก)</span>
-              </div>
-              <div class="delivery-row">
-                <span class="item-field-label">ส่งภายใน</span>
-                <input type="number" class="edit-input inp-delivery delivery-input"
-                  min="0" max="3650" step="1" inputmode="numeric"
-                  value="${deliveryEffectiveDays(quote)}" data-q="${qIdx}">
-                <span class="item-field-label">วัน</span>
-                <button type="button" class="btn-delivery-reset" data-q="${qIdx}"
-                  ${hasDeliveryOverride(quote) ? "" : "hidden"}>↺ ค่าอัตโนมัติ</button>
-              </div>
-              <div class="delivery-note" ${hasDeliveryOverride(quote) ? "" : "hidden"}>
-                ✏️ ใช้จำนวนวันที่แก้เองในใบเสนอราคา — จะไม่เปลี่ยนตามสินค้า/จำนวนที่แก้ทีหลัง
-              </div>
+            <div class="delivery-stale" hidden>
+              ⓘ ตัวเลขอัตโนมัติจะอัปเดตหลังกดบันทึก
             </div>
           </div>
           <div class="total-bar">
@@ -1752,12 +2010,6 @@
         `;
           quotesContainer.appendChild(card);
 
-          const searchInput = card.querySelector(".add-product-input");
-          if (searchInput) {
-            searchInput.addEventListener("input", onSearchInput);
-            searchInput.addEventListener("focus", onSearchInput);
-          }
-
           const deliveryInput = card.querySelector(".delivery-input");
           if (deliveryInput) {
             deliveryInput.addEventListener("input", onDeliveryDaysInput);
@@ -1766,6 +2018,22 @@
           const deliveryReset = card.querySelector(".btn-delivery-reset");
           if (deliveryReset)
             deliveryReset.addEventListener("click", onDeliveryReset);
+
+          // ปุ่ม "ใช้กับทุกรายการ" โผล่เฉพาะตอนแตะช่องส่วนลดของรายการนั้น
+          // ใช้ event delegation ตัวเดียว + toggle class (ห้าม re-render ไม่งั้น focus หลุดกลางคัน)
+          // ปุ่มไม่ใช่ .edit-input จึงไม่เข้าเงื่อนไขไหนเลย → กดปุ่มแล้วปุ่มไม่หายไปก่อน click
+          // ⚠️ ผูกที่นี่ไม่ใช่ใน renderItems() เพราะ onApplyDiscountToAll เรียก renderItems()
+          // ซ้ำบน container ตัวเดิม — ถ้าผูกในนั้นจะได้ listener ซ้อนเพิ่มทุกครั้งที่กด
+          const itemsContainer = card.querySelector(`#items-${qIdx}`);
+          if (itemsContainer) {
+            itemsContainer.addEventListener("focusin", (e) => {
+              const t = e.target;
+              if (t.classList.contains("item-discount-input"))
+                revealApplyButton(qIdx, parseInt(t.dataset.i));
+              else if (t.classList.contains("edit-input"))
+                revealApplyButton(qIdx, -1);
+            });
+          }
 
           renderItems(qIdx);
         });
@@ -1795,10 +2063,14 @@
 
         if (quote.items.length === 0) {
           container.innerHTML = `
-          <div class="empty-state" style="padding:24px 16px;">
+          <div class="empty-state" style="padding:20px 16px;">
             <div class="icon">🛒</div>
-            <div class="msg">ยังไม่มีสินค้าในใบนี้<br>ค้นหาด้านล่างเพื่อเพิ่มสินค้า</div>
+            <div class="msg">ยังไม่มีสินค้าในใบนี้</div>
+            <button type="button" class="btn-add-product compact">➕ เพิ่มสินค้า</button>
           </div>`;
+          const emptyAddBtn = container.querySelector(".btn-add-product");
+          if (emptyAddBtn)
+            emptyAddBtn.addEventListener("click", openProductSheet);
           return;
         }
 
@@ -1814,6 +2086,9 @@
               ? `ไม่พอคงเหลือ ${stock} ชิ้น`
               : `พร้อมส่ง ${stock}`;
 
+          const hasDiscount = (item.discount_1 || 0) + (item.discount_2 || 0) > 0;
+          const hasRemark = !!(item.remark || "").trim();
+
           const itemEl = document.createElement("div");
           itemEl.className = "item-card";
           itemEl.innerHTML = `
@@ -1821,26 +2096,24 @@
           <div class="item-top-bar">
             <span class="item-index">${idx + 1}</span>
             <span class="item-code">${item.model || item.product_code}</span>
-            <span class="stock-warning-container">
-              <span class="item-stock-badge ${stockClass}">${stockText}</span>
-            </span>
+            <span class="item-stock-badge ${stockClass}">${stockText}</span>
             <button type="button" class="btn-delete-item" data-q="${qIdx}" data-i="${idx}" title="ลบรายการ">🗑️</button>
           </div>
 
           <!-- BODY -->
           <div class="item-body">
 
-            <!-- ROW 1: ราคา/หน่วย + จำนวน (2 คอลัมน์เคียงคู่กัน) -->
+            <!-- ROW 1: ฿ราคา × จำนวน = ยอดรวม -->
             <div class="item-pq-row">
               <div class="item-pq-col price-col">
-                <span class="item-field-label">ราคา/หน่วย</span>
+                <span class="item-pq-sign">฿</span>
                 <input type="number" class="edit-input inp-price item-price-input"
                   min="0" step="any"
                   value="${item.price}"
                   data-q="${qIdx}" data-i="${idx}" data-field="price">
               </div>
+              <span class="item-pq-sign">×</span>
               <div class="item-pq-col qty-col">
-                <span class="item-field-label">จำนวน</span>
                 <div class="qty-control compact">
                   <button type="button" class="qty-btn btn-minus" data-q="${qIdx}" data-i="${idx}">−</button>
                   <input type="number" class="edit-input qty-input" min="1"
@@ -1848,12 +2121,13 @@
                   <button type="button" class="qty-btn btn-plus" data-q="${qIdx}" data-i="${idx}">+</button>
                 </div>
               </div>
+              <span class="item-total item-total-chip">฿${formatNumber(itemTotal, 2)}</span>
             </div>
 
             <!-- ROW 2: ส่วนลด (แก้ได้เสมอ — ไม่มีโหมดล็อกอีกแล้ว) -->
             <div class="item-disc-block">
               <div class="item-disc-row">
-                <span class="item-field-label" style="flex-shrink:0;">ส่วนลด</span>
+                <span class="item-field-label" style="flex-shrink:0;">ลด</span>
                 <div class="disc-inputs-group">
                   <input type="number" class="edit-input inp-disc item-discount-input"
                     min="0" max="100" step="0.1"
@@ -1866,7 +2140,7 @@
                     data-q="${qIdx}" data-i="${idx}" data-field="discount_2" placeholder="0">
                   <span class="disc-unit">%</span>
                 </div>
-                <span class="item-discount-baht item-discount-baht-chip">-฿${discountText}</span>
+                <span class="item-discount-baht item-discount-baht-chip${hasDiscount ? "" : " is-hidden"}">-฿${discountText}</span>
               </div>
               ${
                 quote.items.length > 1
@@ -1875,17 +2149,12 @@
               }
             </div>
 
-            <!-- ROW 3: ยอดรวม -->
-            <div class="item-total-row">
-              <span class="item-field-label" style="font-weight: 600; color: var(--text-mid);">ยอดรวม</span>
-              <span class="item-total item-total-chip">฿${formatNumber(itemTotal, 2)}</span>
-            </div>
-
-            <!-- ROW 4: หมายเหตุ -->
-            <input type="text" class="edit-input inp-remark item-remark-input"
+            <!-- ROW 3: หมายเหตุ — ยุบเป็นปุ่มจนกว่าจะแตะ (หรือมีข้อความอยู่แล้ว) -->
+            <button type="button" class="item-remark-toggle" data-i="${idx}" ${hasRemark ? "hidden" : ""}>📝 เพิ่มหมายเหตุ</button>
+            <input type="text" class="edit-input inp-remark"
               placeholder="📝 หมายเหตุ / รายละเอียดเพิ่มเติม..."
               value="${item.remark || ""}"
-              data-q="${qIdx}" data-i="${idx}" data-field="remark">
+              data-q="${qIdx}" data-i="${idx}" data-field="remark" ${hasRemark ? "" : "hidden"}>
 
           </div>
         `;
@@ -1909,17 +2178,20 @@
           .forEach((btn) =>
             btn.addEventListener("click", onApplyDiscountToAll),
           );
+        container
+          .querySelectorAll(".item-remark-toggle")
+          .forEach((btn) => btn.addEventListener("click", onRemarkToggle));
+      }
 
-        // ปุ่ม "ใช้กับทุกรายการ" โผล่เฉพาะตอนแตะช่องส่วนลดของรายการนั้น
-        // ใช้ event delegation ตัวเดียว + toggle class (ห้าม re-render ไม่งั้น focus หลุดกลางคัน)
-        // ปุ่มไม่ใช่ .edit-input จึงไม่เข้าเงื่อนไขไหนเลย → กดปุ่มแล้วปุ่มไม่หายไปก่อน click
-        container.addEventListener("focusin", (e) => {
-          const t = e.target;
-          if (t.classList.contains("item-discount-input"))
-            revealApplyButton(qIdx, parseInt(t.dataset.i));
-          else if (t.classList.contains("edit-input"))
-            revealApplyButton(qIdx, -1);
-        });
+      // กางช่องหมายเหตุ — ใช้ hidden attribute + focus() ห้าม re-render
+      // (re-render จะทำลาย input ที่เพิ่งสั่ง focus ไป → คีย์บอร์ดเด้งแล้วหุบทันที)
+      function onRemarkToggle(e) {
+        const btn = e.currentTarget;
+        const input = btn.parentNode.querySelector(".inp-remark");
+        if (!input) return;
+        btn.hidden = true;
+        input.hidden = false;
+        input.focus();
       }
 
       /** ข้อความบนปุ่ม — บอกชัดว่ากดแล้วจะใช้ส่วนลดเท่าไหร่ */
@@ -2046,8 +2318,14 @@
           if (el) el.textContent = `฿${formatNumber(itemTotal, 2)}`;
           const item = quotesData[qIdx].items[iIdx];
           const discEl = itemCard.querySelector(".item-discount-baht");
-          if (discEl)
+          if (discEl) {
             discEl.textContent = `-฿${formatNumber(item.price * item.quantity - itemTotal, 2)}`;
+            // ป้ายนี้อยู่ใน DOM เสมอ แต่ซ่อนตอนไม่มีส่วนลด — ต้องสลับตามที่พิมพ์สด ๆ
+            discEl.classList.toggle(
+              "is-hidden",
+              (item.discount_1 || 0) + (item.discount_2 || 0) <= 0,
+            );
+          }
           const stock = Number(item.stock) || 0;
           const stockEl = itemCard.querySelector(".item-stock-badge");
           if (stockEl) {
@@ -2443,15 +2721,38 @@
         validateContactsAndEnableSave();
       }
 
+      // ── Product sheet (ช่องค้นหาสินค้าเดียวของทั้งหน้า) ──
+      // สินค้าถูกจัดเข้าใบ PM/THT อัตโนมัติจาก prod.quote_company (ดู addProductToQuote)
+      // จึงไม่ต้องมีช่องค้นหาแยกรายการ์ด และ sheet อยู่นอก #quotesContainer จึงรอด render()
+      const sheetOverlay = document.getElementById("productSheetOverlay");
+      const sheetInput = document.getElementById("productSheetInput");
+      const sheetResultsEl = document.getElementById("productSheetResults");
+      let sheetResults = [];
       let searchTimeout = null;
-      function onSearchInput(e) {
-        const qIdx = parseInt(e.target.dataset.q);
+
+      function openProductSheet() {
+        if (!sheetOverlay) return;
+        sheetOverlay.classList.add("show");
+        // ล็อกการเลื่อนหน้าหลังไว้ ไม่งั้นนิ้วปัดในลิสต์แล้วหน้าข้างหลังเลื่อนตาม
+        document.body.style.overflow = "hidden";
+        if (sheetInput) sheetInput.focus();
+      }
+
+      function closeProductSheet() {
+        if (!sheetOverlay) return;
+        sheetOverlay.classList.remove("show");
+        document.body.style.overflow = "";
+        if (sheetInput) sheetInput.value = "";
+        sheetResults = [];
+        if (sheetResultsEl) sheetResultsEl.innerHTML = "";
+      }
+
+      function onSheetSearchInput(e) {
         const query = e.target.value.trim();
-        const dropdown = document.getElementById(`search-results-${qIdx}`);
-        if (!dropdown) return;
+        if (!sheetResultsEl) return;
         if (!query) {
-          dropdown.innerHTML = "";
-          dropdown.style.display = "none";
+          sheetResults = [];
+          sheetResultsEl.innerHTML = "";
           return;
         }
         if (searchTimeout) clearTimeout(searchTimeout);
@@ -2461,57 +2762,82 @@
               `/api/products/search?q=${encodeURIComponent(query)}`,
             );
             if (!resp.ok) throw new Error("Search failed");
-            renderSearchResults(await resp.json(), qIdx, dropdown);
+            renderSheetResults(await resp.json());
           } catch (err) {
             console.error("Search error:", err);
           }
         }, 300);
       }
 
-      function renderSearchResults(products, qIdx, dropdown) {
-        dropdown.innerHTML = "";
-        if (!products || products.length === 0) {
-          dropdown.innerHTML =
-            '<div style="padding:10px;font-size:12px;color:var(--text-light);text-align:center;">ไม่พบสินค้า</div>';
-          dropdown.style.display = "block";
+      function renderSheetResults(products) {
+        if (!sheetResultsEl) return;
+        sheetResults = Array.isArray(products) ? products : [];
+        sheetResultsEl.innerHTML = "";
+        if (sheetResults.length === 0) {
+          sheetResultsEl.innerHTML =
+            '<div class="sheet-empty">ไม่พบสินค้า</div>';
           return;
         }
-        products.forEach((prod) => {
-          const itemEl = document.createElement("div");
-          itemEl.className = "dropdown-item";
+        sheetResults.forEach((prod, i) => {
           const stock = Number(prod.stock) || 0;
-          itemEl.innerHTML = `
-          <div class="dropdown-item-header" style="margin-bottom:2px;">
+          const isTht = prod.quote_company === "THT";
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "sheet-result";
+          btn.dataset.idx = i;
+          btn.innerHTML = `
+          <div class="sheet-result-main">
             <span class="prod-code">${prod.model || prod.code}</span>
             <span class="prod-price">฿${formatNumber(prod.price, 2)}</span>
           </div>
-          <div style="display:flex;justify-content:flex-end;align-items:center;font-size:11px;">
-            <span class="prod-stock ${stock > 0 ? "in-stock" : "out-of-stock"}">${stock > 0 ? `คงเหลือ ${stock} ชิ้น` : "สินค้าหมด"}</span>
+          <div class="sheet-result-sub">
+            <span class="prod-name">${prod.name || ""}</span>
+            <span class="target-chip ${isTht ? "tht" : "pm"}">${isTht ? "THT" : "PM"}</span>
+            <span class="prod-stock ${stock > 0 ? "in-stock" : "out-of-stock"}">${stock > 0 ? `คงเหลือ ${stock}` : "สินค้าหมด"}</span>
           </div>`;
-
-          // 🛠️ แก้ไขลำดับการทำงานตรงนี้
-          itemEl.addEventListener("click", () => {
-            // 1. ค้นหาช่องค้นหาของการ์ดใบนี้ แล้วล้างตัวหนังสือออกให้เรียบร้อยก่อน
-            const card = dropdown.closest(".quote-card");
-            if (card) {
-              const inp = card.querySelector(".add-product-input");
-              if (inp) inp.value = "";
-            }
-
-            // 2. สั่งซ่อนและเคลียร์ HTML ในดร็อปดาวน์ทิ้งทันที
-            dropdown.style.display = "none";
-            dropdown.innerHTML = "";
-
-            // 3. ค่อยสั่งแอดสินค้า (เนื่องจากฟังก์ชันนี้จะสั่งทำลาย DOM เก่าเพื่อประกอบร่างหน้าจอใหม่)
-            addProductToQuote(prod, qIdx);
+          // ไม่ปิด sheet และไม่ล้างคำค้น — ให้เพิ่มหลายชิ้นรวดเดียวได้
+          btn.addEventListener("click", () => {
+            addProductToQuote(prod);
           });
-
-          dropdown.appendChild(itemEl);
+          sheetResultsEl.appendChild(btn);
         });
-        dropdown.style.display = "block";
       }
 
-      async function addProductToQuote(prod, qIdx) {
+      if (sheetInput) sheetInput.addEventListener("input", onSheetSearchInput);
+
+      const btnOpenSheet = document.getElementById("btnOpenProductSheet");
+      if (btnOpenSheet)
+        btnOpenSheet.addEventListener("click", openProductSheet);
+
+      const btnCloseSheet = document.getElementById("productSheetClose");
+      if (btnCloseSheet)
+        btnCloseSheet.addEventListener("click", closeProductSheet);
+
+      const btnClearSheet = document.getElementById("productSheetClear");
+      if (btnClearSheet)
+        btnClearSheet.addEventListener("click", () => {
+          if (!sheetInput) return;
+          sheetInput.value = "";
+          sheetInput.focus();
+          sheetResults = [];
+          if (sheetResultsEl) sheetResultsEl.innerHTML = "";
+        });
+
+      if (sheetOverlay)
+        sheetOverlay.addEventListener("click", (e) => {
+          if (e.target === sheetOverlay) closeProductSheet();
+        });
+
+      document.addEventListener("keydown", (e) => {
+        if (
+          e.key === "Escape" &&
+          sheetOverlay &&
+          sheetOverlay.classList.contains("show")
+        )
+          closeProductSheet();
+      });
+
+      async function addProductToQuote(prod) {
         const targetIsTht = prod.quote_company === "THT";
 
         const targetQIdx = quotesData.findIndex((q) => {
@@ -2612,6 +2938,11 @@
         if (!quote.items) quote.items = [];
         quote.items.push(newItem);
         render();
+        // sheet ยังเปิดค้างอยู่ (อยู่คนละ subtree กับที่ render() รื้อ) จึงต้องมี toast
+        // ยืนยันว่าสินค้าเข้าใบไหนไปแล้ว ไม่งั้นผู้ใช้ไม่เห็นการเปลี่ยนแปลงที่ถูกบัง
+        showToast(
+          `➕ เพิ่ม ${newItem.model} เข้าใบ ${targetIsTht ? "THT" : "PM"} แล้ว`,
+        );
       }
 
       document.addEventListener("click", (e) => {
@@ -2645,44 +2976,7 @@
           return;
         }
 
-        // ✕ clearBtn สำหรับช่องค้นหาสินค้า
-        if (
-          e.target.classList.contains("add-product-clearBtn") ||
-          e.target.closest(".add-product-clearBtn")
-        ) {
-          const clearBtn = e.target.classList.contains("add-product-clearBtn")
-            ? e.target
-            : e.target.closest(".add-product-clearBtn");
-          const qIdx = parseInt(clearBtn.dataset.q);
-          const card = clearBtn.closest(".quote-card");
-          if (card) {
-            const productInput = card.querySelector(".add-product-input");
-            if (productInput) {
-              productInput.value = "";
-              productInput.focus();
-            }
-          }
-          const dropdown = document.getElementById(`search-results-${qIdx}`);
-          if (dropdown) {
-            dropdown.style.display = "none";
-            dropdown.innerHTML = "";
-          }
-          return;
-        }
-
-        // 🔍 1. สำหรับดร็อปดาวน์ค้นหาสินค้า
-        // ถ้าไม่ได้คลิกที่ช่อง Input ค้นหาสินค้า และไม่ได้คลิก "ภายใน" กล่องดร็อปดาวน์ผลลัพธ์ -> ให้สั่งปิดทั้งหมด
-        if (
-          !e.target.classList.contains("add-product-input") &&
-          !e.target.closest(".search-results-dropdown")
-        ) {
-          document.querySelectorAll(".search-results-dropdown").forEach((d) => {
-            d.style.display = "none";
-            d.innerHTML = ""; // ช่วยล้างสถานะ "ไม่พบสินค้า" ที่อาจค้างอยู่ด้วย
-          });
-        }
-
-        // 🏢 2. สำหรับดร็อปดาวน์ค้นหาบริษัทลูกค้า
+        // 🏢 สำหรับดร็อปดาวน์ค้นหาบริษัทลูกค้า
         // ถ้าไม่ได้คลิกที่ช่อง Input บริษัท และไม่ได้คลิก "ภายใน" กล่องดร็อปดาวน์บริษัท -> ให้สั่งปิด
         if (
           !e.target.classList.contains("company-search-input") &&
