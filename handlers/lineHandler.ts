@@ -24,7 +24,7 @@ import {
   createCartConfirmationFlex,
   appendReviseFrom,
   createRevisionFlex,
-  buildQuoteEditLiffUrl
+  isCustomerInfoIncomplete
 } from '../utils/flexTemplates.js';
 import { findProduct } from '../services/productService.js';
 import { 
@@ -495,6 +495,16 @@ export async function handleEvent(event: any): Promise<any> {
             continue;
           }
 
+          // กันการกดยืนยันจาก Flex เก่าในประวัติแชท ทั้งที่ใบยังไม่ได้ผูกลูกค้า
+          // (เลขที่เอกสารใน quotation_counters เดินหน้าแล้วย้อนคืนไม่ได้)
+          if (isCustomerInfoIncomplete(currentQuote)) {
+            replyMessages.push({
+              type: 'text',
+              text: `❌ ยังยืนยันไม่ได้ — ใบเสนอราคานี้ยังไม่ได้ระบุข้อมูลลูกค้า\nกรุณากดปุ่ม "🏢 กรอกข้อมูลลูกค้า" เพื่อเลือกบริษัทและผู้ติดต่อก่อนครับ`
+            });
+            continue;
+          }
+
           const reqUrl = process.env.APP_URL || `http://localhost:${process.env.PORT || 3011}`;
           const pdfLink = `${reqUrl}/download-pdf/${qId}?openExternalBrowser=1`;
 
@@ -950,64 +960,43 @@ export async function handleEvent(event: any): Promise<any> {
         }
 
         if (quoteIds) {
-          const liffUrl = buildQuoteEditLiffUrl(quoteIds, userId);
-
-          const flexMsg = {
-            type: "flex",
-            altText: "กรอกข้อมูลลูกค้า",
-            contents: {
-              type: "bubble",
-              size: "mega",
-              body: {
-                type: "box",
-                layout: "vertical",
-                spacing: "md",
-                contents: [
-                  {
-                    type: "text",
-                    text: "รับทราบครับ กรุณาระบุ ชื่อลูกค้า/ผู้ติดต่อ ที่ต้องการเสนอราคาด้วยการพิมพ์หรือกดปุ่มด้านล่าง เพื่อดำเนินการต่อครับ",
-                    wrap: true,
-                    size: "sm",
-                    color: "#374151"
-                  }
-                ]
-              },
-              footer: {
-                type: "box",
-                layout: "vertical",
-                contents: [
-                  {
-                    type: "button",
-                    action: {
-                      type: "uri",
-                      label: "🏢 กรอกข้อมูลลูกค้า",
-                      uri: liffUrl
-                    },
-                    style: "primary",
-                    color: "#2563EB",
-                    height: "sm"
-                  }
-                ]
-              }
-            }
-          };
-
+          // ตอบด้วย Flex สรุปร่างเต็ม ๆ เลย (ข้อมูลลูกค้าจะขึ้นเป็น "ยังไม่ระบุ" และไม่มีปุ่มยืนยัน
+          // จนกว่าจะกดเข้าไปเลือกบริษัท/ผู้ติดต่อในหน้า LIFF — ดู isCustomerInfoIncomplete)
           try {
-            await insertMessage({
-              user_id: userId,
-              message_id: messageId,
-              type: 'text',
-              content: content,
-              reply_token: replyToken,
-              reply_content: 'รับทราบครับ กรุณาระบุ ชื่อลูกค้า/ผู้ติดต่อ ที่ต้องการเสนอราคาด้วยการพิมพ์หรือกดปุ่มด้านล่างเพื่อดำเนินการต่อครับ (กรอกข้อมูลลูกค้า)'
-            });
-          } catch (dbErr) {
-            console.error("Error logging draft cart message:", dbErr);
+            const draftRes = await pool.query(
+              `SELECT * FROM quotations
+               WHERE id = ANY($1) AND user_id = $2 AND status <> 'confirmed' AND status <> 'cancelled'
+               ORDER BY created_at ASC`,
+              [quoteIds.split(',').map(id => id.trim()).filter(Boolean), userId]
+            );
+            const draftQuotes = await Promise.all(draftRes.rows.map((q: any) => enrichQuotationData(q)));
+
+            if (draftQuotes.length > 0) {
+              const summary = await getQuotationSummaryMessage(draftQuotes);
+              try {
+                await insertMessage({
+                  user_id: userId,
+                  message_id: messageId,
+                  type: 'text',
+                  content: content,
+                  reply_token: replyToken,
+                  reply_content: summary.summaryText
+                });
+              } catch (dbErr) {
+                console.error("Error logging draft cart message:", dbErr);
+              }
+              return lineClient.replyMessage({
+                replyToken: replyToken,
+                messages: summary.messages as any
+              });
+            }
+          } catch (err) {
+            console.error("Error processing draft cart trigger:", err);
           }
 
           return lineClient.replyMessage({
             replyToken: replyToken,
-            messages: [flexMsg as any]
+            messages: [{ type: 'text', text: '❌ ไม่พบร่างใบเสนอราคาที่บันทึกไว้ (อาจถูกยืนยันหรือยกเลิกไปแล้ว) รบกวนเริ่มรายการใหม่อีกครั้งครับ' }]
           });
         }
       }

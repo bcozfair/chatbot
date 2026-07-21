@@ -37,6 +37,7 @@ import { pool } from './config/db.js';
 import { getJwtSecret } from './config/jwt.js';
 import { adminAuthMiddleware } from './config/auth.js';
 import { sumLineTotals } from './utils/pricing.js';
+import { isCustomerInfoIncomplete } from './utils/flexTemplates.js';
 import {
   startSync,
   isRunning,
@@ -229,7 +230,10 @@ app.post('/api/quotations', express.json(), async (req: any, res: any) => {
     }
 
     const { insertDraftQuotations } = await import('./services/quotationService.js');
-    const insertedQuotes = await insertDraftQuotations(userId, customerName || ' | ', items || [], status || 'draft', customerId, contactId, !!preserveDrafts);
+    // ยังไม่ได้ระบุบริษัท = ร่างที่ยืนยันไม่ได้ ต้องคาสถานะ pending_company ไว้เสมอ
+    const hasCompany = !!(customerName && customerName.split(' | ')[0].trim());
+    const finalStatus = hasCompany ? (status || 'draft') : 'pending_company';
+    const insertedQuotes = await insertDraftQuotations(userId, customerName || ' | ', items || [], finalStatus, customerId, contactId, !!preserveDrafts);
 
     if (!insertedQuotes || insertedQuotes.length === 0) {
       return res.status(500).json({ error: 'Failed to create quotation' });
@@ -562,6 +566,9 @@ app.post('/api/quotation/draft-cart', express.json(), async (req: any, res: any)
     // ต้องดักไว้ก่อน เพื่อบอกสาเหตุที่แท้จริงแทนที่จะพังตอน insert แล้วขึ้น error กำกวม
     const spCheck = await pool.query('SELECT 1 FROM salesperson WHERE user_id = $1 LIMIT 1', [userId]);
     if (spCheck.rowCount === 0) {
+      // log userId ที่ได้รับด้วย — เคสที่เจอบ่อยคือหน้า LIFF เปิดจากริชเมนู (ไม่มี ?userId=)
+      // แล้ว fallback ไป liff.getProfile() ซึ่งอาจได้ id คนละตัวกับ Messaging API channel
+      console.warn(`[draft-cart] 403 ไม่พบ salesperson: userId="${userId}" (len=${String(userId).length})`);
       return res.status(403).json({
         error: 'บัญชี LINE นี้ยังไม่ได้ลงทะเบียนเป็นพนักงานขาย\nกรุณาลงทะเบียนในแชทก่อนใช้งานครับ 🙏'
       });
@@ -635,8 +642,17 @@ app.post('/api/quotation/draft-cart', express.json(), async (req: any, res: any)
 app.put('/api/quotation/:id', express.json(), async (req: any, res: any) => {
   try {
     const quoteId = req.params.id;
-    const { items, total_sum, customer_name, customer_id, contact_id, userId } = req.body;
+    const { items, total_sum, customer_name, customer_id, contact_id, userId, delivery_days_override } = req.body;
     if (!items) return res.status(400).json({ error: 'Missing items' });
+
+    // วันจัดส่งที่เซลล์แก้เอง — undefined = client เก่าไม่ได้ส่งมา (คงค่าเดิม), null = รีเซ็ตกลับค่าอัตโนมัติ
+    let parsedDeliveryOverride: number | null | undefined;
+    try {
+      const { parseDeliveryDaysOverride } = await import('./services/quotationService.js');
+      parsedDeliveryOverride = parseDeliveryDaysOverride(delivery_days_override);
+    } catch (err: any) {
+      return res.status(400).json({ error: err.message });
+    }
 
     // ตรวจสอบสินค้าที่บล็อก
     const { getBlockedProductError: getBlockedProductErrorPut, validateAndPrepareItems } = await import('./services/quotationService.js');
@@ -731,11 +747,7 @@ app.put('/api/quotation/:id', express.json(), async (req: any, res: any) => {
     let resolvedContactId = contact_id || quote.contact_id || null;
 
     if (customer_name !== undefined) {
-      if (quote.status === 'pending_company' || quote.status === 'pending_contact') {
-        finalStatus = 'draft';
-      }
-
-      let companyName = customer_name || 'ลูกค้าทั่วไป';
+      let companyName = (customer_name || '').trim();
       let contactNameQuery = '';
       let customMeta: any = {};
       let reviseFrom: string | null = null;
@@ -756,15 +768,27 @@ app.put('/api/quotation/:id', express.json(), async (req: any, res: any) => {
         }
       }
 
+      // ระบบอนุญาตเฉพาะลูกค้าที่มีในฐานข้อมูล — บันทึกโดยไม่ระบุบริษัท/ผู้ติดต่อไม่ได้
+      if (!companyName || !contactNameQuery) {
+        return res.status(400).json({
+          error: 'กรุณาเลือกบริษัทและผู้ติดต่อจากฐานข้อมูลก่อนบันทึก'
+        });
+      }
+
+      // ผูกลูกค้าได้แล้วถึงจะเลื่อนสถานะเป็นร่างที่ยืนยันได้
+      if (quote.status === 'pending_company' || quote.status === 'pending_contact') {
+        finalStatus = 'draft';
+      }
+
       let customerCode = '';
       let customerTaxId = '';
-      let contactName = contactNameQuery || 'ลูกค้าทั่วไป';
+      let contactName = contactNameQuery;
       let contactPhone = '';
       let contactEmail = '';
       let contactAddress = '';
       let paymentTerms = '';
 
-      if (companyName && companyName !== 'ลูกค้าทั่วไป') {
+      if (companyName) {
         try {
           let custData = null;
           
@@ -816,7 +840,7 @@ app.put('/api/quotation/:id', express.json(), async (req: any, res: any) => {
             resolvedContactId = custData.contact_id || resolvedContactId;
             customerCode = custData.customer_reference || '';
             customerTaxId = custData.customer_tax_id || '';
-            contactName = custData.contact_name || contactNameQuery || 'ลูกค้าทั่วไป';
+            contactName = custData.contact_name || contactNameQuery;
             paymentTerms = custData.customer_payment_terms || '';
 
             if (custData.contact_mobile && custData.contact_mobile.trim()) {
@@ -920,8 +944,9 @@ app.put('/api/quotation/:id', express.json(), async (req: any, res: any) => {
         customer_details = $4,
         customer_id = $5,
         contact_id = $6,
+        delivery_days_override = $7,
         updated_at = NOW()
-      WHERE id = $7 AND status <> 'confirmed' AND status <> 'cancelled'
+      WHERE id = $8 AND status <> 'confirmed' AND status <> 'cancelled'
     `, [
       finalSum,
       finalStatus,
@@ -929,6 +954,8 @@ app.put('/api/quotation/:id', express.json(), async (req: any, res: any) => {
       JSON.stringify(customerDetailsPayload),
       resolvedCustomerId,
       resolvedContactId,
+      // ค่าที่เซลล์ตั้งไว้ต้องอยู่ยงแม้จะเพิ่ม/ลบสินค้าหรือแก้จำนวน จนกว่าจะกดรีเซ็ตเอง
+      parsedDeliveryOverride === undefined ? (quote.delivery_days_override ?? null) : parsedDeliveryOverride,
       quoteId
     ]);
 
@@ -984,6 +1011,12 @@ app.post('/api/quotation/:id/confirm', express.json(), async (req: any, res: any
     // กันการยืนยันใบเสนอราคาที่ไม่มีสินค้า (defense-in-depth เผื่อ frontend ถูก bypass)
     if (!quote.items || !Array.isArray(quote.items) || quote.items.length === 0) {
       return res.status(400).json({ error: 'ไม่สามารถยืนยันใบเสนอราคาที่ไม่มีสินค้าได้' });
+    }
+
+    // กันการยืนยันใบที่ยังไม่ได้ผูกลูกค้า — เลขที่เอกสารเดินหน้าแล้วย้อนคืนไม่ได้
+    // (ใบที่ยืนยันไปแล้วต้องปล่อยผ่านเพื่อคง idempotency ของ endpoint นี้)
+    if (quote.status !== 'confirmed' && isCustomerInfoIncomplete(quote)) {
+      return res.status(400).json({ error: 'ไม่สามารถยืนยันใบเสนอราคาที่ยังไม่ได้ระบุลูกค้าได้ กรุณาเลือกบริษัทและผู้ติดต่อก่อน' });
     }
 
     // ราคาหลังหักส่วนลดต้อง >= minimum_sales_price หรือเข้าเงื่อนไขโปรโมชัน (กฎเดียวกับตอนบันทึก)

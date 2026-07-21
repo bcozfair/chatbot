@@ -556,7 +556,12 @@ CREATE TABLE public.quotations (
     salesperson_id character varying(255),
     employee_details jsonb,
     customer_id integer,
-    contact_id integer
+    contact_id integer,
+    delivery_days_override integer,
+    CONSTRAINT quotations_delivery_days_override_check CHECK (
+        (delivery_days_override IS NULL)
+        OR ((delivery_days_override >= 0) AND (delivery_days_override <= 3650))
+    )
 );
 
 

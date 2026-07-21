@@ -109,6 +109,44 @@ IT จะตั้ง reverse proxy + HTTPS ให้ชี้ subdomain → พ
 
 ---
 
+## ⚠️ ข้อบังคับ: LIFF ต้องอยู่ provider เดียวกับ Messaging API channel
+
+LINE user id **ผูกกับ provider ไม่ใช่บัญชีผู้ใช้** ถ้า LINE Login channel (เจ้าของ LIFF apps)
+อยู่คนละ provider กับ Messaging API channel ผู้ใช้คนเดียวกันจะได้ **user id คนละตัว**:
+
+| ที่มา | ค่าที่ได้ |
+|---|---|
+| webhook `event.source.userId` | id ของ provider ฝั่ง Messaging |
+| `liff.getProfile().userId` ในหน้า LIFF | id ของ provider ฝั่ง Login |
+
+ผลคือหน้า LIFF ที่เปิด **โดยไม่มี `?userId=`** (เช่นจากริชเมนู) จะได้ id ที่ไม่มีในตาราง `salesperson`
+→ `/api/quotation/draft-cart` ตอบ 403 "บัญชี LINE นี้ยังไม่ได้ลงทะเบียน"
+(ดู log `[draft-cart] 403 ไม่พบ salesperson: userId="U..."` ใน `index.ts` เพื่อยืนยันอาการ)
+
+หน้าที่เปิดจากปุ่มในแชทไม่เจอปัญหา เพราะบอทแนบ `?userId=` (id ฝั่ง Messaging) มาให้เสมอ
+และหน้า LIFF ใช้ค่าจาก URL ก่อน `getProfile()` — อาการจึงโผล่เฉพาะทางริชเมนู
+
+### วิธีย้าย (channel ย้าย provider ไม่ได้ ต้องสร้างใหม่)
+1. LINE Developers Console → เข้า **provider เดียวกับ Messaging API channel** → **Create a LINE Login channel**
+2. ในช่อง Login channel ใหม่ → **Linked LINE Official Account** = เลือก OA ตัวเดียวกับบอท
+   *(ข้อนี้ห้ามลืม — ไม่งั้น `liff.sendMessages()` ที่หน้า product-search / quote-edit ใช้ส่ง trigger กลับแชทจะพัง)*
+3. เปิด scope: **profile**, **openid**, **chat_message.write**
+4. สร้าง LIFF apps 3 ตัว endpoint ตามส่วนที่ 4 ข้อ 2 (`/liff/register`, `/liff/quote-edit`, `/liff/product-search`)
+5. เอา LIFF ID ใหม่ใส่ `.env` แล้ว restart แอป
+   ```
+   LIFF_ID=<register>
+   LIFF_QUOTE_ID=<quote-edit>
+   LIFF_PRODUCT_SEARCH_ID=<product-search>
+   ```
+6. OA Manager → ริชเมนู → แก้ URL ปุ่มแค็ตตาล็อกเป็น `https://liff.line.me/<LIFF_PRODUCT_SEARCH_ID ใหม่>`
+7. **ตรวจว่าย้ายสำเร็จ**: เปิดแค็ตตาล็อกจาก**ริชเมนู** (ไม่ใช่ปุ่มในแชท) → ใส่สินค้าลงตะกร้า → กด 💾 ร่างใบเสนอราคา
+   ต้องได้การ์ดร่างกลับมาในแชท ไม่ใช่ข้อความ "ยังไม่ได้ลงทะเบียน"
+
+> หลังย้ายเสร็จ `getProfile().userId` จะตรงกับ webhook แล้ว ทำให้ยกระดับความปลอดภัยต่อได้:
+> เปลี่ยนจากเชื่อ `userId` ที่ client ส่งมา → ตรวจ **LIFF ID token** ฝั่ง server แทน (ยังไม่ได้ทำ)
+
+---
+
 ## แก้โค้ดหลัง deploy ต้องทำยังไง
 โค้ดถูกห่อเข้า image ตอน build → **แก้ไฟล์เฉย ๆ กล่องยังไม่เปลี่ยน ต้อง rebuild ทุกครั้ง**
 ```bash

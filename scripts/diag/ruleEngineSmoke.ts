@@ -12,7 +12,9 @@ import {
   findBlockingRule, findCompanyRule, invalidateRuleCache, selectRule, scopeSpecificity,
   resolveDeliveryOutOfStockDays, QUOTATION_RULE_DEFAULTS
 } from '../../services/rules/index.js';
-import { buildItemSnapshots } from '../../services/quotationService.js';
+import {
+  buildItemSnapshots, resolveQuotationDeliveryDays, parseDeliveryDaysOverride
+} from '../../services/quotationService.js';
 import { calcNetPrice, round2, sumLineTotals, calcVat, calcGrandTotal } from '../../utils/pricing.js';
 
 const ok = (label: string, cond: boolean, extra = '') =>
@@ -141,5 +143,34 @@ if (imp.length > 0) {
     impSnap.delivery_out_of_stock_days === imp[0].expected && impSnap.delivery_source === 'base',
     `ได้ ${impSnap.delivery_out_of_stock_days}`);
 }
+
+// ── 6. วันจัดส่งระดับใบ + ค่าที่เซลล์แก้เอง (pure) ──────────────────────
+// helper ตัวนี้ถูกใช้ทั้งใน enrichQuotationData (เลขที่หน้า LIFF โชว์) และ pdfGenerator
+// (เลขที่พิมพ์ลงเอกสาร) — ถ้าสองที่ให้ผลไม่ตรงกัน เซลล์จะเห็นคนละเลขกับที่ลูกค้าได้รับ
+const daySnaps = [
+  { delivery_in_stock_days: 3, delivery_out_of_stock_days: 20 },
+  { delivery_in_stock_days: 3, delivery_out_of_stock_days: 45 }
+];
+const dAllIn = resolveQuotationDeliveryDays([{ quantity: 1, stock: 10 }, { quantity: 2, stock: 10 }], daySnaps);
+ok('ของพอทุกรายการ → 3 วัน · all_in_stock=true',
+  dAllIn.days === 3 && dAllIn.all_in_stock === true, JSON.stringify(dAllIn));
+const dOneOut = resolveQuotationDeliveryDays([{ quantity: 1, stock: 10 }, { quantity: 99, stock: 0 }], daySnaps);
+ok('ขาดของ 1 รายการ → 45 วัน (ช้าสุดคุมทั้งใบ)',
+  dOneOut.days === 45 && dOneOut.all_in_stock === false, JSON.stringify(dOneOut));
+ok('ไม่มี snapshot + ของไม่พอ → default 7 วัน',
+  resolveQuotationDeliveryDays([{ quantity: 5, stock: 0 }], []).days === 7);
+ok('snapshot ยาวไม่ตรง items → ไม่จับคู่ ใช้ default',
+  resolveQuotationDeliveryDays([{ quantity: 1, stock: 9 }], daySnaps).days === 3);
+ok('ใบว่าง → 3 วัน', resolveQuotationDeliveryDays([], []).days === 3);
+
+ok('override: undefined = client ไม่ได้ส่งมา (คงค่าเดิม)', parseDeliveryDaysOverride(undefined) === undefined);
+ok('override: null/"" = รีเซ็ตกลับค่าอัตโนมัติ',
+  parseDeliveryDaysOverride(null) === null && parseDeliveryDaysOverride('') === null);
+ok('override: "30" → 30 · 0 ผ่าน',
+  parseDeliveryDaysOverride('30') === 30 && parseDeliveryDaysOverride(0) === 0);
+ok('override: ค่าผิด (-1 / 3651 / 1.5 / abc) ถูกปฏิเสธ',
+  [-1, 3651, 1.5, 'abc'].every((bad) => {
+    try { parseDeliveryDaysOverride(bad); return false; } catch { return true; }
+  }));
 
 await pool.end();

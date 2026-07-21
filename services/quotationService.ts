@@ -262,6 +262,70 @@ export async function buildItemSnapshots(rawItems: any[], executor: DbExecutor =
   return snapshotItems;
 }
 
+// ค่าตั้งต้นเมื่อ snapshot ไม่มีวันจัดส่งติดมา (ใบเก่าก่อนมี rule engine) — ตรงกับ QUOTATION_RULE_DEFAULTS
+const DELIVERY_DAYS_FALLBACK_IN_STOCK = 3;
+const DELIVERY_DAYS_FALLBACK_OUT_OF_STOCK = 7;
+
+/**
+ * จำนวนวันจัดส่งของ "ทั้งใบ" = ค่ามากสุดของทุกรายการ (รายการที่ช้าสุดเป็นตัวกำหนดวันส่งทั้งใบ)
+ *
+ * อ่านจาก snapshot ที่ freeze ไว้ตอนสร้าง/บันทึกใบ (delivery_in_stock_days /
+ * delivery_out_of_stock_days ผ่าน tier มาแล้ว) โดยใช้สต๊อกจาก items เป็นตัวเลือกว่าจะใช้ in หรือ out
+ *
+ * ⚠️ เป็นจุดเดียวที่คำนวณเลขนี้ — ทั้ง enrichQuotationData (ที่หน้า LIFF เอาไปโชว์)
+ * และ pdfGenerator (ที่พิมพ์ลงเอกสาร) ต้องเรียกตัวนี้ ไม่งั้นเซลล์เห็นเลขคนละตัวกับในไฟล์
+ */
+export function resolveQuotationDeliveryDays(
+  items: any[],
+  snapshots: any[]
+): { days: number; all_in_stock: boolean } {
+  const list = Array.isArray(items) ? items : [];
+  const snaps = Array.isArray(snapshots) ? snapshots : [];
+  // snapshot จับคู่กับ items ตาม index ได้ต่อเมื่อจำนวนตรงกัน (เหมือนที่ pdfGenerator เช็ค)
+  const snapsUsable = snaps.length > 0 && snaps.length === list.length;
+
+  let allInStock = true;
+  const perItemDays: number[] = [];
+
+  list.forEach((item: any, idx: number) => {
+    const qty = Number(item.quantity ?? item.qty) || 0;
+    const stock = item.stock !== undefined && item.stock !== null ? Number(item.stock) : 0;
+    const hasStock = qty <= stock;
+    if (!hasStock) allInStock = false;
+
+    const snap = snapsUsable ? snaps[idx] : null;
+    const inDays = snap && snap.delivery_in_stock_days !== undefined && snap.delivery_in_stock_days !== null
+      ? Number(snap.delivery_in_stock_days)
+      : DELIVERY_DAYS_FALLBACK_IN_STOCK;
+    const outDays = snap && snap.delivery_out_of_stock_days !== undefined && snap.delivery_out_of_stock_days !== null
+      ? Number(snap.delivery_out_of_stock_days)
+      : DELIVERY_DAYS_FALLBACK_OUT_OF_STOCK;
+
+    perItemDays.push(hasStock ? inDays : outDays);
+  });
+
+  const fallback = allInStock ? DELIVERY_DAYS_FALLBACK_IN_STOCK : DELIVERY_DAYS_FALLBACK_OUT_OF_STOCK;
+  return {
+    days: perItemDays.length > 0 ? Math.max(...perItemDays) : fallback,
+    all_in_stock: allInStock
+  };
+}
+
+/**
+ * ตรวจค่า "วันจัดส่งที่เซลล์แก้เอง" ที่ส่งมาจาก client
+ * คืน number = ใช้ค่านี้, null = ล้างกลับไปใช้ค่าอัตโนมัติ, undefined = client ไม่ได้ส่งมา (คงค่าเดิม)
+ * โยน Error พร้อมข้อความภาษาไทยเมื่อค่าไม่ผ่าน — ผู้เรียกเอาไปตอบ 400
+ */
+export function parseDeliveryDaysOverride(raw: any): number | null | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === null || raw === '') return null;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0 || n > 3650) {
+    throw new Error('จำนวนวันจัดส่งต้องเป็นจำนวนเต็ม 0–3650 วัน');
+  }
+  return n;
+}
+
 export async function insertDraftQuotations(
   userId: string,
   customerName: string,
@@ -316,7 +380,7 @@ export async function insertDraftQuotations(
   }
 
   // 2. ดึงข้อมูลรายละเอียดลูกค้าและจัด format ที่อยู่
-  let companyName = customerName || 'ลูกค้าทั่วไป';
+  let companyName = (customerName || '').trim();
   let contactNameQuery = '';
   let customMeta: any = {};
   let reviseFrom: string | null = null;
@@ -339,13 +403,13 @@ export async function insertDraftQuotations(
 
   let customerCode = '';
   let customerTaxId = '';
-  let contactName = contactNameQuery || 'ลูกค้าทั่วไป';
+  let contactName = contactNameQuery || '';
   let contactPhone = '';
   let contactEmail = '';
   let contactAddress = '';
   let paymentTerms = '';
 
-  if (companyName && companyName !== 'ลูกค้าทั่วไป') {
+  if (companyName) {
     try {
       let custData = null;
 
@@ -395,7 +459,7 @@ export async function insertDraftQuotations(
       if (custData) {
         customerCode = custData.customer_reference || '';
         customerTaxId = custData.customer_tax_id || '';
-        contactName = custData.contact_name || contactNameQuery || 'ลูกค้าทั่วไป';
+        contactName = custData.contact_name || contactNameQuery || '';
         paymentTerms = custData.customer_payment_terms || '';
 
         if (custData.contact_mobile && custData.contact_mobile.trim()) {
@@ -451,11 +515,12 @@ export async function insertDraftQuotations(
     if (customMeta.address) contactAddress = customMeta.address;
   }
 
+  // ยังไม่ได้ผูกลูกค้า = null (ระบบอนุญาตเฉพาะลูกค้าที่มีในฐานข้อมูล ไม่มีค่า default อีกแล้ว)
   const customerDetails = {
-    customer_name: companyName,
+    customer_name: companyName || null,
     customer_code: customerCode,
     customer_tax_id: customerTaxId,
-    contact_name: contactName,
+    contact_name: contactName || null,
     phone: contactPhone,
     email: contactEmail,
     address: contactAddress,
@@ -694,13 +759,13 @@ export async function checkMinSalesPrice(
   });
 
   // ชื่อบริษัทใช้เช็คสิทธิ์โปรโมชัน (customer_type / reference)
-  let companyName = customerName || 'ลูกค้าทั่วไป';
+  let companyName = (customerName || '').trim();
   if (companyName.includes(' | ')) {
     companyName = companyName.split(' | ')[0].trim();
   }
 
   let customerData = null;
-  if (companyName && companyName !== 'ลูกค้าทั่วไป') {
+  if (companyName) {
     try {
       const custRes = await pool.query(
         'SELECT customer_type, reference FROM customers_view WHERE display_name = $1 LIMIT 1',
@@ -1083,19 +1148,19 @@ export async function updateQuotationCustomerSnapshot(
   contactId?: number | null
 ): Promise<any[]> {
   const parts = finalCustomerName.split(' | ');
-  const companyName = parts[0] ? parts[0].trim() : 'ลูกค้าทั่วไป';
-  const contactName = parts[1] ? parts[1].trim() : '-';
+  const companyName = parts[0] ? parts[0].trim() : '';
+  const contactName = parts[1] ? parts[1].trim() : '';
   const metaStr = parts[2] || '';
 
-  const customerDetails = {
-    customer_name: companyName,
+  const customerDetails: any = {
+    customer_name: companyName || null,
     customer_code: '',
     customer_tax_id: '',
-    contact_name: contactName,
-    phone: '-',
-    email: '-',
-    address: '-',
-    payment_terms: '-',
+    contact_name: contactName || null,
+    phone: null,
+    email: null,
+    address: null,
+    payment_terms: null,
     revise_from: null,
     custom_meta: metaStr
   };
@@ -1103,9 +1168,9 @@ export async function updateQuotationCustomerSnapshot(
   if (metaStr) {
     try {
       const params = new URLSearchParams(metaStr);
-      customerDetails.phone = params.get('phone') || '-';
-      customerDetails.email = params.get('email') || '-';
-      customerDetails.address = params.get('address') || '-';
+      customerDetails.phone = params.get('phone') || null;
+      customerDetails.email = params.get('email') || null;
+      customerDetails.address = params.get('address') || null;
       customerDetails.customer_tax_id = params.get('tax_id') || '';
       customerDetails.revise_from = params.get('revise_from') as any || null;
     } catch (e) {
@@ -1162,9 +1227,9 @@ export async function updateQuotationCustomerSnapshot(
       const row = custRes.rows[0];
       if (row.reference) customerDetails.customer_code = row.reference;
       if (row.tax_id && !customerDetails.customer_tax_id) customerDetails.customer_tax_id = row.tax_id;
-      if (row.contact_phone && customerDetails.phone === '-') customerDetails.phone = row.contact_phone;
-      if (row.contact_email && customerDetails.email === '-') customerDetails.email = row.contact_email;
-      if (row.contact_address && customerDetails.address === '-') {
+      if (row.contact_phone && !customerDetails.phone) customerDetails.phone = row.contact_phone;
+      if (row.contact_email && !customerDetails.email) customerDetails.email = row.contact_email;
+      if (row.contact_address && !customerDetails.address) {
         const stateCleaned = cleanState(row.invoice_state);
         const districtCleaned = cleanAddressField(row.invoice_district, row.invoice_state, row.invoice_zip);
         const subDistrictCleaned = cleanAddressField(row.invoice_sub_district, row.invoice_state, row.invoice_zip);
@@ -1256,13 +1321,14 @@ export async function enrichQuotationData(quoteDb: any): Promise<any> {
   // 1. หากข้อมูล Snapshot ครบถ้วนแล้ว ให้อ่านและส่งออกได้ทันทีโดยไม่ต้อง Query ตารางหลัก
   if (customerDetails && itemDetails && employeeDetails) {
     // Snapshot ควรเก็บเฉพาะชื่อบริษัท แต่ข้อมูลเก่าอาจปนเปื้อนเป็น "company | contact" — split กันเหนียว
-    const rawCustomerName = customerDetails.customer_name || 'ลูกค้าทั่วไป';
-    const companyName = rawCustomerName.split(' | ')[0].trim() || 'ลูกค้าทั่วไป';
+    // ยังไม่ได้ผูกลูกค้า = ค่าว่าง (null ใน DB) ไม่มีการเติมชื่อ default ให้อีกแล้ว
+    const rawCustomerName = customerDetails.customer_name || '';
+    const companyName = rawCustomerName.split(' | ')[0].trim();
     const contactName = customerDetails.contact_name || '';
 
     // จัด format customer_name เก่าเพื่อส่งกลับไปให้ frontend
     let oldCustomerNameFormat = companyName;
-    if (contactName && contactName !== 'ลูกค้าทั่วไป') {
+    if (contactName) {
       oldCustomerNameFormat += ` | ${contactName}`;
     }
 
@@ -1274,7 +1340,7 @@ export async function enrichQuotationData(quoteDb: any): Promise<any> {
 
     // ดึง customer_id จริงจากระบบ
     let customerId = customerIdFromDb || null;
-    if (!customerId && companyName && companyName !== 'ลูกค้าทั่วไป') {
+    if (!customerId && companyName) {
       try {
         const custRes = await pool.query(
           "SELECT id FROM customers_view WHERE display_name = $1 LIMIT 1",
@@ -1361,8 +1427,14 @@ export async function enrichQuotationData(quoteDb: any): Promise<any> {
       };
     });
 
+    // วันจัดส่งที่ระบบคำนวณได้ — ส่งไปให้หน้า LIFF โชว์เป็นค่าตั้งต้น/ค่าอ้างอิงคู่กับ
+    // delivery_days_override (มาจาก ...quoteDb) ที่เซลล์ตั้งทับไว้
+    const deliverySummary = resolveQuotationDeliveryDays(legacyItems, itemDetails);
+
     return {
       ...quoteDb,
+      delivery_days_auto: deliverySummary.days,
+      delivery_all_in_stock: deliverySummary.all_in_stock,
       customer_id: customerId,
       contact_id: contactIdFromDb || null,
       customer_name: oldCustomerNameFormat,
@@ -1394,10 +1466,10 @@ export async function enrichQuotationData(quoteDb: any): Promise<any> {
   let deliveryAddress = '';
   let customerId = null;
 
-  let companyName = quoteDb.customer_name || 'ลูกค้าทั่วไป';
+  let companyName = (quoteDb.customer_name || '').trim();
   let contactNameQuery = '';
   let customMeta: any = {};
-  let paymentTerms = ''; 
+  let paymentTerms = '';
 
   if (quoteDb.customer_name && quoteDb.customer_name.includes(' | ')) {
     const parts = quoteDb.customer_name.split(' | ');
@@ -1413,7 +1485,7 @@ export async function enrichQuotationData(quoteDb: any): Promise<any> {
     }
   }
 
-  if (companyName && companyName !== 'ลูกค้าทั่วไป') {
+  if (companyName) {
     try {
       const custData = await getCustomerByDisplayName(companyName);
 
@@ -1577,8 +1649,13 @@ export async function enrichQuotationData(quoteDb: any): Promise<any> {
     quoteCompany = quoteDb.quotation_no?.toUpperCase()?.startsWith('QT') ? 'THT' : 'PM';
   }
 
+  // ใบเก่าที่ไม่มี snapshot → ไม่มี delivery_*_days ให้อ่าน helper จึงคืนค่าตั้งต้น 3/7 ตามสถานะสต๊อก
+  const deliverySummaryFallback = resolveQuotationDeliveryDays(enrichedItems, quoteDb.item_details);
+
   return {
     ...quoteDb,
+    delivery_days_auto: deliverySummaryFallback.days,
+    delivery_all_in_stock: deliverySummaryFallback.all_in_stock,
     customer_id: customerId,
     customer_name: companyName,
     company_name: companyName,

@@ -3,7 +3,7 @@ import puppeteer from "puppeteer";
 import ThaiBahtText from "thai-baht-text";
 import fs from "fs";
 import path from "path";
-import { resolveQuoteCompany } from "./services/quotationService.js";
+import { resolveQuoteCompany, resolveQuotationDeliveryDays } from "./services/quotationService.js";
 import {
   loadQuotationRules,
   resolveQuotationRule,
@@ -82,17 +82,10 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
   if (itemSnapshots && Array.isArray(itemSnapshots) && itemSnapshots.length > 0 && itemSnapshots.length === itemsList.length) {
     let minWarrantyMonths = Infinity;
 
-    itemsList.forEach((item: any, idx: number) => {
+    itemsList.forEach((_item: any, idx: number) => {
       const snap = itemSnapshots[idx];
-      const qty = Number(item.quantity) || 0;
-      const stock = item.stock !== undefined && item.stock !== null ? Number(item.stock) : 0;
-      const hasStock = qty <= stock;
 
-      if (!hasStock) {
-        allItemsInStock = false;
-      }
-
-      // ดึงเงื่อนไขการรับประกันจาก snapshot
+      // ดึงเงื่อนไขการรับประกันจาก snapshot (วันจัดส่งคำนวณรวมทีเดียวหลังลูป)
       const warrantyText = snap.warranty_display || '1 ปี';
       let inMonths = 12;
       let warrantyVal = 1;
@@ -112,13 +105,12 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
         minWarrantyMonths = inMonths;
         minWarrantyDisplay = warrantyText;
       }
-
-      const itemInStockDays = snap.delivery_in_stock_days !== undefined ? snap.delivery_in_stock_days : 3;
-      const itemOutOfStockDays = snap.delivery_out_of_stock_days !== undefined ? snap.delivery_out_of_stock_days : 7;
-
-      const days = hasStock ? itemInStockDays : itemOutOfStockDays;
-      itemDeliveryDays.push(days);
     });
+
+    // ใช้ helper ตัวเดียวกับที่ enrichQuotationData เรียก — เลขในเอกสารจึงตรงกับที่หน้า LIFF โชว์เสมอ
+    const snapshotDelivery = resolveQuotationDeliveryDays(itemsList, itemSnapshots);
+    allItemsInStock = snapshotDelivery.all_in_stock;
+    itemDeliveryDays.push(snapshotDelivery.days);
 
     if (minWarrantyMonths === Infinity) {
       minWarrantyDisplay = '1 ปี';
@@ -178,14 +170,20 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
     }
   }
 
-  let deliveryTimeText = '';
-  if (allItemsInStock) {
-    const maxInStockDays = itemDeliveryDays.length > 0 ? Math.max(...itemDeliveryDays) : 3;
-    deliveryTimeText = `In_stock.,With in  ${maxInStockDays}  Days`;
-  } else {
-    const maxDays = itemDeliveryDays.length > 0 ? Math.max(...itemDeliveryDays) : 7;
-    deliveryTimeText = `Make to order.,With in  ${maxDays}  Days`;
-  }
+  // จำนวนวันที่กฏคำนวณได้ — เซลล์ตั้งทับได้จากหน้า LIFF (quotations.delivery_days_override)
+  // ส่วนคำนำหน้า In_stock./Make to order. ยังมาจากสถานะสต๊อกจริงเสมอ ไม่ให้แก้
+  const autoDeliveryDays = itemDeliveryDays.length > 0
+    ? Math.max(...itemDeliveryDays)
+    : (allItemsInStock ? 3 : 7);
+  const overrideDays = Number.isInteger(Number(quoteData.delivery_days_override))
+    && quoteData.delivery_days_override !== null
+    ? Number(quoteData.delivery_days_override)
+    : null;
+  const finalDeliveryDays = overrideDays !== null ? overrideDays : autoDeliveryDays;
+
+  const deliveryTimeText = allItemsInStock
+    ? `In_stock.,With in  ${finalDeliveryDays}  Days`
+    : `Make to order.,With in  ${finalDeliveryDays}  Days`;
 
   let grossSubTotal = 0;
   let discountedSubTotal = 0;

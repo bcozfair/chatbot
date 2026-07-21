@@ -339,14 +339,21 @@
         flex-shrink: 0;
       }
 
+      /* discount block = แถว input + ปุ่ม "ใช้กับทุกรายการ" อยู่ในกล่องพื้นหลังเดียวกัน */
+      .item-disc-block {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        background: var(--surface);
+        border-radius: 7px;
+        padding: 5px 8px;
+      }
+
       /* discount row */
       .item-disc-row {
         display: flex;
         align-items: center;
         gap: 5px;
-        background: var(--surface);
-        border-radius: 7px;
-        padding: 5px 8px;
       }
 
       .disc-inputs-group {
@@ -375,6 +382,51 @@
         border-radius: 20px;
         white-space: nowrap;
         margin-left: auto;
+      }
+
+      /* คัดลอกส่วนลดของรายการนี้ไปให้ทุกรายการในใบเดียวกัน (action ครั้งเดียว ไม่ใช่โหมด)
+         ซ่อนไว้เป็นค่าตั้งต้น → โผล่เฉพาะตอนผู้ใช้แตะช่องส่วนลดของรายการนั้น
+         display:none ทำให้ไม่กินความสูง (และ gap ของ flex ไม่นับด้วย) การ์ดจึงเตี้ยเท่าเดิม */
+      .btn-apply-disc-all {
+        display: none;
+        font-family: "Sarabun", sans-serif;
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--white);
+        background: var(--green);
+        border: none;
+        border-radius: 6px;
+        width: 100%;
+        height: 28px;
+        padding: 0 8px;
+        cursor: pointer;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        box-shadow: 0 2px 8px rgba(30, 143, 30, 0.28);
+        transition:
+          background 0.15s,
+          opacity 0.15s;
+      }
+      .btn-apply-disc-all.is-visible {
+        display: block;
+        animation: discBtnIn 0.18s ease-out;
+      }
+      .btn-apply-disc-all:hover {
+        background: var(--green-dark);
+      }
+      .btn-apply-disc-all:active {
+        opacity: 0.88;
+      }
+      @keyframes discBtnIn {
+        from {
+          opacity: 0;
+          transform: translateY(-4px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
       }
 
       /* ─── EDIT INPUTS ─── */
@@ -525,23 +577,6 @@
         font-size: 12px;
       }
 
-      /* ─── DISCOUNT GROUP (global) ─── */
-      .disc-group {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        flex: 1;
-      }
-      .disc-group .edit-input {
-        max-width: 65px;
-        text-align: center;
-      }
-      .disc-sep {
-        color: var(--text-muted);
-        font-weight: 700;
-        font-size: 13px;
-      }
-
       /* ─── DELETE BUTTON ─── */
       .btn-delete-item {
         font-family: "Sarabun", sans-serif;
@@ -578,6 +613,75 @@
       .prod-stock.out-of-stock {
         background: var(--danger-bg);
         color: var(--danger);
+      }
+
+      /* ─── DELIVERY BOX (วันจัดส่ง — ทั้งใบ) ─── */
+      .delivery-box {
+        background: var(--green-pale);
+        border: 1.5px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 9px 11px;
+        display: flex;
+        flex-direction: column;
+        gap: 7px;
+      }
+
+      .delivery-auto {
+        font-size: 11px;
+        color: var(--text-muted);
+        line-height: 1.5;
+      }
+      .delivery-auto b {
+        color: var(--text-mid);
+        font-weight: 700;
+      }
+
+      .delivery-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .edit-input.inp-delivery {
+        width: 66px;
+        min-width: 66px;
+        height: 30px;
+        padding: 0 6px;
+        font-size: 13px;
+        text-align: center;
+        border-radius: 7px;
+        max-width: none;
+      }
+
+      .btn-delivery-reset {
+        font-family: "Sarabun", sans-serif;
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--green-dark);
+        background: var(--white);
+        border: 1.5px solid var(--border-strong);
+        border-radius: 6px;
+        height: 30px;
+        padding: 0 10px;
+        margin-left: auto;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: background 0.15s;
+      }
+      .btn-delivery-reset:hover {
+        background: var(--green-light);
+      }
+
+      .delivery-note {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--warning);
+        line-height: 1.5;
+      }
+
+      .btn-delivery-reset[hidden],
+      .delivery-note[hidden] {
+        display: none;
       }
 
       /* ─── TOTAL BAR ─── */
@@ -966,11 +1070,6 @@
         background: var(--green-dark);
       }
 
-      /* ─── GLOBAL DISCOUNT CHECKBOX ─── */
-      .use-global-discount-checkbox {
-        accent-color: var(--green);
-      }
-
       /* ─── CUSTOMER SELECTION ─── */
       .customer-selection-box {
         margin-bottom: 14px;
@@ -1139,6 +1238,9 @@
           return originalFetch(url, options);
         };
       })();
+
+      // ข้อความแทนค่าลูกค้าที่ยังไม่มีข้อมูล (ค่าจริงเป็น null — ตรงกับ CUSTOMER_PLACEHOLDER ใน utils/flexTemplates.ts)
+      const CUSTOMER_PLACEHOLDER = "— ยังไม่ระบุ —";
 
       // ── State ──
       let quotesData = [];
@@ -1369,22 +1471,23 @@
         });
       }
 
+      // ยังไม่ได้ผูกลูกค้า = ค่าว่าง (null) ระบบไม่มีลูกค้า default อีกแล้ว
       function parseCustomerMeta(quote) {
         if (!quote)
           return {
-            company: "ลูกค้าทั่วไป",
-            contact: "-",
-            phone: "-",
-            email: "-",
-            address: "-",
-            delivery: "-",
+            company: "",
+            contact: "",
+            phone: "",
+            email: "",
+            address: "",
+            delivery: "",
             revise_from: null,
           };
         const fullName = quote.customer_name || "";
         const parts = fullName.split(" | ");
         if (parts.length > 1) {
-          const company = parts[0] ? parts[0].trim() : "ลูกค้าทั่วไป";
-          const contact = parts[1] ? parts[1].trim() : "-";
+          const company = parts[0] ? parts[0].trim() : "";
+          const contact = parts[1] ? parts[1].trim() : "";
           let meta = {};
           if (parts[2]) {
             try {
@@ -1394,44 +1497,32 @@
           return {
             company,
             contact,
-            phone:
-              meta.phone ||
-              (quote.contact_phone !== undefined ? quote.contact_phone : "-"),
-            email:
-              meta.email ||
-              (quote.contact_email !== undefined ? quote.contact_email : "-"),
-            address:
-              meta.address ||
-              (quote.contact_address !== undefined
-                ? quote.contact_address
-                : "-"),
+            phone: meta.phone || quote.contact_phone || "",
+            email: meta.email || quote.contact_email || "",
+            address: meta.address || quote.contact_address || "",
             delivery:
-              meta.delivery ||
-              meta.address ||
-              (quote.delivery_address !== undefined
-                ? quote.delivery_address
-                : "-"),
+              meta.delivery || meta.address || quote.delivery_address || "",
             revise_from: meta.revise_from || quote.revise_from || null,
           };
         }
         if (quote.contact_name) {
           return {
-            company: fullName || "ลูกค้าทั่วไป",
-            contact: quote.contact_name || "-",
-            phone: quote.contact_phone || "-",
-            email: quote.contact_email || "-",
-            address: quote.contact_address || "-",
-            delivery: quote.delivery_address || "-",
+            company: fullName || "",
+            contact: quote.contact_name || "",
+            phone: quote.contact_phone || "",
+            email: quote.contact_email || "",
+            address: quote.contact_address || "",
+            delivery: quote.delivery_address || "",
             revise_from: quote.revise_from || null,
           };
         }
         return {
-          company: fullName || "ลูกค้าทั่วไป",
-          contact: "-",
-          phone: "-",
-          email: "-",
-          address: "-",
-          delivery: "-",
+          company: fullName || "",
+          contact: "",
+          phone: "",
+          email: "",
+          address: "",
+          delivery: "",
           revise_from: null,
         };
       }
@@ -1450,18 +1541,89 @@
         return quote.items.reduce((s, i) => s + calcItemTotal(i), 0);
       }
 
-      function shouldUseGlobalDiscount(quote) {
-        if (!quote.items || quote.items.length === 0) return true;
-        const d1 = quote.items[0].discount_1 || 0;
-        const d2 = quote.items[0].discount_2 || 0;
-        for (let i = 1; i < quote.items.length; i++) {
-          if (
-            (quote.items[i].discount_1 || 0) !== d1 ||
-            (quote.items[i].discount_2 || 0) !== d2
-          )
-            return false;
+      // ── วันจัดส่ง (ระดับใบ) ──
+      // delivery_days_auto = ค่าที่ server คำนวณจาก quotation_rules (มากับ /api/quotations)
+      // delivery_days_override = ค่าที่เซลล์ตั้งทับไว้ (null = ใช้ค่าอัตโนมัติ)
+      // หน้านี้คำนวณค่าอัตโนมัติเองไม่ได้ (กฎอยู่ฝั่ง server) ตัวเลขจึงนิ่งจนกว่าจะบันทึกแล้วโหลดใหม่
+      function deliveryAutoDays(quote) {
+        const n = Number(quote.delivery_days_auto);
+        if (Number.isFinite(n)) return n;
+        return quote.delivery_all_in_stock === false ? 7 : 3;
+      }
+
+      function deliveryOverrideDays(quote) {
+        const v = quote.delivery_days_override;
+        if (v === null || v === undefined || v === "") return null;
+        const n = Number(v);
+        return Number.isFinite(n) ? n : null;
+      }
+
+      function hasDeliveryOverride(quote) {
+        return deliveryOverrideDays(quote) !== null;
+      }
+
+      function deliveryEffectiveDays(quote) {
+        const o = deliveryOverrideDays(quote);
+        return o === null ? deliveryAutoDays(quote) : o;
+      }
+
+      function deliveryModeLabel(quote) {
+        return quote.delivery_all_in_stock === false
+          ? "ต้องผลิต/สั่งเข้า"
+          : "มีของพร้อมส่ง";
+      }
+
+      // ปุ่มรีเซ็ต + ข้อความเตือนโผล่เฉพาะตอนมีค่าที่แก้เองค้างอยู่
+      function updateDeliveryUI(qIdx) {
+        const quote = quotesData[qIdx];
+        const box = document.getElementById(`delivery-box-${qIdx}`);
+        if (!quote || !box) return;
+        const on = hasDeliveryOverride(quote);
+        const btn = box.querySelector(".btn-delivery-reset");
+        const note = box.querySelector(".delivery-note");
+        if (btn) btn.hidden = !on;
+        if (note) note.hidden = !on;
+      }
+
+      function onDeliveryDaysInput(e) {
+        const qIdx = parseInt(e.target.dataset.q);
+        const quote = quotesData[qIdx];
+        if (!quote) return;
+        const raw = String(e.target.value).trim();
+        if (raw === "") {
+          // ลบจนว่าง = กลับไปใช้ค่าอัตโนมัติ (เติมตัวเลขคืนให้ตอน blur)
+          quote.delivery_days_override = null;
+        } else {
+          let n = Math.round(Number(raw));
+          if (!Number.isFinite(n)) n = deliveryAutoDays(quote);
+          n = Math.max(0, Math.min(3650, n));
+          quote.delivery_days_override = n;
+          // ให้เห็นทันทีเมื่อพิมพ์เกินช่วงที่ backend รับ (0–3650) แทนโดนปฏิเสธตอนบันทึก
+          if (String(n) !== raw) e.target.value = n;
         }
-        return true;
+        updateDeliveryUI(qIdx);
+        checkDirty();
+      }
+
+      function onDeliveryDaysBlur(e) {
+        const qIdx = parseInt(e.target.dataset.q);
+        const quote = quotesData[qIdx];
+        if (!quote) return;
+        if (String(e.target.value).trim() === "")
+          e.target.value = deliveryAutoDays(quote);
+      }
+
+      function onDeliveryReset(e) {
+        const qIdx = parseInt(e.currentTarget.dataset.q);
+        const quote = quotesData[qIdx];
+        if (!quote) return;
+        quote.delivery_days_override = null;
+        const box = document.getElementById(`delivery-box-${qIdx}`);
+        const input = box ? box.querySelector(".delivery-input") : null;
+        if (input) input.value = deliveryAutoDays(quote);
+        updateDeliveryUI(qIdx);
+        checkDirty();
+        showToast(`↺ ใช้ค่าอัตโนมัติ ${deliveryAutoDays(quote)} วันแล้ว`);
       }
 
       // เทียบ state ปัจจุบันกับข้อมูลที่บันทึกล่าสุด → อัปเดตธง hasChanges + ป้ายสถานะบนหัวการ์ด
@@ -1471,7 +1633,9 @@
           JSON.stringify(quotesData.map((q) => q.items)) !==
             JSON.stringify(originalData.map((q) => q.items)) ||
           JSON.stringify(quotesData.map((q) => q.customer_name)) !==
-            JSON.stringify(originalData.map((q) => q.customer_name));
+            JSON.stringify(originalData.map((q) => q.customer_name)) ||
+          JSON.stringify(quotesData.map(deliveryOverrideDays)) !==
+            JSON.stringify(originalData.map(deliveryOverrideDays));
         updateAllSaveStatus(
           hasChanges ? "● ยังไม่ได้บันทึก" : "",
           hasChanges ? "dirty" : "",
@@ -1512,7 +1676,7 @@
               <input type="text" class="edit-input company-search-input" id="company-search-global"
                 placeholder="🔍 พิมพ์ชื่อบริษัทเพื่อค้นหา..."
                 style="max-width:none; width:100%; font-size:13px; padding-right:34px;"
-                value="${meta.company !== "ลูกค้าทั่วไป" ? meta.company : ""}"
+                value="${meta.company || ""}"
                 ${isRevision ? 'disabled style="opacity:0.6;cursor:not-allowed;pointer-events:none;background:var(--green-pale);"' : ""}>
               <button class="search-clear" id="clear-company-global" style="${isRevision ? "display:none !important;" : ""}">✕</button>
               <div class="search-results-dropdown company-search-dropdown" id="company-results-global"></div>
@@ -1534,9 +1698,6 @@
         quotesContainer.appendChild(custCard);
 
         quotesData.forEach((quote, qIdx) => {
-          if (quote.useGlobalDiscount === undefined)
-            quote.useGlobalDiscount = shouldUseGlobalDiscount(quote);
-          const isGlobalActive = quote.useGlobalDiscount;
           const isTht = quote.quote_company === "THT";
           const label = isTht ? "Themtech (THT)" : "Primus (PM)";
           const headerClass = isTht ? "tht" : "pm";
@@ -1553,23 +1714,6 @@
             <div class="section-title">🛒 รายการสินค้า (${quote.items.length} รายการ)</div>
             <div id="items-${qIdx}"></div>
           </div>
-          <div class="card-body global-discount-section" style="padding-top:0; padding-bottom:4px;">
-            <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
-              <input type="checkbox" id="use-global-discount-${qIdx}" class="use-global-discount-checkbox"
-                data-q="${qIdx}" ${isGlobalActive ? "checked" : ""} style="width:16px;height:16px;cursor:pointer;">
-              <label for="use-global-discount-${qIdx}" style="font-size:13px;font-weight:600;cursor:pointer;color:var(--text);user-select:none;">ใช้ส่วนลดเท่ากันทั้งหมด</label>
-              <div class="disc-group">
-                <input type="number" class="edit-input global-discount-input" min="0" max="100" step="0.1"
-                  value="${quote.items[0]?.discount_1 || 0}" data-q="${qIdx}" data-field="discount_1" placeholder="0"
-                  ${isGlobalActive ? "" : "disabled"}>
-                <span class="disc-sep">+</span>
-                <input type="number" class="edit-input global-discount-input" min="0" max="100" step="0.1"
-                  value="${quote.items[0]?.discount_2 || 0}" data-q="${qIdx}" data-field="discount_2" placeholder="0"
-                  ${isGlobalActive ? "" : "disabled"}>
-                <span style="font-size:12px;color:var(--text-muted);">%</span>
-              </div>
-            </div>
-          </div>
           <div class="card-body" style="padding-top:0; padding-bottom:4px;">
             <div class="add-product-section">      
               <div class="search-wrapper">
@@ -1580,6 +1724,27 @@
               </div>
             </div>
           </div>
+          <div class="card-body" style="padding-top:0; padding-bottom:10px;">
+            <div class="section-title" style="margin-bottom:7px;">🚚 กำหนดส่งสินค้า</div>
+            <div class="delivery-box" id="delivery-box-${qIdx}">
+              <div class="delivery-auto">
+                ระบบคำนวณจากเงื่อนไขสินค้า: <b>${deliveryModeLabel(quote)} · ${deliveryAutoDays(quote)} วัน</b>
+                <span style="color:var(--text-light);">(ค่านี้อัปเดตหลังกดบันทึก)</span>
+              </div>
+              <div class="delivery-row">
+                <span class="item-field-label">ส่งภายใน</span>
+                <input type="number" class="edit-input inp-delivery delivery-input"
+                  min="0" max="3650" step="1" inputmode="numeric"
+                  value="${deliveryEffectiveDays(quote)}" data-q="${qIdx}">
+                <span class="item-field-label">วัน</span>
+                <button type="button" class="btn-delivery-reset" data-q="${qIdx}"
+                  ${hasDeliveryOverride(quote) ? "" : "hidden"}>↺ ค่าอัตโนมัติ</button>
+              </div>
+              <div class="delivery-note" ${hasDeliveryOverride(quote) ? "" : "hidden"}>
+                ✏️ ใช้จำนวนวันที่แก้เองในใบเสนอราคา — จะไม่เปลี่ยนตามสินค้า/จำนวนที่แก้ทีหลัง
+              </div>
+            </div>
+          </div>
           <div class="total-bar">
             <span class="total-label">💰 ยอดรวม</span>
             <span class="total-value" id="total-${qIdx}">฿${formatNumber(total, 2)}</span>
@@ -1587,18 +1752,20 @@
         `;
           quotesContainer.appendChild(card);
 
-          card
-            .querySelectorAll(".global-discount-input")
-            .forEach((input) =>
-              input.addEventListener("input", onGlobalDiscountChange),
-            );
-          const checkbox = card.querySelector(".use-global-discount-checkbox");
-          if (checkbox) checkbox.addEventListener("change", onCheckboxChange);
           const searchInput = card.querySelector(".add-product-input");
           if (searchInput) {
             searchInput.addEventListener("input", onSearchInput);
             searchInput.addEventListener("focus", onSearchInput);
           }
+
+          const deliveryInput = card.querySelector(".delivery-input");
+          if (deliveryInput) {
+            deliveryInput.addEventListener("input", onDeliveryDaysInput);
+            deliveryInput.addEventListener("blur", onDeliveryDaysBlur);
+          }
+          const deliveryReset = card.querySelector(".btn-delivery-reset");
+          if (deliveryReset)
+            deliveryReset.addEventListener("click", onDeliveryReset);
 
           renderItems(qIdx);
         });
@@ -1624,9 +1791,6 @@
       function renderItems(qIdx) {
         const container = document.getElementById(`items-${qIdx}`);
         const quote = quotesData[qIdx];
-        if (quote.useGlobalDiscount === undefined)
-          quote.useGlobalDiscount = shouldUseGlobalDiscount(quote);
-        const isGlobalActive = quote.useGlobalDiscount;
         container.innerHTML = "";
 
         if (quote.items.length === 0) {
@@ -1686,24 +1850,29 @@
               </div>
             </div>
 
-            <!-- ROW 2: ส่วนลด -->
-            <div class="item-disc-row">
-              <span class="item-field-label" style="flex-shrink:0;">ส่วนลด</span>
-              <div class="disc-inputs-group">
-                <input type="number" class="edit-input inp-disc item-discount-input"
-                  min="0" max="100" step="0.1"
-                  value="${item.discount_1 || 0}"
-                  data-q="${qIdx}" data-i="${idx}" data-field="discount_1" placeholder="0"
-                  ${isGlobalActive ? "disabled" : ""}>
-                <span class="disc-separator">+</span>
-                <input type="number" class="edit-input inp-disc item-discount-input"
-                  min="0" max="100" step="0.1"
-                  value="${item.discount_2 || 0}"
-                  data-q="${qIdx}" data-i="${idx}" data-field="discount_2" placeholder="0"
-                  ${isGlobalActive ? "disabled" : ""}>
-                <span class="disc-unit">%</span>
+            <!-- ROW 2: ส่วนลด (แก้ได้เสมอ — ไม่มีโหมดล็อกอีกแล้ว) -->
+            <div class="item-disc-block">
+              <div class="item-disc-row">
+                <span class="item-field-label" style="flex-shrink:0;">ส่วนลด</span>
+                <div class="disc-inputs-group">
+                  <input type="number" class="edit-input inp-disc item-discount-input"
+                    min="0" max="100" step="0.1"
+                    value="${item.discount_1 || 0}"
+                    data-q="${qIdx}" data-i="${idx}" data-field="discount_1" placeholder="0">
+                  <span class="disc-separator">+</span>
+                  <input type="number" class="edit-input inp-disc item-discount-input"
+                    min="0" max="100" step="0.1"
+                    value="${item.discount_2 || 0}"
+                    data-q="${qIdx}" data-i="${idx}" data-field="discount_2" placeholder="0">
+                  <span class="disc-unit">%</span>
+                </div>
+                <span class="item-discount-baht item-discount-baht-chip">-฿${discountText}</span>
               </div>
-              <span class="item-discount-baht item-discount-baht-chip">-฿${discountText}</span>
+              ${
+                quote.items.length > 1
+                  ? `<button type="button" class="btn-apply-disc-all" data-q="${qIdx}" data-i="${idx}">${applyBtnLabel(quote, item)}</button>`
+                  : ""
+              }
             </div>
 
             <!-- ROW 3: ยอดรวม -->
@@ -1735,6 +1904,43 @@
         container
           .querySelectorAll(".btn-plus")
           .forEach((btn) => btn.addEventListener("click", onQtyPlus));
+        container
+          .querySelectorAll(".btn-apply-disc-all")
+          .forEach((btn) =>
+            btn.addEventListener("click", onApplyDiscountToAll),
+          );
+
+        // ปุ่ม "ใช้กับทุกรายการ" โผล่เฉพาะตอนแตะช่องส่วนลดของรายการนั้น
+        // ใช้ event delegation ตัวเดียว + toggle class (ห้าม re-render ไม่งั้น focus หลุดกลางคัน)
+        // ปุ่มไม่ใช่ .edit-input จึงไม่เข้าเงื่อนไขไหนเลย → กดปุ่มแล้วปุ่มไม่หายไปก่อน click
+        container.addEventListener("focusin", (e) => {
+          const t = e.target;
+          if (t.classList.contains("item-discount-input"))
+            revealApplyButton(qIdx, parseInt(t.dataset.i));
+          else if (t.classList.contains("edit-input"))
+            revealApplyButton(qIdx, -1);
+        });
+      }
+
+      /** ข้อความบนปุ่ม — บอกชัดว่ากดแล้วจะใช้ส่วนลดเท่าไหร่ */
+      function applyBtnLabel(quote, item) {
+        const d1 = item.discount_1 || 0;
+        const d2 = item.discount_2 || 0;
+        const pct = d2 > 0 ? `${d1}+${d2}%` : `${d1}%`;
+        return `⇩ ใช้ ${pct} กับทุกรายการ (${quote.items.length} รายการ)`;
+      }
+
+      /** โชว์ปุ่มของรายการ activeIdx และซ่อนของรายการอื่น (activeIdx = -1 คือซ่อนหมด) */
+      function revealApplyButton(qIdx, activeIdx) {
+        const container = document.getElementById(`items-${qIdx}`);
+        const quote = quotesData[qIdx];
+        if (!container || !quote) return;
+        container.querySelectorAll(".btn-apply-disc-all").forEach((btn) => {
+          const i = parseInt(btn.dataset.i);
+          const on = i === activeIdx;
+          if (on) btn.textContent = applyBtnLabel(quote, quote.items[i]);
+          btn.classList.toggle("is-visible", on);
+        });
       }
 
       function onQtyMinus(e) {
@@ -1752,47 +1958,48 @@
         input.dispatchEvent(new Event("input", { bubbles: true }));
       }
 
-      function onGlobalDiscountChange(e) {
-        const qIdx = parseInt(e.target.dataset.q);
-        const field = e.target.dataset.field;
-        let val = Math.max(0, Math.min(100, parseFloat(e.target.value) || 0));
-        quotesData[qIdx].items.forEach((item) => {
-          if (field === "discount_1") item.discount_1 = val;
-          else if (field === "discount_2") item.discount_2 = val;
+      // คัดลอกส่วนลดของรายการที่กดไปให้ทุกรายการในใบเดียวกัน
+      // เดิมเป็น "โหมดส่วนลดรวม" (เช็คบ็อกซ์ + input ชุดที่สอง) ซึ่งทำให้มีที่กรอกส่วนลด 2 จุด
+      // ตอนนี้เหลือที่กรอกจุดเดียวคือในรายการสินค้า ปุ่มนี้เป็นแค่ action ครั้งเดียว ไม่ล็อกสถานะ
+      async function onApplyDiscountToAll(e) {
+        // ต้องอ่าน dataset ให้ครบก่อน renderItems() เพราะปุ่มที่เพิ่งกดจะถูกทำลายตอน re-render
+        const qIdx = parseInt(e.currentTarget.dataset.q);
+        const iIdx = parseInt(e.currentTarget.dataset.i);
+        const quote = quotesData[qIdx];
+        const src = quote.items[iIdx];
+        if (!src) return;
+        const d1 = src.discount_1 || 0;
+        const d2 = src.discount_2 || 0;
+
+        // ถามก่อนเฉพาะเมื่อมีชิ้นอื่นที่ส่วนลดไม่ตรง — กันเผลอทับค่าที่ตั้งแยกไว้
+        const willOverwrite = quote.items.some(
+          (it, i) =>
+            i !== iIdx &&
+            ((it.discount_1 || 0) !== d1 || (it.discount_2 || 0) !== d2),
+        );
+        if (willOverwrite) {
+          const ok = await showCustomConfirm(
+            "ใช้ส่วนลดกับทุกรายการ",
+            `ตั้งส่วนลด ${d1}+${d2}% ให้ครบทั้ง ${quote.items.length} รายการในใบนี้? ส่วนลดที่ตั้งไว้แยกรายชิ้นจะถูกเขียนทับ`,
+            { okText: "ใช้กับทุกรายการ", icon: "🏷️" },
+          );
+          if (!ok) return;
+        }
+
+        quote.items.forEach((it) => {
+          it.discount_1 = d1;
+          it.discount_2 = d2;
         });
+
         renderItems(qIdx);
         const totalEl = document.getElementById(`total-${qIdx}`);
         if (totalEl)
-          totalEl.textContent = `฿${formatNumber(calcQuoteTotal(quotesData[qIdx]), 2)}`;
+          totalEl.textContent = `฿${formatNumber(calcQuoteTotal(quote), 2)}`;
         checkDirty();
-      }
-
-      function onCheckboxChange(e) {
-        const qIdx = parseInt(e.target.dataset.q);
-        const quote = quotesData[qIdx];
-        quote.useGlobalDiscount = e.target.checked;
-
-        if (e.target.checked) {
-          const d1 = quote.items[0]?.discount_1 || 0;
-          const d2 = quote.items[0]?.discount_2 || 0;
-          quote.items.forEach((item) => {
-            item.discount_1 = d1;
-            item.discount_2 = d2;
-          });
-        }
-
-        // Refactor จากเดิมที่เป็น render(); ให้กลายเป็น:
-        renderItems(qIdx);
-
-        // คอยอัปเดตสถานะการปิด/เปิดใช้งาน Input ของส่วนลดหลักประจำการ์ดนั้นๆ
-        const card = e.target.closest(".quote-card");
-        if (card) {
-          card.querySelectorAll(".global-discount-input").forEach((input) => {
-            input.disabled = !e.target.checked;
-          });
-        }
-
-        checkDirty();
+        showToast(
+          `🏷️ ใช้ส่วนลด ${d1}+${d2}% กับ ${quote.items.length} รายการแล้ว`,
+          "success",
+        );
       }
 
       function onFieldChange(e) {
@@ -1848,6 +2055,12 @@
             stockEl.className = `item-stock-badge ${rem < 0 ? "out-of-stock" : "in-stock"}`;
             stockEl.textContent =
               rem < 0 ? `ไม่พอคงเหลือ ${stock} ชิ้น` : `พร้อมส่ง ${stock}`;
+          }
+          // ปุ่มบอกตัวเลขที่จะถูกใช้ ต้องขยับตามที่พิมพ์สด ๆ
+          if (field === "discount_1" || field === "discount_2") {
+            const applyBtn = itemCard.querySelector(".btn-apply-disc-all");
+            if (applyBtn)
+              applyBtn.textContent = applyBtnLabel(quotesData[qIdx], item);
           }
         }
         checkDirty();
@@ -1950,13 +2163,19 @@
               cleanCompany = meta.company;
               cleanContact = meta.contact;
             }
-            if (!cleanCompany) cleanCompany = "ลูกค้าทั่วไป";
-            if (!cleanContact) cleanContact = "-";
+            // ระบบอนุญาตเฉพาะลูกค้าที่มีในฐานข้อมูล — ไม่เติมชื่อ default ให้อีกแล้ว
+            if (!cleanCompany || !cleanContact) {
+              throw new Error(
+                "กรุณาเลือกบริษัทและผู้ติดต่อจากระบบก่อนบันทึกครับ",
+              );
+            }
             const payload = {
               items: quote.items,
               total_sum: totalSum,
               customer_id: quote.customer_id || null,
               contact_id: quote.contact_id || null,
+              // null = ให้ server กลับไปใช้ค่าที่คำนวณจากกฎ (ปุ่ม "ค่าอัตโนมัติ")
+              delivery_days_override: deliveryOverrideDays(quote),
               userId,
             };
             payload.customer_name = meta.revise_from
@@ -2006,13 +2225,15 @@
         const meta = parseCustomerMeta(quotesData[0]);
         const container = document.getElementById("customer-details-global");
         if (!container) return;
+        // ค่าที่ยังไม่มีข้อมูล (null/ว่าง) แสดงเป็น placeholder เดียวกับ Flex ในแชท
+        const show = (v) => (v === null || v === undefined || v === "" || v === "-" ? CUSTOMER_PLACEHOLDER : v);
         container.innerHTML = `
-        <div class="info-row"><span class="info-label">🏢 บริษัท</span><span class="info-value">${meta.company}</span></div>
-        <div class="info-row"><span class="info-label">👤 ผู้ติดต่อ</span><span class="info-value">${meta.contact}</span></div>
-        <div class="info-row"><span class="info-label">📞 โทรศัพท์</span><span class="info-value">${meta.phone}</span></div>
-        <div class="info-row"><span class="info-label">📧 อีเมล</span><span class="info-value">${meta.email}</span></div>
-        <div class="info-row"><span class="info-label">🏠 ที่อยู่</span><span class="info-value">${meta.address}</span></div>
-        <div class="info-row"><span class="info-label">🚚 สถานที่ส่ง</span><span class="info-value">${meta.delivery}</span></div>
+        <div class="info-row"><span class="info-label">🏢 บริษัท</span><span class="info-value">${show(meta.company)}</span></div>
+        <div class="info-row"><span class="info-label">👤 ผู้ติดต่อ</span><span class="info-value">${show(meta.contact)}</span></div>
+        <div class="info-row"><span class="info-label">📞 โทรศัพท์</span><span class="info-value">${show(meta.phone)}</span></div>
+        <div class="info-row"><span class="info-label">📧 อีเมล</span><span class="info-value">${show(meta.email)}</span></div>
+        <div class="info-row"><span class="info-label">🏠 ที่อยู่</span><span class="info-value">${show(meta.address)}</span></div>
+        <div class="info-row"><span class="info-label">🚚 สถานที่ส่ง</span><span class="info-value">${show(meta.delivery)}</span></div>
       `;
       }
 
@@ -2187,11 +2408,11 @@
       function applyContactDetailsToState(contact) {
         quotesData.forEach((quote) => {
           quote.contact_phone = contact
-            ? contact.phone || contact.mobile || "-"
-            : "-";
-          quote.contact_email = contact ? contact.email || "-" : "-";
-          quote.contact_address = contact ? contact.address_complete || "-" : "-";
-          quote.delivery_address = contact ? contact.address_complete || "-" : "-";
+            ? contact.phone || contact.mobile || ""
+            : "";
+          quote.contact_email = contact ? contact.email || "" : "";
+          quote.contact_address = contact ? contact.address_complete || "" : "";
+          quote.delivery_address = contact ? contact.address_complete || "" : "";
         });
         updateCustomerDetailsUI();
       }
@@ -2336,8 +2557,12 @@
               cleanCompany = meta.company;
               cleanContact = meta.contact;
             }
-            if (!cleanCompany) cleanCompany = "ลูกค้าทั่วไป";
-            if (!cleanContact) cleanContact = "-";
+            // ระบบอนุญาตเฉพาะลูกค้าที่มีในฐานข้อมูล — ไม่เติมชื่อ default ให้อีกแล้ว
+            if (!cleanCompany || !cleanContact) {
+              throw new Error(
+                "กรุณาเลือกบริษัทและผู้ติดต่อจากระบบก่อนเพิ่มสินค้าครับ",
+              );
+            }
 
             const customerName = meta.revise_from
               ? `${cleanCompany} | ${cleanContact} | revise_from=${meta.revise_from}`
@@ -2399,10 +2624,10 @@
           if (companyInput) {
             companyInput.value = "";
             companyInput.focus();
-            // อัปเดตข้อมูลลูกค้าใน state เป็นค่าว่าง/ลูกค้าทั่วไป
+            // อัปเดตข้อมูลลูกค้าใน state เป็นค่าว่าง (ยังไม่ได้ผูกลูกค้า)
             quotesData.forEach((quote) => {
               quote.customer_id = "";
-              quote.customer_name = "ลูกค้าทั่วไป | ";
+              quote.customer_name = " | ";
             });
             // สั่งปิด dropdown และอัปเดต UI รายละเอียดลูกค้า
             const compDropdown = document.getElementById(

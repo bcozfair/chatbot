@@ -58,7 +58,8 @@
 ```
 id (UUID PK), user_id (LINE user_id), customer_name (TEXT: "บริษัท | ผู้ติดต่อ | meta"),
 items (JSONB), total_sum (NUMERIC), status (draft/pending_company/pending_contact/confirmed/cancelled),
-quotation_no (TEXT: QP-YYMMXXXXX / QT-YYMMXXXXX), created_at, updated_at
+quotation_no (TEXT: QP-YYMMXXXXX / QT-YYMMXXXXX), created_at, updated_at,
+delivery_days_override (INT NULL) — จำนวนวันจัดส่งที่เซลล์แก้เองจากหน้า LIFF (NULL = ใช้ค่าที่คำนวณจาก quotation_rules)
 ```
 
 **`admin_users`** — ผู้ดูแลระบบ
@@ -174,8 +175,10 @@ user_id, message_id, type, content, reply_token, reply_content, created_at
 #### `/liff/product-search` — ค้นหาสินค้า + เพิ่มลงตะกร้า
 - ค้นหาสินค้าแบบ real-time ผ่าน `/api/products/search`
 - เลือกสินค้า → กำหนด qty → เพิ่มลง cart
-- กด "ส่งใบเสนอราคา" → เรียก `/api/quotation/draft-cart`
+- กด "💾 ร่างใบเสนอราคา" → เรียก `/api/quotation/draft-cart` (สร้างใบสถานะ `pending_company` ลูกค้าเป็น `null`)
 - ส่งข้อความกลับ LINE chat พร้อมรหัส quote IDs เพื่อ trigger bot
+- บอทตอบ **Flex สรุปร่าง** ทันที — ข้อมูลลูกค้าขึ้นเป็น `— ยังไม่ระบุ —` และยังไม่มีปุ่มยืนยัน
+  ต้องกด "🏢 กรอกข้อมูลลูกค้า" เข้าหน้า quote-edit เลือกบริษัท/ผู้ติดต่อก่อน (หรือพิมพ์ชื่อบริษัทในแชทก็ได้)
 
 #### `/liff/quote-edit` — แก้ไขใบเสนอราคา
 - รับ `?quoteIds=` จาก URL
@@ -301,7 +304,7 @@ user_id, message_id, type, content, reply_token, reply_content, created_at
 
 **ตารางในระบบ (application tables):**
 - `admin_users` — ผู้ดูแลระบบ (id, username, password_hash, name, role)
-- `quotations` — ใบเสนอราคา (id, user_id, quotation_no, status, customer_name, items JSONB, total_sum, salesperson_name, salesperson_phone, salesperson_employee_code)
+- `quotations` — ใบเสนอราคา (id, user_id, quotation_no, status, customer_name, items JSONB, total_sum, salesperson_name, salesperson_phone, salesperson_employee_code, delivery_days_override)
 - `promotions` — โปรโมชัน (id, code, name, discount_type, discount_value, product_code, customer_type, customer_refs, min_qty, start_date, end_date)
 - `quotation_rules` — เงื่อนไขใบเสนอ (id, production, brand, series, warranty_years, warranty_unit, is_locked, delivery_in_stock_days, delivery_out_of_stock_days, delivery_days_qty_10/20/50/100)
 - `salesperson` — พนักงานขายที่ลงทะเบียนใน LINE (user_id, name, phone, salesperson_id, branch_code)
@@ -328,6 +331,11 @@ user_id, message_id, type, content, reply_token, reply_content, created_at
 - รองรับ multi-page ตาม weight ของ items (sales_description, remark, stock warning)
 - แยก logo/ข้อมูลบริษัท ตามว่าเป็น Primus (PM) หรือ Themtech (THT)
 - ใส่ลายเซ็นพนักงานขาย + แอดมิน จากไฟล์ `{employee_code}.png`
+
+**Customer Binding:**
+- ใบเสนอราคาต้องผูกลูกค้าที่มีในฐานข้อมูลเท่านั้น — **ไม่มีค่า default `ลูกค้าทั่วไป` แล้ว** ยังไม่ผูก = `null`
+- ใบที่ยังไม่ผูกลูกค้า (`isCustomerInfoIncomplete()` ใน `utils/flexTemplates.ts`) จะแสดงข้อมูลลูกค้าเป็น `— ยังไม่ระบุ —` และ **ไม่มีปุ่มยืนยัน** ใน Flex สรุป
+- บังคับกฎ 3 ชั้น: ปุ่มบันทึกในหน้า LIFF (ต้องมี `customer_id` + ผู้ติดต่อ) → `PUT /api/quotation/:id` (400 ถ้าบริษัท/ผู้ติดต่อว่าง) → ตอนยืนยัน (`POST /api/quotation/:id/confirm` และ postback `action=confirm`)
 
 **Promotion Validation:**
 - ราคาหลังหักส่วนลดต้อง ≥ `minimum_sales_price` เว้นแต่เข้าเงื่อนไขโปรโมชัน — กฎอยู่ที่ `checkMinSalesPrice()` ใน `services/quotationService.ts` **ที่เดียว** ใช้ทั้งตอนบันทึกจาก LIFF (`PUT /api/quotation/:id` → 422) และตอนยืนยัน (`POST /api/quotation/:id/confirm`, postback `action=confirm`)

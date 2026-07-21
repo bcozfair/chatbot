@@ -581,11 +581,15 @@ export function createProfileConfirmationFlex(
   };
 }
 
+// ข้อความที่ใช้แสดงแทนค่าลูกค้าที่ยังไม่มีข้อมูล (ค่าจริงใน DB เป็น null — ระบบไม่มี "ลูกค้าทั่วไป" แล้ว)
+export const CUSTOMER_PLACEHOLDER = '— ยังไม่ระบุ —';
+
 function parseCustomerNameMeta(fullName: string) {
-  if (!fullName) return { company: 'ลูกค้าทั่วไป', contact: '-', phone: '-', email: '-', address: '-', delivery: '-', tax_id: '-' };
+  const empty = { company: '', contact: '', phone: '', email: '', address: '', delivery: '', tax_id: '' };
+  if (!fullName) return empty;
   const parts = fullName.split(' | ');
-  const company = parts[0] || 'ลูกค้าทั่วไป';
-  const contact = parts[1] || '-';
+  const company = (parts[0] || '').trim();
+  const contact = (parts[1] || '').trim();
   let meta: Record<string, string> = {};
   if (parts[2]) {
     try {
@@ -597,12 +601,29 @@ function parseCustomerNameMeta(fullName: string) {
   return {
     company,
     contact,
-    phone: meta.phone || '-',
-    email: meta.email || '-',
-    address: meta.address || '-',
-    delivery: meta.delivery || meta.address || '-',
-    tax_id: meta.tax_id || '-'
+    phone: meta.phone || '',
+    email: meta.email || '',
+    address: meta.address || '',
+    delivery: meta.delivery || meta.address || '',
+    tax_id: meta.tax_id || ''
   };
+}
+
+/**
+ * ใบเสนอราคาที่ยังไม่ได้ผูกลูกค้า (เช่น ร่างที่สร้างจากตะกร้าหน้า product-search)
+ * ใบแบบนี้ห้ามยืนยันออกเอกสาร — ต้องเข้าไปเลือกบริษัท/ผู้ติดต่อในหน้า LIFF ก่อน
+ *
+ * เช็คแค่ status + ชื่อบริษัท ไม่เช็ค customer_id/contact_id เพราะใบเก่าบางใบไม่มี id
+ * (enrich เติมให้จาก display_name เท่านั้น) เช็คเกินจะทำใบปกติเสียปุ่มยืนยันไปด้วย
+ * ส่วนกฎ "ลูกค้าต้องมีในฐานข้อมูล" บังคับตอนบันทึกแทน (PUT /api/quotation/:id → 400
+ * และปุ่มบันทึกในหน้า LIFF ที่ต้องมี customer_id ก่อน)
+ */
+export function isCustomerInfoIncomplete(quote: any): boolean {
+  if (!quote) return true;
+  if (quote.status === 'pending_company' || quote.status === 'pending_contact') return true;
+  const company = parseCustomerNameMeta(quote.customer_name).company;
+  // ข้อมูลเก่าใน DB อาจยังมีคำว่า "ลูกค้าทั่วไป" ค้างอยู่ — ถือว่ายังไม่ได้ระบุลูกค้าเช่นกัน
+  return !company || company === 'ลูกค้าทั่วไป';
 }
 
 export async function getQuotationSummaryMessage(quotes: any[]) {
@@ -656,6 +677,13 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
   // Parse customer info
   const meta = parseCustomerNameMeta(quotes[0].customer_name);
 
+  // ใบที่ยังไม่ได้ผูกลูกค้าจากฐานข้อมูล → แสดงข้อมูลลูกค้าเป็น placeholder และซ่อนปุ่มยืนยัน
+  const customerIncomplete = isCustomerInfoIncomplete(quotes[0]);
+  if (customerIncomplete && meta.company === 'ลูกค้าทั่วไป') meta.company = '';
+
+  // ค่าที่ไม่มีข้อมูล (null/ว่าง) แสดงเป็น placeholder เสมอ
+  const show = (v: any) => (v === null || v === undefined || v === '' || v === '-') ? CUSTOMER_PLACEHOLDER : v;
+
   // Try to enrich with customer_details data (has phone, email, address, tax_id)
   const customerDetails = quotes[0].customer_details;
   if (customerDetails) {
@@ -667,7 +695,7 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
 
   // คิวรีข้อมูลลูกค้า (customer_type, reference) ด้วย pool.query (งด Supabase-style)
   let customerData = null;
-  if (meta.company && meta.company !== 'ลูกค้าทั่วไป') {
+  if (meta.company) {
     try {
       const custRes = await pool.query(
         'SELECT customer_type, reference FROM customers_view WHERE display_name = $1 LIMIT 1',
@@ -697,82 +725,101 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
 
   // Generate plain text summary
   let summaryText = '';
-  const refText = customerData?.reference || '-';
+  const refText = show(customerData?.reference);
   summaryText += `📝 ร่างใบเสนอราคา\n`;
+  if (customerIncomplete) {
+    summaryText += `⚠️ ยังไม่ได้ระบุลูกค้า — กรุณากรอกข้อมูลลูกค้าก่อนยืนยัน\n`;
+  }
   summaryText += `🔖 Ref: ${refText}\n`;
-  summaryText += `🆔 เลขเสียภาษี: ${meta.tax_id}\n`;
-  summaryText += `🏢 ${meta.company}\n`;
-  summaryText += `👤 ${meta.contact}\n`;
-  summaryText += `📞 ${meta.phone}\n`;
-  summaryText += `📧 ${meta.email}\n`;
-  summaryText += `📍 ${meta.address}\n`;
+  summaryText += `🆔 เลขเสียภาษี: ${show(meta.tax_id)}\n`;
+  summaryText += `🏢 ${show(meta.company)}\n`;
+  summaryText += `👤 ${show(meta.contact)}\n`;
+  summaryText += `📞 ${show(meta.phone)}\n`;
+  summaryText += `📧 ${show(meta.email)}\n`;
+  summaryText += `📍 ${show(meta.address)}\n`;
   summaryText += `───────────────\n`;
 
   // Flex body contents array
+  const customerBoxContents: any[] = [
+    {
+      type: "text",
+      text: `📋 รายละเอียดลูกค้า`,
+      size: "sm",
+      weight: "bold",
+      color: "#374151",
+      wrap: true
+    }
+  ];
+
+  if (customerIncomplete) {
+    customerBoxContents.push({
+      type: "text",
+      text: `⚠️ ยังไม่ได้ระบุลูกค้า — กรุณากดปุ่มด้านล่างเพื่อกรอกข้อมูลก่อนยืนยัน`,
+      size: "xs",
+      color: "#DC2626",
+      weight: "bold",
+      wrap: true
+    });
+  }
+
+  customerBoxContents.push(
+    {
+      type: "text",
+      text: `🔖 Ref: ${refText}`,
+      size: "xs",
+      color: "#4B5563",
+      wrap: true
+    },
+    {
+      type: "text",
+      text: `🆔 เลขเสียภาษี: ${show(meta.tax_id)}`,
+      size: "xs",
+      color: "#4B5563",
+      wrap: true
+    },
+    {
+      type: "text",
+      text: `🏢 ชื่อบริษัท: ${show(meta.company)}`,
+      size: "xs",
+      color: "#4B5563",
+      wrap: true
+    },
+    {
+      type: "text",
+      text: `👤 ผู้ติดต่อ: ${show(meta.contact)}`,
+      size: "xs",
+      color: "#4B5563",
+      wrap: true
+    },
+    {
+      type: "text",
+      text: `📞 โทร: ${show(meta.phone)}`,
+      size: "xs",
+      color: "#4B5563",
+      wrap: true
+    },
+    {
+      type: "text",
+      text: `📧 อีเมล: ${show(meta.email)}`,
+      size: "xs",
+      color: "#4B5563",
+      wrap: true
+    },
+    {
+      type: "text",
+      text: `📍 ที่อยู่: ${show(meta.address)}`,
+      size: "xs",
+      color: "#4B5563",
+      wrap: true
+    }
+  );
+
   const bodyContents: any[] = [
     {
       type: "box",
       layout: "vertical",
       spacing: "xs",
-      contents: [
-        {
-          type: "text",
-          text: `📋 รายละเอียดลูกค้า`,
-          size: "sm",
-          weight: "bold",
-          color: "#374151",
-          wrap: true
-        },
-        {
-          type: "text",
-          text: `🔖 Ref: ${refText}`,
-          size: "xs",
-          color: "#4B5563",
-          wrap: true
-        },
-        {
-          type: "text",
-          text: `🆔 เลขเสียภาษี: ${meta.tax_id}`,
-          size: "xs",
-          color: "#4B5563",
-          wrap: true
-        },
-        {
-          type: "text",
-          text: `🏢 ชื่อบริษัท: ${meta.company}`,
-          size: "xs",
-          color: "#4B5563",
-          wrap: true
-        },
-        {
-          type: "text",
-          text: `👤 ผู้ติดต่อ: ${meta.contact}`,
-          size: "xs",
-          color: "#4B5563",
-          wrap: true
-        },
-        {
-          type: "text",
-          text: `📞 โทร: ${meta.phone}`,
-          size: "xs",
-          color: "#4B5563",
-          wrap: true
-        },
-        {
-          type: "text",
-          text: `📧 อีเมล: ${meta.email}`,
-          size: "xs",
-          color: "#4B5563",
-          wrap: true
-        },
-        {
-          type: "text",
-          text: `📍 ที่อยู่: ${meta.address}`,
-          size: "xs",
-          color: "#4B5563",
-          wrap: true
-        }
-      ]
+      contents: customerBoxContents
     },
     {
       type: "separator",
@@ -998,7 +1045,7 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
               type: "button",
               action: {
                 type: "uri",
-                label: "🔧 แก้ไขรายละเอียด",
+                label: customerIncomplete ? "🏢 กรอกข้อมูลลูกค้า" : "🔧 แก้ไขรายละเอียด",
                 uri: liffUrl
               },
               style: "primary",
@@ -1007,7 +1054,7 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
             }
           ];
 
-          if (hasMinPriceViolation) {
+          if (customerIncomplete || hasMinPriceViolation) {
             // แสดงข้อความเตือนแทนปุ่มยืนยัน
             footerButtons.push({
               type: "box",
@@ -1015,7 +1062,9 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
               contents: [
                 {
                   type: "text",
-                  text: "⚠️ ไม่สามารถยืนยันได้ — มีสินค้าราคาต่ำกว่าขั้นต่ำ",
+                  text: customerIncomplete
+                    ? "⚠️ ยังยืนยันไม่ได้ — ต้องกรอกข้อมูลลูกค้าก่อน"
+                    : "⚠️ ไม่สามารถยืนยันได้ — มีสินค้าราคาต่ำกว่าขั้นต่ำ",
                   size: "xs",
                   color: "#DC2626",
                   weight: "bold",
@@ -1070,10 +1119,10 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
 }
 
 export function appendReviseFrom(customerName: string, originalQuoteNo: string) {
-  if (!customerName) return `ลูกค้าทั่วไป | - | revise_from=${originalQuoteNo}`;
+  if (!customerName) return ` |  | revise_from=${originalQuoteNo}`;
   const parts = customerName.split(' | ');
-  const company = parts[0] || 'ลูกค้าทั่วไป';
-  const contact = parts[1] || '-';
+  const company = parts[0] || '';
+  const contact = parts[1] || '';
   let metaStr = parts[2] || '';
   if (metaStr) {
     try {
