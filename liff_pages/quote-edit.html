@@ -1486,9 +1486,35 @@
     <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
     <script>
       // Override global fetch to automatically inject ngrok skip header
+      // ⚠️ ใส่เฉพาะ request ที่ไปโดเมนตัวเอง — ห้ามถอดเงื่อนไข isSameOrigin ออก
+      // การยัด custom header ใส่ request ข้ามโดเมนบังคับให้เบราว์เซอร์ยิง preflight (OPTIONS) ก่อน
+      // ซึ่งโดเมนนอกไม่ได้เปิด CORS ไว้ให้ → request พังทั้งอัน
+      // (เคสจริง: liffsdk.line-scdn.net/xlt/manifest.json ที่ LIFF SDK ใช้โหลดไฟล์แปลภาษา)
       (function() {
         const originalFetch = window.fetch;
+        // รับได้ทั้ง string / URL / Request — ตัดสินใจไม่ได้ = ไม่ใส่ header
+        // (ยอมเสีย header ดีกว่าทำ CORS พัง)
+        const isSameOrigin = (input) => {
+          try {
+            const href =
+              typeof input === "string"
+                ? input
+                : input instanceof URL
+                  ? input.href
+                  : input && typeof input.url === "string"
+                    ? input.url
+                    : "";
+            if (!href) return false;
+            return (
+              new URL(href, window.location.href).origin ===
+              window.location.origin
+            );
+          } catch (e) {
+            return false;
+          }
+        };
         window.fetch = function(url, options = {}) {
+          if (!isSameOrigin(url)) return originalFetch(url, options);
           if (!options.headers) {
             options.headers = {};
           }
@@ -1609,10 +1635,41 @@
         }
       }
 
-      // Modal หลัง "บันทึก" — path ของ LINE PC / เบราว์เซอร์ (liff.sendMessages ใช้ไม่ได้)
+      // ส่ง trigger เข้าแชท — ยิงจริงทุกแพลตฟอร์มแล้วค่อยดูผล ไม่เดาจาก OS
+      //
+      // ทดสอบแล้ว: LINE PC เปิดหน้า LIFF ใน "เบราว์เซอร์ภายนอก" เสมอ (LIFF URL เป็น
+      // universal/app link เฉพาะ iOS/Android — ดู https://developers.line.biz/en/docs/liff/opening-liff-app/)
+      // → isInClient() เป็น false → sendMessages() ใช้บน PC ไม่ได้อย่างถาวร ต้องตกไปใช้ modal คัดลอก
+      // ที่ยังยิงอยู่คือทางของมือถือ (และเผื่อ LINE PC รองรับ LIFF browser ในอนาคต)
+      //
+      // คืน { ok:true } หรือ { ok:false, reason } โดย reason เป็นข้อความพร้อมแสดงผล (มี icon ในตัว)
+      // ⚠️ mirror ของ trySendTrigger() ใน product-search.html / register.html — แก้ที่นี่แล้วต้องไป sync ด้วยมือ
+      async function trySendTrigger(text) {
+        try {
+          if (!liff.isInClient())
+            return {
+              ok: false,
+              reason:
+                "ℹ️ LINE PC เปิดหน้านี้ในเบราว์เซอร์ภายนอกเสมอ จึงส่งเข้าแชทให้อัตโนมัติไม่ได้ (เป็นข้อจำกัดของ LINE PC ไม่ใช่ข้อผิดพลาด)",
+            };
+          await liff.sendMessages([{ type: "text", text }]);
+          return { ok: true };
+        } catch (e) {
+          console.error("sendMessages error:", e);
+          const code = (e && e.code) || "";
+          const msg = (e && e.message) || String(e);
+          return {
+            ok: false,
+            reason: `⚠️ ส่งเข้าแชทอัตโนมัติไม่สำเร็จ: ${code ? `${code} — ${msg}` : msg}`,
+          };
+        }
+      }
+
+      // Modal หลัง "บันทึก" — ตาข่ายรองตอน trySendTrigger() ส่งเข้าแชทไม่สำเร็จ
       // ให้ user คัดลอกข้อความ trigger ไปวางส่งในแชทเอง → บอท reply Flex สรุปร่างใบเสนอราคา
       // (การยืนยันออกเอกสารทำผ่านปุ่มใน Flex นั้นเท่านั้น หน้านี้ไม่ยืนยันเองแล้ว)
-      function showSaveSuccessModal(triggerMessage) {
+      // failReason = สาเหตุที่ส่งอัตโนมัติไม่ได้ โชว์ไว้ให้วินิจฉัยหน้างานโดยไม่ต้องเปิด devtools
+      function showSaveSuccessModal(triggerMessage, failReason) {
         const modal = document.getElementById("successModal");
         const body = document.getElementById("successModalBody");
         const btnCopy = document.getElementById("successModalCopy");
@@ -1624,6 +1681,15 @@
           <div style="margin-top:8px;font-size:12px;color:var(--text-muted);">📋 คัดลอกข้อความ → วางส่งในแชท เพื่อดูสรุปร่างใบเสนอราคาและกดยืนยันออกเอกสาร</div>
           <div id="successTriggerBox" style="display:none;margin-top:6px;padding:6px 8px;background:var(--white);border:1px dashed var(--border-strong);border-radius:6px;font-size:11px;color:var(--text);white-space:pre-wrap;word-break:break-word;">${triggerMessage || ""}</div>
         `;
+
+        // ต่อด้วย textContent (ไม่ใช่ innerHTML) เพราะ reason มาจาก error ของ SDK
+        if (failReason) {
+          const diag = document.createElement("div");
+          diag.style.cssText =
+            "margin-top:8px;font-size:10px;color:var(--text-light);word-break:break-word;";
+          diag.textContent = failReason;
+          body.appendChild(diag);
+        }
 
         const closeModal = () => {
           modal.classList.remove("show");
@@ -3053,39 +3119,20 @@
           .map((q) => q.id)
           .join(",")})`;
 
-        const os = (() => {
-          try {
-            return liff.getOS();
-          } catch (e) {
-            return "web";
-          }
-        })();
-        const mobileInClient =
-          liff.isInClient() && (os === "ios" || os === "android");
-
-        if (mobileInClient) {
-          // มือถือใน LINE: auto ส่ง trigger แล้วปิดหน้าเอง
-          let sent = false;
-          try {
-            await liff.sendMessages([{ type: "text", text: triggerMessage }]);
-            sent = true;
-          } catch (e) {
-            console.error("sendMessages error:", e);
-          }
-          if (sent) {
-            liff.closeWindow();
-            return;
-          }
-          // auto ส่งไม่ได้ → ตกไปแสดง modal (กันหน้าค้าง)
+        // ยิงเข้าแชทจริงทุกแพลตฟอร์ม (ไม่เดาจาก OS อีกแล้ว) ส่งผ่าน = ปิดหน้าเลย
+        const sent = await trySendTrigger(triggerMessage);
+        if (sent.ok) {
+          liff.closeWindow();
+          return;
         }
 
-        // LINE PC / web / เบราว์เซอร์นอก (หรือมือถือที่ auto ส่งไม่ได้):
+        // ส่งเข้าแชทไม่สำเร็จ (เบราว์เซอร์นอก LINE / ติดเงื่อนไข sendMessages):
         // ให้ผู้ใช้คัดลอกข้อความไปวางในแชทเอง เพื่อให้บอทตอบ Flex สรุป
         isSaving = false;
         loaderScreen.style.display = "none";
         btnSave.disabled = false;
         btnSave.innerHTML = "💾 บันทึก";
-        showSaveSuccessModal(triggerMessage);
+        showSaveSuccessModal(triggerMessage, sent.reason);
       }
 
       // ── ยกเลิก = ปิดหน้าแก้ไขเฉย ๆ (ไม่ยกเลิกร่างใบเสนอราคา) ──

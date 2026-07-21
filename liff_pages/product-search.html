@@ -464,6 +464,41 @@
       font-family: 'Sarabun', sans-serif;
       font-size: 14px; font-weight: 600; cursor: pointer;
     }
+
+    /* ─── SUCCESS MODAL (ตาข่ายรองตอนส่ง trigger เข้าแชทไม่ได้) ───
+       ใช้ .alert-overlay/.alert-card ร่วมกับ alert ปกติ แต่ต้องมี 2 ปุ่ม
+       จึงใช้ .alert-actions แทน .alert-btn ที่เป็น float:right */
+    .alert-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .alert-actions .alert-btn { float: none; }
+    .alert-btn.secondary { background: var(--text-muted); }
+
+    /* .alert-body เดิมเป็นสีแดง + pre-line (ไว้ใช้กับ error) — โมดัลนี้เป็นข่าวดีจึงต้องทับทั้งคู่ */
+    .alert-body-info { color: var(--text); white-space: normal; }
+
+    .trigger-box {
+      display: none;
+      margin-top: 6px;
+      padding: 6px 8px;
+      background: var(--white);
+      border: 1px dashed var(--border-strong);
+      border-radius: 6px;
+      font-size: 11px;
+      color: var(--text);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .alert-diag {
+      margin-top: 8px;
+      font-size: 10px;
+      color: var(--text-light);
+      word-break: break-word;
+    }
   </style>
 </head>
 <body>
@@ -537,12 +572,46 @@
     </div>
   </div>
 
+  <!-- สร้างร่างสำเร็จ แต่ส่งข้อความเข้าแชทอัตโนมัติไม่ได้ → ให้คัดลอกไปวางเอง -->
+  <div class="alert-overlay" id="successOverlay" style="display:none;">
+    <div class="alert-card">
+      <div class="alert-head">
+        <span class="alert-icon">💾</span>
+        <span class="alert-title">สร้างร่างใบเสนอราคาแล้ว</span>
+      </div>
+      <div class="alert-body alert-body-info" id="successBody"></div>
+      <div class="alert-actions">
+        <button class="alert-btn secondary" id="successClose">ปิด</button>
+        <button class="alert-btn" id="successCopy">📋 คัดลอกข้อความ</button>
+      </div>
+    </div>
+  </div>
+
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <script>
     // Override global fetch to automatically inject ngrok skip header
+    // ⚠️ ใส่เฉพาะ request ที่ไปโดเมนตัวเอง — ห้ามถอดเงื่อนไข isSameOrigin ออก
+    // การยัด custom header ใส่ request ข้ามโดเมนบังคับให้เบราว์เซอร์ยิง preflight (OPTIONS) ก่อน
+    // ซึ่งโดเมนนอกไม่ได้เปิด CORS ไว้ให้ → request พังทั้งอัน
+    // (เคสจริง: liffsdk.line-scdn.net/xlt/manifest.json ที่ LIFF SDK ใช้โหลดไฟล์แปลภาษา)
     (function() {
       const originalFetch = window.fetch;
+      // รับได้ทั้ง string / URL / Request — ตัดสินใจไม่ได้ = ไม่ใส่ header
+      // (ยอมเสีย header ดีกว่าทำ CORS พัง)
+      const isSameOrigin = (input) => {
+        try {
+          const href = typeof input === 'string' ? input
+            : input instanceof URL ? input.href
+            : (input && typeof input.url === 'string') ? input.url
+            : '';
+          if (!href) return false;
+          return new URL(href, window.location.href).origin === window.location.origin;
+        } catch (e) {
+          return false;
+        }
+      };
       window.fetch = function(url, options = {}) {
+        if (!isSameOrigin(url)) return originalFetch(url, options);
         if (!options.headers) {
           options.headers = {};
         }
@@ -579,6 +648,10 @@
     const alertOverlay = document.getElementById('alertOverlay');
     const alertBody    = document.getElementById('alertBody');
     const alertOk      = document.getElementById('alertOk');
+    const successOverlay = document.getElementById('successOverlay');
+    const successBody  = document.getElementById('successBody');
+    const successCopy  = document.getElementById('successCopy');
+    const successClose = document.getElementById('successClose');
 
     function showAlert(msg) {
       alertBody.textContent = msg;
@@ -591,6 +664,106 @@
     }
     alertOk.addEventListener('click', closeAlert);
     alertOverlay.addEventListener('click', e => { if (e.target === alertOverlay) closeAlert(); });
+
+    // คัดลอกข้อความลง clipboard (fallback: textarea + execCommand สำหรับ webview เก่า)
+    // ⚠️ mirror ของ copyToClipboard() ใน quote-edit.html — แก้ที่นั่นแล้วต้องมา sync ที่นี่ด้วยมือ
+    async function copyToClipboard(text) {
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(text);
+          return true;
+        }
+      } catch (e) {}
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand('copy');
+        ta.remove();
+        return ok;
+      } catch (e) {
+        return false;
+      }
+    }
+
+    // ส่ง trigger เข้าแชท — ยิงจริงทุกแพลตฟอร์มแล้วค่อยดูผล ไม่เดาจาก OS
+    //
+    // ทดสอบแล้ว: LINE PC เปิดหน้า LIFF ใน "เบราว์เซอร์ภายนอก" เสมอ (LIFF URL เป็น
+    // universal/app link เฉพาะ iOS/Android — ดู https://developers.line.biz/en/docs/liff/opening-liff-app/)
+    // → isInClient() เป็น false → sendMessages() ใช้บน PC ไม่ได้อย่างถาวร ต้องตกไปใช้ modal คัดลอก
+    // ที่ยังยิงอยู่คือทางของมือถือ (และเผื่อ LINE PC รองรับ LIFF browser ในอนาคต)
+    //
+    // reason เป็นข้อความพร้อมแสดงผล (มี icon ในตัว)
+    // ⚠️ mirror ของ trySendTrigger() ใน quote-edit.html — แก้ที่นั่นแล้วต้องมา sync ที่นี่ด้วยมือ
+    async function trySendTrigger(text) {
+      try {
+        if (!liff.isInClient()) {
+          return {
+            ok: false,
+            reason: 'ℹ️ LINE PC เปิดหน้านี้ในเบราว์เซอร์ภายนอกเสมอ จึงส่งเข้าแชทให้อัตโนมัติไม่ได้ (เป็นข้อจำกัดของ LINE PC ไม่ใช่ข้อผิดพลาด)'
+          };
+        }
+        await liff.sendMessages([{ type: 'text', text }]);
+        return { ok: true };
+      } catch (e) {
+        console.error('sendMessages error:', e);
+        const code = (e && e.code) || '';
+        const msg = (e && e.message) || String(e);
+        return { ok: false, reason: `⚠️ ส่งเข้าแชทอัตโนมัติไม่สำเร็จ: ${code ? `${code} — ${msg}` : msg}` };
+      }
+    }
+
+    // ตาข่ายรองตอนส่ง trigger เข้าแชทไม่สำเร็จ — ให้ผู้ใช้คัดลอกไปวางในแชทเอง
+    // บอทจะ reply Flex สรุปร่าง ซึ่งมีปุ่มเข้าหน้าแก้ไข/กรอกข้อมูลลูกค้าให้ต่อ
+    // failReason โชว์ไว้ให้วินิจฉัยหน้างานโดยไม่ต้องเปิด devtools
+    function showDraftSuccessModal(triggerMessage, failReason) {
+      successBody.innerHTML = `
+        <div style="font-weight:700;color:var(--green-dark);">สร้างร่างใบเสนอราคาเรียบร้อยแล้ว</div>
+        <div style="margin-top:8px;font-size:12px;color:var(--text-muted);">📋 คัดลอกข้อความ → วางส่งในแชท เพื่อดูสรุปร่างและกรอกข้อมูลลูกค้าต่อ</div>
+        <div id="successTriggerBox" class="trigger-box">${triggerMessage || ''}</div>
+      `;
+
+      // ต่อด้วย textContent (ไม่ใช่ innerHTML) เพราะ reason มาจาก error ของ SDK
+      if (failReason) {
+        const diag = document.createElement('div');
+        diag.className = 'alert-diag';
+        diag.textContent = failReason;
+        successBody.appendChild(diag);
+      }
+
+      successCopy.disabled = false;
+      successCopy.textContent = '📋 คัดลอกข้อความ';
+      successCopy.onclick = async () => {
+        const ok = await copyToClipboard(triggerMessage);
+        if (ok) {
+          successCopy.textContent = '✓ คัดลอกแล้ว';
+        } else {
+          // คัดลอกอัตโนมัติไม่ได้ → เผยกล่องข้อความให้ select เอง
+          successCopy.textContent = '⚠️ คัดลอกเองจากกล่องด้านบน';
+          const box = document.getElementById('successTriggerBox');
+          if (box) {
+            box.style.display = 'block';
+            const range = document.createRange();
+            range.selectNodeContents(box);
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(range);
+          }
+        }
+      };
+
+      successClose.onclick = () => {
+        try { liff.closeWindow(); } catch (e) {}
+        successOverlay.classList.remove('show');
+        setTimeout(() => successOverlay.style.display = 'none', 200);
+      };
+
+      successOverlay.style.display = 'flex';
+      setTimeout(() => successOverlay.classList.add('show'), 10);
+    }
 
     let searchTimer = null;
     function clearSearchState() {
@@ -858,18 +1031,24 @@
         });
         const result = await res.json();
         if (result.success) {
-          if (liff.isInClient()) {
-            try {
-              await liff.sendMessages([{ type: 'text', text: `💾 ร่างใบเสนอราคา (${cart.length} รายการ)
-(รหัส: ${result.quoteIds})` }]);
-              loaderText.innerHTML = '<span style="color:var(--green)">✓</span> สร้างร่างสำเร็จ!';
-              setTimeout(() => liff.closeWindow(), 900);
-            } catch {
-              window.location.href = `/liff/quote-edit?quoteIds=${result.quoteIds}&userId=${userId}`;
-            }
-          } else {
-            window.location.href = `/liff/quote-edit?quoteIds=${result.quoteIds}&userId=${userId}`;
+          // ⚠️ ข้อความต้องตรงตัวอักษรเดิม — lineHandler.ts match ด้วย startsWith('💾 ร่างใบเสนอราคา') + regex 'รหัส:'
+          const triggerMessage = `💾 ร่างใบเสนอราคา (${cart.length} รายการ)
+(รหัส: ${result.quoteIds})`;
+
+          // ยิงเข้าแชทจริงทุกแพลตฟอร์ม (ไม่เดาจาก OS) ส่งผ่าน = ปิดหน้าเลย
+          const sent = await trySendTrigger(triggerMessage);
+          if (sent.ok) {
+            loaderText.innerHTML = '<span style="color:var(--green)">✓</span> สร้างร่างสำเร็จ!';
+            setTimeout(() => liff.closeWindow(), 900);
+            return;
           }
+
+          // ส่งไม่สำเร็จ → เด้ง modal ให้คัดลอกไปวางเอง (ต้องซ่อน loader ก่อน ไม่งั้น modal โดนบัง)
+          // ตะกร้าคงไว้ไม่ล้าง + ปลดล็อกปุ่ม เผื่อผู้ใช้ต้องลองใหม่
+          loader.style.display = 'none';
+          btnDraft.disabled = false;
+          btnSheetSubmit.disabled = false;
+          showDraftSuccessModal(triggerMessage, sent.reason);
         } else {
           const violations = Array.isArray(result.violations)
             ? result.violations.map(formatViolation).filter(Boolean)

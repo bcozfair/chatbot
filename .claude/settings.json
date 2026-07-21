@@ -107,7 +107,12 @@
       "Bash(python -c ' *)",
       "Bash(node C:/Users/bcozf/AppData/Local/Temp/claude/c--Users-bcozf-Downloads-chatbot/1566bdae-a979-498c-aceb-b4aba387e808/scratchpad/smoke-quote-edit.mjs C:/Users/bcozf/AppData/Local/Temp/claude/c--Users-bcozf-Downloads-chatbot/1566bdae-a979-498c-aceb-b4aba387e808/scratchpad)",
       "Bash(node \"C:/Users/bcozf/AppData/Local/Temp/claude/c--Users-bcozf-Downloads-chatbot/1566bdae-a979-498c-aceb-b4aba387e808/scratchpad/deadcheck.mjs\")",
-      "Bash(awk '/^@@/{p=0} /renderItems|onFieldChange|checkDirty|updateDeliveryUI|addProductToQuote|Sheet|remark|focusin|deliveryMode|discount-baht/{p=1} p')"
+      "Bash(awk '/^@@/{p=0} /renderItems|onFieldChange|checkDirty|updateDeliveryUI|addProductToQuote|Sheet|remark|focusin|deliveryMode|discount-baht/{p=1} p')",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(git --no-pager diff --stat)",
+      "Bash(echo \"---exit:$?\")",
+      "Bash(git --no-pager diff -U3 -- liff_pages/quote-edit.html)",
+      "Bash(git --no-pager diff -U2 -- liff_pages/product-search.html)"
     ]
   }
 }
