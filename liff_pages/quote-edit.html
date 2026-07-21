@@ -920,26 +920,29 @@
       .sheet-result {
         font-family: "Sarabun", sans-serif;
         display: flex;
-        flex-direction: column;
-        gap: 3px;
-        width: 100%;
-        text-align: left;
+        align-items: center;
+        gap: 10px;
         background: var(--white);
         border: 1.5px solid var(--border);
         border-radius: var(--radius-sm);
         padding: 8px 10px;
         margin-bottom: 6px;
-        cursor: pointer;
         transition:
           background 0.12s,
           border-color 0.12s;
       }
-      .sheet-result:hover {
+      /* อยู่ในใบแล้ว — ย้อมสีให้เห็นทันทีว่าหยิบใส่ไปแล้วกี่ชิ้น */
+      .sheet-result.in-quote {
         background: var(--green-pale);
-        border-color: var(--border-strong);
+        border-color: var(--green-mid);
       }
-      .sheet-result:active {
-        opacity: 0.85;
+
+      .sheet-result-info {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
       }
       .sheet-result-main,
       .sheet-result-sub {
@@ -957,6 +960,33 @@
       .sheet-result-sub .prod-name {
         flex: 1;
         min-width: 0; /* จำเป็นสำหรับ text-overflow:ellipsis ในลูก flex */
+      }
+
+      /* ปุ่มเพิ่ม / ตัวนับจำนวน — สลับกันตามว่าสินค้าอยู่ในใบแล้วหรือยัง */
+      .sheet-action {
+        flex: 0 0 92px;
+      }
+      .btn-add-cart {
+        font-family: "Sarabun", sans-serif;
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--white);
+        background: var(--green);
+        border: none;
+        border-radius: 7px;
+        width: 100%;
+        height: 30px;
+        cursor: pointer;
+        transition: background 0.15s;
+      }
+      .btn-add-cart:hover {
+        background: var(--green-dark);
+      }
+      .btn-add-cart:active {
+        opacity: 0.88;
+      }
+      .sheet-action .qty-control {
+        border-color: var(--green-mid);
       }
 
       /* chip บอกว่าสินค้าจะถูกจัดเข้าใบไหน */
@@ -1530,7 +1560,7 @@
       })();
 
       // ข้อความแทนค่าลูกค้าที่ยังไม่มีข้อมูล (ค่าจริงเป็น null — ตรงกับ CUSTOMER_PLACEHOLDER ใน utils/flexTemplates.ts)
-      const CUSTOMER_PLACEHOLDER = "— ยังไม่ระบุ —";
+      const CUSTOMER_PLACEHOLDER = "-";
 
       // ── State ──
       let quotesData = [];
@@ -2835,6 +2865,36 @@
         }, 300);
       }
 
+      // สินค้าตัวหนึ่งอยู่ได้ใบเดียวเสมอ (จัดตาม quote_company) จึงคืนตัวแรกที่เจอพอ
+      // product_id เป็นกุญแจหลัก ส่วน model/product_code เป็น fallback ให้ใบเก่าที่ไม่มี id
+      function findQuoteItem(prod) {
+        for (let q = 0; q < quotesData.length; q++) {
+          const items = quotesData[q].items || [];
+          for (let i = 0; i < items.length; i++) {
+            const it = items[i];
+            const sameId =
+              prod.product_id != null &&
+              it.product_id != null &&
+              String(it.product_id) === String(prod.product_id);
+            const sameCode =
+              (it.model || it.product_code) === (prod.model || prod.code);
+            if (sameId || sameCode) return { q, i, item: it };
+          }
+        }
+        return null;
+      }
+
+      function sheetActionHtml(qty) {
+        if (qty > 0)
+          return `
+          <div class="qty-control compact">
+            <button type="button" class="qty-btn btn-sheet-dec">−</button>
+            <input type="number" class="edit-input sheet-qty" min="0" value="${qty}">
+            <button type="button" class="qty-btn btn-sheet-inc">+</button>
+          </div>`;
+        return `<button type="button" class="btn-add-cart">➕ เพิ่ม</button>`;
+      }
+
       function renderSheetResults(products) {
         if (!sheetResultsEl) return;
         sheetResults = Array.isArray(products) ? products : [];
@@ -2847,25 +2907,113 @@
         sheetResults.forEach((prod, i) => {
           const stock = Number(prod.stock) || 0;
           const isTht = prod.quote_company === "THT";
-          const btn = document.createElement("button");
-          btn.type = "button";
-          btn.className = "sheet-result";
-          btn.dataset.idx = i;
-          btn.innerHTML = `
-          <div class="sheet-result-main">
-            <span class="prod-code">${prod.model || prod.code}</span>
-            <span class="prod-price">฿${formatNumber(prod.price, 2)}</span>
+          const found = findQuoteItem(prod);
+          const qty = found ? found.item.quantity : 0;
+          const row = document.createElement("div");
+          row.className = "sheet-result" + (qty > 0 ? " in-quote" : "");
+          row.dataset.idx = i;
+          row.innerHTML = `
+          <div class="sheet-result-info">
+            <div class="sheet-result-main">
+              <span class="prod-code">${prod.model || prod.code}</span>
+              <span class="prod-price">฿${formatNumber(prod.price, 2)}</span>
+            </div>
+            <div class="sheet-result-sub">
+              <span class="prod-name">${prod.name || ""}</span>
+              <span class="target-chip ${isTht ? "tht" : "pm"}">${isTht ? "THT" : "PM"}</span>
+              <span class="prod-stock ${stock > 0 ? "in-stock" : "out-of-stock"}">${stock > 0 ? `คงเหลือ ${stock}` : "สินค้าหมด"}</span>
+            </div>
           </div>
-          <div class="sheet-result-sub">
-            <span class="prod-name">${prod.name || ""}</span>
-            <span class="target-chip ${isTht ? "tht" : "pm"}">${isTht ? "THT" : "PM"}</span>
-            <span class="prod-stock ${stock > 0 ? "in-stock" : "out-of-stock"}">${stock > 0 ? `คงเหลือ ${stock}` : "สินค้าหมด"}</span>
-          </div>`;
-          // ไม่ปิด sheet และไม่ล้างคำค้น — ให้เพิ่มหลายชิ้นรวดเดียวได้
-          btn.addEventListener("click", () => {
-            addProductToQuote(prod);
-          });
-          sheetResultsEl.appendChild(btn);
+          <div class="sheet-action">${sheetActionHtml(qty)}</div>`;
+          sheetResultsEl.appendChild(row);
+        });
+      }
+
+      // อัปเดตตัวนับในแต่ละแถวให้ตรงกับ quotesData โดยไม่ rebuild ทั้งลิสต์
+      // (rebuild จะทำให้ช่องที่กำลังพิมพ์อยู่หลุด focus กลางคัน)
+      function syncSheetRows() {
+        if (!sheetResultsEl) return;
+        sheetResultsEl.querySelectorAll(".sheet-result").forEach((row) => {
+          const prod = sheetResults[Number(row.dataset.idx)];
+          if (!prod) return;
+          const found = findQuoteItem(prod);
+          const qty = found ? found.item.quantity : 0;
+          row.classList.toggle("in-quote", qty > 0);
+          const cell = row.querySelector(".sheet-action");
+          const input = cell.querySelector(".sheet-qty");
+          // สลับหน้าตาเฉพาะตอนโหมดเปลี่ยน (ปุ่ม ↔ ตัวนับ) ไม่งั้นแค่เขียนตัวเลขทับ
+          if (qty > 0 && input) {
+            if (document.activeElement !== input) input.value = qty;
+          } else if (qty > 0 || input) {
+            cell.innerHTML = sheetActionHtml(qty);
+          }
+        });
+      }
+
+      // กันแตะรัว ๆ ระหว่างที่ path "แยกใบใหม่" ยังยิง POST ไม่เสร็จ (จะได้ใบซ้ำ)
+      let isAddingProduct = false;
+
+      async function onSheetStep(prod, delta) {
+        const found = findQuoteItem(prod);
+
+        if (!found) {
+          if (delta <= 0) return;
+          if (isAddingProduct) return;
+          isAddingProduct = true;
+          try {
+            await addProductToQuote(prod);
+          } finally {
+            isAddingProduct = false;
+          }
+          syncSheetRows();
+          return;
+        }
+
+        const next = found.item.quantity + delta;
+        if (next <= 0) {
+          // ลดจนเหลือ 0 = เอาออกจากใบ (ให้ความรู้สึกเหมือนหยิบของออกจากตะกร้า)
+          quotesData[found.q].items.splice(found.i, 1);
+          render();
+          syncSheetRows();
+          showToast(`🗑️ เอา ${prod.model || prod.code} ออกจากใบแล้ว`);
+          return;
+        }
+
+        // ยิงผ่าน input จริงของการ์ด → ได้ logic เดียวกับที่ผู้ใช้พิมพ์เอง
+        // (อัปเดต state + ยอดรวม + ป้ายสต๊อก + เตือนของไม่พอ + checkDirty) โดยไม่ต้อง render() ทั้งหน้า
+        const qtyInput = document.querySelector(
+          `#items-${found.q} .qty-input[data-i="${found.i}"]`,
+        );
+        if (qtyInput) {
+          qtyInput.value = next;
+          qtyInput.dispatchEvent(new Event("input", { bubbles: true }));
+        } else {
+          found.item.quantity = next;
+          render();
+        }
+        syncSheetRows();
+      }
+
+      // ผูก listener ครั้งเดียวบน container ที่อยู่ใน static HTML (ไม่ถูกสร้างใหม่)
+      if (sheetResultsEl) {
+        sheetResultsEl.addEventListener("click", (e) => {
+          const row = e.target.closest(".sheet-result");
+          if (!row) return;
+          const prod = sheetResults[Number(row.dataset.idx)];
+          if (!prod) return;
+          if (e.target.closest(".btn-add-cart")) onSheetStep(prod, 1);
+          else if (e.target.closest(".btn-sheet-inc")) onSheetStep(prod, 1);
+          else if (e.target.closest(".btn-sheet-dec")) onSheetStep(prod, -1);
+        });
+        // พิมพ์จำนวนเองในช่อง → ตั้งค่าตอน change (blur/enter) ไม่ใช่ทุกตัวอักษร
+        sheetResultsEl.addEventListener("change", (e) => {
+          if (!e.target.classList.contains("sheet-qty")) return;
+          const row = e.target.closest(".sheet-result");
+          const prod = sheetResults[Number(row.dataset.idx)];
+          const found = findQuoteItem(prod);
+          if (!prod || !found) return;
+          const want = Math.max(0, Math.round(Number(e.target.value) || 0));
+          onSheetStep(prod, want - found.item.quantity);
         });
       }
 
@@ -3004,11 +3152,6 @@
         if (!quote.items) quote.items = [];
         quote.items.push(newItem);
         render();
-        // sheet ยังเปิดค้างอยู่ (อยู่คนละ subtree กับที่ render() รื้อ) จึงต้องมี toast
-        // ยืนยันว่าสินค้าเข้าใบไหนไปแล้ว ไม่งั้นผู้ใช้ไม่เห็นการเปลี่ยนแปลงที่ถูกบัง
-        showToast(
-          `➕ เพิ่ม ${newItem.model} เข้าใบ ${targetIsTht ? "THT" : "PM"} แล้ว`,
-        );
       }
 
       document.addEventListener("click", (e) => {

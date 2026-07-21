@@ -582,7 +582,7 @@ export function createProfileConfirmationFlex(
 }
 
 // ข้อความที่ใช้แสดงแทนค่าลูกค้าที่ยังไม่มีข้อมูล (ค่าจริงใน DB เป็น null — ระบบไม่มี "ลูกค้าทั่วไป" แล้ว)
-export const CUSTOMER_PLACEHOLDER = '— ยังไม่ระบุ —';
+export const CUSTOMER_PLACEHOLDER = '-';
 
 function parseCustomerNameMeta(fullName: string) {
   const empty = { company: '', contact: '', phone: '', email: '', address: '', delivery: '', tax_id: '' };
@@ -624,6 +624,26 @@ export function isCustomerInfoIncomplete(quote: any): boolean {
   const company = parseCustomerNameMeta(quote.customer_name).company;
   // ข้อมูลเก่าใน DB อาจยังมีคำว่า "ลูกค้าทั่วไป" ค้างอยู่ — ถือว่ายังไม่ได้ระบุลูกค้าเช่นกัน
   return !company || company === 'ลูกค้าทั่วไป';
+}
+
+/**
+ * ข้อความกำหนดส่งของใบหนึ่งใบ — ใช้ค่าที่ enrichQuotationData คำนวณมาให้แล้ว
+ * (delivery_days_auto / delivery_all_in_stock) และค่าที่เซลล์ตั้งทับไว้ (delivery_days_override)
+ *
+ * fallback 3/7 วัน กับคำว่า In_stock./Make to order. ตรงกับ pdfGenerator และหน้า LIFF
+ * เซลล์จะได้เห็นเลขเดียวกันทั้งในแชท ในหน้าแก้ไข และในไฟล์ PDF
+ */
+function formatDeliveryTime(quote: any): string {
+  const raw = quote?.delivery_days_override;
+  const overrideDays = (raw === null || raw === undefined || raw === '' || !Number.isFinite(Number(raw)))
+    ? null
+    : Number(raw);
+  const allInStock = quote?.delivery_all_in_stock !== false;
+  const autoRaw = Number(quote?.delivery_days_auto);
+  const autoDays = Number.isFinite(autoRaw) ? autoRaw : (allInStock ? 3 : 7);
+  const days = overrideDays !== null ? overrideDays : autoDays;
+  const mode = allInStock ? 'In_stock.' : 'Make to order.';
+  return `${mode} ภายใน ${days} วัน${overrideDays !== null ? ' (ตั้งค่าเอง)' : ''}`;
 }
 
 export async function getQuotationSummaryMessage(quotes: any[]) {
@@ -693,6 +713,13 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
     if (customerDetails.customer_tax_id && customerDetails.customer_tax_id !== '-') meta.tax_id = customerDetails.customer_tax_id;
   }
 
+  // เครดิตเทอม — ใบที่ enrich แล้วมี payment_terms ติดมาจาก customers_view
+  // ถ้าไม่มี (ใบเก่า/เส้นทางอื่น) ค่อยถอยไปอ่าน snapshot customer_details
+  let paymentTerms = quotes[0].payment_terms || '';
+  if ((!paymentTerms || paymentTerms === '-') && customerDetails?.payment_terms && customerDetails.payment_terms !== '-') {
+    paymentTerms = customerDetails.payment_terms;
+  }
+
   // คิวรีข้อมูลลูกค้า (customer_type, reference) ด้วย pool.query (งด Supabase-style)
   let customerData = null;
   if (meta.company) {
@@ -737,6 +764,7 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
   summaryText += `📞 ${show(meta.phone)}\n`;
   summaryText += `📧 ${show(meta.email)}\n`;
   summaryText += `📍 ${show(meta.address)}\n`;
+  summaryText += `💳 เครดิต: ${show(paymentTerms)}\n`;
   summaryText += `───────────────\n`;
 
   // Flex body contents array
@@ -811,6 +839,13 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
       size: "xs",
       color: "#4B5563",
       wrap: true
+    },
+    {
+      type: "text",
+      text: `💳 เครดิต: ${show(paymentTerms)}`,
+      size: "xs",
+      color: "#4B5563",
+      wrap: true
     }
   );
 
@@ -870,17 +905,17 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
         }
       }
       
-      let stockWarningText = '';
+      // สต๊อกโชว์ทุกรายการ ไม่ใช่เฉพาะตอนของไม่พอ — เซลล์จะได้เห็นของที่พร้อมส่งด้วย
+      // (ของที่ไม่มีใน products จะไม่มีใน stockMap → นับเป็น 0 = ไม่พอ ตามเดิม)
       const itemKey = item.model || item.product_code;
       const stock = stockMap[itemKey] !== undefined ? stockMap[itemKey] : 0;
-      let isOut = false;
-      if (qty > stock) {
-        stockWarningText = `\n   (*** สินค้าไม่พอ คงเหลือ ${stock} ชิ้น ***)`;
-        isOut = true;
-      }
+      const isOut = qty > stock;
+      const stockText = isOut
+        ? `⚠️ สินค้าไม่พอ คงเหลือ ${stock} ชิ้น`
+        : `✅ พร้อมส่ง คงเหลือ ${stock} ชิ้น`;
 
       // Add to plain text summary
-      summaryText += `${itemIdx + 1}. ${itemKey}\n   ${qty} x ${price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${discDesc} = ${itemTotal.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} บ.${stockWarningText}\n`;
+      summaryText += `${itemIdx + 1}. ${itemKey}\n   ${qty} x ${price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${discDesc} = ${itemTotal.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} บ.\n   (${stockText})\n`;
 
       // Add to Flex body
       const itemBoxContents: any[] = [
@@ -901,16 +936,25 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
         }
       ];
 
-      if (isOut) {
-        itemBoxContents.push({
-          type: "text",
-          text: `   (*** สินค้าไม่พอ คงเหลือ ${stock} ชิ้น ***)`,
-          size: "xs",
-          color: "#EF4444",
-          weight: "bold",
-          wrap: true
-        });
-      }
+      // ไฮไลท์สถานะสต๊อก: ไม่พอ = แดง / พร้อมส่ง = เขียว
+      itemBoxContents.push({
+        type: "box",
+        layout: "vertical",
+        margin: "xs",
+        paddingAll: "xs",
+        cornerRadius: "md",
+        backgroundColor: isOut ? "#FEF2F2" : "#ECFDF5",
+        contents: [
+          {
+            type: "text",
+            text: stockText,
+            size: "xs",
+            color: isOut ? "#DC2626" : "#059669",
+            weight: "bold",
+            wrap: true
+          }
+        ]
+      });
 
       // ตรวจสอบราคาหลังหักส่วนลดเทียบกับราคาขั้นต่ำ
       const minPrice = minPriceMap[itemKey] || 0;
@@ -966,6 +1010,19 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
         spacing: "none",
         contents: itemBoxContents
       });
+    });
+
+    // กำหนดส่งเป็นค่าระดับ "ใบ" (ช้าสุดของทุกรายการ) จึงโชว์ท้ายรายการของแต่ละใบ
+    const deliveryText = formatDeliveryTime(quote);
+    summaryText += `🚚 กำหนดส่ง: ${deliveryText}\n`;
+
+    bodyContents.push({
+      type: "text",
+      text: `🚚 กำหนดส่ง: ${deliveryText}`,
+      size: "xs",
+      color: "#4B5563",
+      wrap: true,
+      margin: "md"
     });
 
     const totalSumVal = typeof quote.total_sum === 'number' ? quote.total_sum : (parseFloat(quote.total_sum) || 0);

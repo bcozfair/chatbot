@@ -960,7 +960,7 @@ export async function handleEvent(event: any): Promise<any> {
         }
 
         if (quoteIds) {
-          // ตอบด้วย Flex สรุปร่างเต็ม ๆ เลย (ข้อมูลลูกค้าจะขึ้นเป็น "ยังไม่ระบุ" และไม่มีปุ่มยืนยัน
+          // ตอบด้วย Flex สรุปร่างเต็ม ๆ เลย (ข้อมูลลูกค้าจะขึ้นเป็น "-" และไม่มีปุ่มยืนยัน
           // จนกว่าจะกดเข้าไปเลือกบริษัท/ผู้ติดต่อในหน้า LIFF — ดู isCustomerInfoIncomplete)
           try {
             const draftRes = await pool.query(
