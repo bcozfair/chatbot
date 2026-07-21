@@ -20,7 +20,7 @@ import {
   getBranchesByCodes,
   getBranches,
 } from './db/repositories.js';
-import { getQuotationNo, cancelOldRevision, enrichQuotationData, buildItemSnapshots } from './services/quotationService.js';
+import { confirmQuotationAtomic, enrichQuotationData, buildItemSnapshots } from './services/quotationService.js';
 import {
   loadQuotationRules,
   findBlockingRule,
@@ -80,41 +80,53 @@ app.get('/api/liff/config', (req: any, res: any) => {
   res.json({ liffId });
 });
 
-class TaskQueue {
-  private queue: (() => Promise<void>)[] = [];
+/**
+ * คิวประมวลผล event แบบ FIFO ต่อ key (userId) — event ของผู้ใช้คนเดียวกันจะรันทีละตัว
+ * ไม่ทับกัน (กันการกดปุ่มยืนยันรัว ๆ ชนกันเอง) ส่วนผู้ใช้คนละคนรันขนานกันได้
+ * และจำกัดจำนวน key ที่ทำงานพร้อมกันทั้งระบบด้วย maxConcurrency
+ */
+class KeyedTaskQueue {
+  private queues = new Map<string, (() => Promise<void>)[]>();
+  private activeKeys = new Set<string>();
   private activeCount = 0;
   private maxConcurrency: number;
 
-  constructor(maxConcurrency = 10) {
+  constructor(maxConcurrency = 12) {
     this.maxConcurrency = maxConcurrency;
   }
 
-  public push(task: () => Promise<void>) {
-    this.queue.push(task);
+  public push(key: string, task: () => Promise<void>) {
+    const list = this.queues.get(key);
+    if (list) list.push(task);
+    else this.queues.set(key, [task]);
     this.next();
   }
 
   private next() {
-    if (this.activeCount >= this.maxConcurrency || this.queue.length === 0) {
-      return;
+    for (const [key, tasks] of this.queues) {
+      if (this.activeCount >= this.maxConcurrency) return;
+      // key ที่กำลังทำงานอยู่ให้ข้ามไป ไม่กินสล็อต จนกว่าตัวก่อนหน้าของ key นั้นจะเสร็จ
+      if (this.activeKeys.has(key) || tasks.length === 0) continue;
+
+      const task = tasks.shift()!;
+      if (tasks.length === 0) this.queues.delete(key);
+
+      this.activeKeys.add(key);
+      this.activeCount++;
+      task()
+        .catch((err) => {
+          console.error('[KeyedTaskQueue] Task error:', err);
+        })
+        .finally(() => {
+          this.activeKeys.delete(key);
+          this.activeCount--;
+          this.next();
+        });
     }
-
-    const task = this.queue.shift();
-    if (!task) return;
-
-    this.activeCount++;
-    task()
-      .catch((err) => {
-        console.error('[TaskQueue] Task error:', err);
-      })
-      .finally(() => {
-        this.activeCount--;
-        this.next();
-      });
   }
 }
 
-const webhookQueue = new TaskQueue(10);
+const webhookQueue = new KeyedTaskQueue(12);
 
 // --- Webhook สำหรับรับข้อความและเหตุการณ์จาก LINE ---
 app.post('/callback', line.middleware(lineConfig), (req: any, res: any) => {
@@ -132,10 +144,12 @@ app.post('/callback', line.middleware(lineConfig), (req: any, res: any) => {
 
   if (Array.isArray(req.body.events)) {
     req.body.events.forEach((event: any) => {
-      webhookQueue.push(async () => {
+      // key คิวด้วย userId เพื่อให้ event ของคนเดียวกันรันทีละตัว (groupId/anonymous เป็น fallback)
+      const queueKey = event?.source?.userId || event?.source?.groupId || 'anonymous';
+      webhookQueue.push(queueKey, async () => {
         let timeoutId: NodeJS.Timeout | undefined;
         const timeoutPromise = new Promise((_, reject) => {
-          timeoutId = setTimeout(() => reject(new Error('Processing timeout')), 60000);
+          timeoutId = setTimeout(() => reject(new Error('Processing timeout')), 25000);
         });
 
         try {
@@ -145,16 +159,10 @@ app.post('/callback', line.middleware(lineConfig), (req: any, res: any) => {
           ]);
         } catch (err: any) {
           if (err.message === 'Processing timeout') {
-            console.warn(`[Queue] Timeout — replying error to user`);
-            await lineClient.replyMessage({
-              replyToken: event.replyToken,
-              messages: [{
-                type: 'text' as const,
-                text: '⚠️ ขออภัย ระบบใช้เวลานานเกินไป\nกรุณาพิมพ์คำสั่งใหม่อีกครั้ง 🙏'
-              }]
-            }).catch((replyErr: any) => {
-              console.error('[Queue] Failed to reply timeout error:', replyErr.message || replyErr);
-            });
+            // ห้าม replyMessage ที่นี่ — reply token เป็น single-use และ handler เดิม (handleEvent)
+            // ยังทำงานต่ออยู่ (Promise.race ไม่ได้ cancel มัน) การยิงซ้ำจะแย่ง token กับ handler
+            // ที่กำลังจะตอบสำเร็จ ทำให้ผู้ใช้เห็นข้อความผิด และ Push Message ก็ถูกห้ามอยู่แล้ว
+            console.warn(`[Queue] Timeout (event=${event?.type} user=${queueKey}) — ปล่อยให้ handler เดิมตอบเอง`);
           } else {
             console.error('[Queue] Error processing event:', err.message || err);
           }
@@ -628,7 +636,7 @@ app.post('/api/quotation/draft-cart', express.json(), async (req: any, res: any)
 app.put('/api/quotation/:id', express.json(), async (req: any, res: any) => {
   try {
     const quoteId = req.params.id;
-    const { items, total_sum, customer_name, customer_id, contact_id } = req.body;
+    const { items, total_sum, customer_name, customer_id, contact_id, userId } = req.body;
     if (!items) return res.status(400).json({ error: 'Missing items' });
 
     // ตรวจสอบสินค้าที่บล็อก
@@ -648,11 +656,20 @@ app.put('/api/quotation/:id', express.json(), async (req: any, res: any) => {
       return res.status(404).json({ error: 'Quotation not found' });
     }
 
+    if (!isQuotationOwner(quoteRes.rows[0], userId)) {
+      return res.status(403).json({ error: 'ไม่มีสิทธิ์เข้าถึงใบเสนอราคานี้' });
+    }
+
     const { enrichQuotationData } = await import('./services/quotationService.js');
     const quote = await enrichQuotationData(quoteRes.rows[0]);
 
+    // ยืนยัน/ยกเลิกไปแล้วแก้ไม่ได้ — ตอบ 409 พร้อมสถานะล่าสุด ให้ฝั่ง LIFF reload แทนค้างหน้าเดิม
     if (quote.status === 'confirmed' || quote.status === 'cancelled') {
-      return res.status(400).json({ error: 'Cannot edit confirmed or cancelled quotation' });
+      return res.status(409).json({
+        error: 'ใบเสนอราคานี้ถูกยืนยันหรือยกเลิกไปแล้ว ไม่สามารถแก้ไขได้ กรุณาปิดหน้านี้แล้วเริ่มรายการใหม่',
+        status: quote.status,
+        quotation_no: quote.quotation_no || null
+      });
     }
 
     // คัดกรองสินค้าใหม่ที่พึ่งเพิ่มเข้ามา (ไม่ได้อยู่ใน quote.items เดิม)
@@ -885,16 +902,19 @@ app.put('/api/quotation/:id', express.json(), async (req: any, res: any) => {
     }
 
     // อัปเดตข้อมูลด้วย pool.query
-    await pool.query(`
+    // เงื่อนไข status กัน TOCTOU: ระหว่าง SELECT ด้านบนกับ UPDATE นี้อาจมี confirm/cancel แทรก
+    // ถ้าเขียนทับโดยไม่เช็ค จะดึง status ที่ยืนยันแล้วกลับเป็น draft (rowCount=0 = แพ้ race)
+    const updRes = await pool.query(`
       UPDATE quotations
-      SET 
+      SET
         total_sum = $1,
         status = $2,
         item_details = $3,
         customer_details = $4,
         customer_id = $5,
-        contact_id = $6
-      WHERE id = $7
+        contact_id = $6,
+        updated_at = NOW()
+      WHERE id = $7 AND status <> 'confirmed' AND status <> 'cancelled'
     `, [
       finalSum,
       finalStatus,
@@ -905,12 +925,30 @@ app.put('/api/quotation/:id', express.json(), async (req: any, res: any) => {
       quoteId
     ]);
 
+    if (updRes.rowCount === 0) {
+      // มีการยืนยัน/ยกเลิกแทรกระหว่างแก้ไข — ตอบ 409 ให้ฝั่ง LIFF reload แทนค้างหน้าเดิม
+      return res.status(409).json({
+        error: 'ใบเสนอราคานี้เพิ่งถูกยืนยันหรือยกเลิก ไม่สามารถบันทึกได้ กรุณาปิดหน้านี้แล้วเริ่มรายการใหม่'
+      });
+    }
+
     res.json({ success: true });
   } catch (err: any) {
     console.error("API PUT quotation error:", err);
     res.status(500).json({ error: err.message });
   }
 });
+
+/**
+ * ตรวจว่า userId ที่ส่งมาเป็นเจ้าของใบเสนอราคาจริง
+ * คืน true ถ้าใบไม่มีเจ้าของ (user_id หลุดเพราะ FK ON DELETE SET NULL = ข้อมูลเก่า)
+ * หมายเหตุ: userId มาจาก request body จึงกันได้แค่ "ยิงผิดใบโดยไม่ตั้งใจ" ยังไม่ใช่ security เต็มรูปแบบ
+ * (ต้อง verify LINE ID token ฝั่ง server — อยู่ใน backlog)
+ */
+function isQuotationOwner(quoteRaw: any, userId: string | undefined): boolean {
+  if (!quoteRaw?.user_id) return true;
+  return !!userId && quoteRaw.user_id === userId;
+}
 
 // --- API: ยืนยันใบเสนอราคา (ออกเลขที่ + เปลี่ยนสถานะ) ---
 app.post('/api/quotation/:id/confirm', express.json(), async (req: any, res: any) => {
@@ -925,11 +963,15 @@ app.post('/api/quotation/:id/confirm', express.json(), async (req: any, res: any
       return res.status(404).json({ error: 'Quotation not found' });
     }
 
+    if (!isQuotationOwner(quoteRaw, userId)) {
+      return res.status(403).json({ error: 'ไม่มีสิทธิ์เข้าถึงใบเสนอราคานี้' });
+    }
+
     if (quoteRaw.status === 'cancelled') {
       return res.status(400).json({ error: 'Cannot confirm a cancelled quotation' });
     }
 
-    // Enrich ก่อนเพื่อให้ quote.items มีข้อมูลสำหรับตรวจราคาขั้นต่ำและ getQuotationNo
+    // Enrich ก่อนเพื่อให้ quote.items มีข้อมูลสำหรับตรวจราคาขั้นต่ำและ allocateQuotationNo
     const quote = await enrichQuotationData(quoteRaw);
 
     // กันการยืนยันใบเสนอราคาที่ไม่มีสินค้า (defense-in-depth เผื่อ frontend ถูก bypass)
@@ -1030,36 +1072,26 @@ app.post('/api/quotation/:id/confirm', express.json(), async (req: any, res: any
     }
     const pdfLink = `${reqUrl}/download-pdf/${quoteId}?openExternalBrowser=1`;
 
-    if (quote.status === 'confirmed') {
-      // Already confirmed, just return success without duplicating DB writes or LINE messages
-      return res.json({ success: true, quotation_no: quote.quotation_no, pdf_link: pdfLink });
-    }
-
-    let quoteNo = quote.quotation_no;
-    const isRevision = quote.customer_name && quote.customer_name.includes('revise_from=');
-    if (!quoteNo) {
-      quoteNo = await getQuotationNo(quote);
-    }
-
+    // ยืนยันแบบ atomic + idempotent (ออกเลข + เปลี่ยน status ใน transaction เดียวพร้อม row lock
+    // cancelOldRevision กรณี revision อยู่ใน tx เดียวกัน และไม่เขียนทับ created_at เพราะเลขคำนวณจากมัน)
+    let confirmResult;
     try {
-      const nowStr = new Date().toISOString();
-      await pool.query(
-        "UPDATE quotations SET status = 'confirmed', quotation_no = $1, created_at = $2, updated_at = $2 WHERE id = $3",
-        [quoteNo, nowStr, quoteId]
-      );
+      confirmResult = await confirmQuotationAtomic(quoteId, quote);
     } catch (updateError: any) {
       console.error("Confirm quotation error:", updateError);
       return res.status(500).json({ error: updateError.message });
     }
 
-    if (isRevision) {
-      await cancelOldRevision(quote.customer_name);
+    if (confirmResult.outcome === 'not_found') {
+      return res.status(404).json({ error: 'Quotation not found' });
+    }
+    if (confirmResult.outcome === 'cancelled') {
+      return res.status(400).json({ error: 'Cannot confirm a cancelled quotation' });
     }
 
-    // Send LINE Push Message directly to user from backend disabled by request (ห้ามใช้ Push Message)
-    console.log(`[Push Disabled] Confirm quotation no: ${quoteNo} for user: ${userId}`);
-
-    res.json({ success: true, quotation_no: quoteNo, pdf_link: pdfLink });
+    // confirmed / already_confirmed → success เหมือนกัน (idempotent)
+    console.log(`[Push Disabled] Confirm quotation no: ${confirmResult.quotationNo} for user: ${userId}`);
+    res.json({ success: true, quotation_no: confirmResult.quotationNo, pdf_link: pdfLink });
   } catch (err: any) {
     console.error("API POST confirm error:", err);
     res.status(500).json({ error: err.message });
@@ -1070,9 +1102,10 @@ app.post('/api/quotation/:id/confirm', express.json(), async (req: any, res: any
 app.post('/api/quotation/:id/cancel', express.json(), async (req: any, res: any) => {
   try {
     const quoteId = req.params.id;
+    const { userId } = req.body || {};
 
     const quoteRes = await pool.query(
-      'SELECT status, quotation_no FROM quotations WHERE id = $1',
+      'SELECT status, quotation_no, user_id FROM quotations WHERE id = $1',
       [quoteId]
     );
 
@@ -1081,6 +1114,10 @@ app.post('/api/quotation/:id/cancel', express.json(), async (req: any, res: any)
     }
 
     const quote = quoteRes.rows[0];
+
+    if (!isQuotationOwner(quote, userId)) {
+      return res.status(403).json({ error: 'ไม่มีสิทธิ์เข้าถึงใบเสนอราคานี้' });
+    }
 
     if (quote.status === 'confirmed') {
       return res.status(400).json({ error: 'Cannot cancel a confirmed quotation' });
@@ -1288,7 +1325,7 @@ app.get('/download-pdf/:quoteId', async (req: any, res: any) => {
       return res.status(404).send('Quotation not found or invalid ID.');
     }
 
-    // Enrich ก่อนเพื่อให้ items มีข้อมูลสำหรับ resolveQuoteCompany ใน getQuotationNo และ pdfGenerator
+    // Enrich ก่อนเพื่อให้ items มีข้อมูลสำหรับ resolveQuoteCompany ใน allocateQuotationNo และ pdfGenerator
     const enrichedQuote = await enrichQuotationData(quoteDb);
 
     // ใบที่ยังไม่ยืนยันจะยังไม่มีเลขที่ — แสดง DRAFT แทนการเจนเลขชั่วคราวที่ไม่ถูกบันทึก

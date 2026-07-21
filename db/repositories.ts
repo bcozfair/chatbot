@@ -231,29 +231,32 @@ export async function getRecentMessages(userId: string, limit = 10): Promise<any
 
 // ═══════════════════════════ quotations ═══════════════════════════
 
-export async function getQuotationsByIds(ids: any[]): Promise<any[]> {
-  if (!ids.length) return [];
+export async function getQuotationsByIds(ids: any[], userId: string): Promise<any[]> {
+  if (!ids.length || !userId) return [];
   try {
     const { rows } = await pool.query(
-      `SELECT id, quotation_no FROM quotations WHERE id = ANY($1)`, [ids]);
+      `SELECT id, quotation_no FROM quotations WHERE id = ANY($1) AND user_id = $2`, [ids, userId]);
     return rows;
   } catch (err) { logErr('getQuotationsByIds', err); return []; }
 }
 
-export async function getQuotationsByNos(nos: string[]): Promise<any[]> {
-  if (!nos.length) return [];
+export async function getQuotationsByNos(nos: string[], userId: string): Promise<any[]> {
+  if (!nos.length || !userId) return [];
   try {
     const { rows } = await pool.query(
-      `SELECT id, quotation_no FROM quotations WHERE quotation_no = ANY($1)`, [nos]);
+      `SELECT id, quotation_no FROM quotations WHERE quotation_no = ANY($1) AND user_id = $2`, [nos, userId]);
     return rows;
   } catch (err) { logErr('getQuotationsByNos', err); return []; }
 }
 
 export async function getRecentConfirmedQuotations(userId: string, sinceIso: string): Promise<any[]> {
   try {
+    // ใช้ updated_at (เวลายืนยัน) ไม่ใช่ created_at (เวลาร่าง) เพราะ confirmQuotationAtomic
+    // ไม่เขียนทับ created_at อีกต่อไป — fallback ของ LIFF round-trip จึงต้องดูเวลายืนยันล่าสุด
     const { rows } = await pool.query(
       `SELECT id, quotation_no FROM quotations
-       WHERE user_id = $1 AND status = 'confirmed' AND created_at >= $2`, [userId, sinceIso]);
+       WHERE user_id = $1 AND status = 'confirmed' AND updated_at >= $2
+       ORDER BY updated_at DESC`, [userId, sinceIso]);
     return rows;
   } catch (err) { logErr('getRecentConfirmedQuotations', err); return []; }
 }

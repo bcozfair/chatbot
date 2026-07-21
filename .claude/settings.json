@@ -54,7 +54,23 @@
       "Bash(curl -s --max-time 120 -w 'HTTP total: %{time_total}s\\\\n' -o /dev/null -H 'Authorization: Bearer __TRACKED_VAR__' http://localhost:3011/api/admin/stock-rules)",
       "PowerShell(Get-NetTCPConnection -LocalPort 3011 -State Listen | Select-Object LocalAddress,LocalPort,OwningProcess; Write-Output \"--- node processes ---\"; Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Select-Object ProcessId,CreationDate,@{n='cmd';e={$_.CommandLine.Substring\\(0,[Math]::Min\\(90,$_.CommandLine.Length\\)\\)}} | Format-Table -AutoSize)",
       "PowerShell(Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'chatbot' } | Select-Object ProcessId,ParentProcessId,CreationDate,@{n='cmd';e={ if \\($_.CommandLine.Length -gt 150\\) { $_.CommandLine.Substring\\(0,150\\) } else { $_.CommandLine } }} | Format-List)",
-      "PowerShell(foreach \\($p in 14828,1948,9304,5924,16076,9332\\) { try { Stop-Process -Id $p -Force -ErrorAction Stop; Write-Output \"killed $p\" } catch { Write-Output \"already gone: $p\" } }; Start-Sleep -Seconds 3; Write-Output \"--- remaining chatbot node procs ---\"; Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'chatbot' } | Select-Object ProcessId,@{n='cmd';e={ if \\($_.CommandLine.Length -gt 100\\) { $_.CommandLine.Substring\\(0,100\\) } else { $_.CommandLine } }} | Format-Table -AutoSize)"
+      "PowerShell(foreach \\($p in 14828,1948,9304,5924,16076,9332\\) { try { Stop-Process -Id $p -Force -ErrorAction Stop; Write-Output \"killed $p\" } catch { Write-Output \"already gone: $p\" } }; Start-Sleep -Seconds 3; Write-Output \"--- remaining chatbot node procs ---\"; Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'chatbot' } | Select-Object ProcessId,@{n='cmd';e={ if \\($_.CommandLine.Length -gt 100\\) { $_.CommandLine.Substring\\(0,100\\) } else { $_.CommandLine } }} | Format-Table -AutoSize)",
+      "Bash(echo \"=== exit: $? ===\")",
+      "Bash(echo \"exit: $?\")",
+      "Bash(echo \"tsc exit: $?\")",
+      "Bash(grep -n \"PUT\\\\|saveQuote\\\\|api/quotation/\\\\${\" liff_pages/quote-edit.html)",
+      "Bash(grep -n \"fetch\\(\\\\`/api/quotation/\\\\|fetchWithTimeout\\(\\\\`/api/quotation/\" liff_pages/quote-edit.html)",
+      "Bash(grep -n \"fetch\\(\\\\`/api/quotation/\" liff_pages/quote-edit.html)",
+      "Bash(grep -n \"api/quotation/\\\\${\" liff_pages/quote-edit.html)",
+      "Bash(grep -n \"action === 'select_product'\\\\|SELECT \\\\* FROM quotations WHERE user_id = \\\\$1 AND status = 'pending_product'\\\\|slots\\\\[slotIdx\\\\]\\\\|DELETE FROM quotations WHERE id = \\\\$1\" handlers/lineHandler.ts)",
+      "Bash(grep -n \"from '../config/db\\\\|import { pool\\\\|withTransaction\" handlers/lineHandler.ts)",
+      "Bash(grep -v \"^$\")",
+      "Bash(grep -vE \"^>|^$\")",
+      "Bash(taskkill //F //IM node.exe)",
+      "Read(//tmp/**)",
+      "Bash(netstat -ano)",
+      "Bash(curl -s -o /dev/null -w \"server: %{http_code}\\\\n\" http://localhost:3011/)",
+      "Bash(grep -vE \"injected env|^>|^$\")"
     ]
   }
 }

@@ -11,9 +11,16 @@ const dbConfig = {
   database: process.env.PG_DATABASE,
   user: process.env.PG_USER,
   password: process.env.PG_PASSWORD,
-  max: 20,
-  // ถ้า pool หมด ให้ throw ออกมาแทนที่จะค้างรอไม่มีกำหนด
-  connectionTimeoutMillis: 10000,
+  // webhook 12 + REST จาก LIFF ~15 + PDF ~3 + สำรอง ยังต่ำกว่า max_connections=100 ของ PostgreSQL
+  max: 40,
+  min: 4,
+  idleTimeoutMillis: 30000,
+  // ถ้า pool หมด ให้ throw เร็ว (5 วิ) แทนการค้างสะสมจน request ถล่มกันเอง
+  connectionTimeoutMillis: 5000,
+  // กัน query ค้างถือ connection ไว้ตลอดกาล
+  statement_timeout: 15000,
+  query_timeout: 15000,
+  keepAlive: true,
 };
 
 export const pool = new Pool(dbConfig);

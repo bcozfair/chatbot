@@ -18,6 +18,7 @@
     "sync:products": "tsx scripts/sync/syncProducts.ts",
     "sync:customers": "tsx scripts/sync/syncCustomers.ts",
     "sync:saleorders": "tsx scripts/sync/syncSaleorders.ts",
+    "diag:confirm-race": "tsx scripts/diag/confirmRaceDiag.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {

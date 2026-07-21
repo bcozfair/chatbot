@@ -1,5 +1,5 @@
 import { lineClient, createChatCompletion } from '../config/clients.js';
-import { pool } from '../config/db.js';
+import { pool, withTransaction } from '../config/db.js';
 import {
   getSalespersonByUserId,
   insertSalesperson,
@@ -34,10 +34,10 @@ import {
   splitCustomerContact
 } from '../services/customerService.js';
 import {
-  getQuotationNo,
+  confirmQuotationAtomic,
+  type ConfirmResult,
   processQuotationRequest,
   resolveContactFlow,
-  cancelOldRevision,
   updateQuotationCustomerSnapshot,
   insertDraftQuotations,
   enrichQuotationData
@@ -113,23 +113,122 @@ function buildResolvedItem(dbProduct: any, item: any, quoteData: any): { itemFor
 // คืน 2 ข้อความ: ปุ่ม candidate + ปุ่มค้นหาเพิ่มเติม (ทางออกเมื่อไม่มี candidate ตัวไหนถูก — คงไว้เหมือน flow เดิม)
 function buildProductSelectionMessages(slot: any, slotIndex: number, userId: string): any[] {
   const query = String(slot?.item?.model || slot?.item?.product_code || '').trim();
-  const options = (slot.candidates || []).map((c: any, i: number) => {
+
+  // ปุ่มเลือกรุ่น: model เด่นชัด (ตัวใหญ่/น้ำเงิน) กว่าราคา (เขียว) และจำนวนคงเหลือ (เทา/แดงถ้าหมด)
+  const optionBoxes: any[] = (slot.candidates || []).map((c: any, i: number) => {
     const price = Number(c.sales_price || 0).toLocaleString();
     const stock = Number(c.actual_quantity || 0);
+    const outOfStock = stock <= 0;
     return {
-      label: `${c.model}\n💵 ฿${price}  •  📦 คงเหลือ ${stock}`,
-      data: `action=select_product&slot=${slotIndex}&pick=${i}`,
-      displayText: `เลือกรุ่น ${c.model}`
+      type: 'box',
+      layout: 'vertical',
+      backgroundColor: outOfStock ? '#FEF2F2' : '#F9FAFB',
+      cornerRadius: 'md',
+      paddingAll: '10px',
+      spacing: 'xs',
+      margin: 'sm',
+      action: {
+        type: 'postback',
+        data: `action=select_product&slot=${slotIndex}&pick=${i}`,
+        displayText: `เลือกรุ่น ${c.model}`
+      },
+      contents: [
+        {
+          type: 'text',
+          text: String(c.model || ''),
+          weight: 'bold',
+          size: 'md',
+          color: '#1D4ED8',
+          wrap: true
+        },
+        {
+          type: 'box',
+          layout: 'horizontal',
+          spacing: 'sm',
+          contents: [
+            {
+              type: 'text',
+              text: `💵 ฿${price}`,
+              size: 'xs',
+              color: '#059669',
+              flex: 1,
+              wrap: true
+            },
+            {
+              type: 'text',
+              text: outOfStock ? '📦 คงเหลือ 0' : `📦 คงเหลือ ${stock}`,
+              size: 'xs',
+              color: outOfStock ? '#DC2626' : '#6B7280',
+              weight: outOfStock ? 'bold' : 'regular',
+              align: 'end',
+              flex: 0
+            }
+          ]
+        }
+      ]
     };
   });
 
-  const messages: any[] = [
-    createListFlexMessage(
-      '📦 เลือกรุ่นสินค้าที่ถูกต้อง',
-      `พบหลายรุ่นใกล้เคียงกับ "${query}" ครับ กรุณากดเลือกรุ่นที่ถูกต้องด้านล่างนี้ 👇`,
-      options
-    )
-  ];
+  optionBoxes.push({
+    type: 'button',
+    action: {
+      type: 'postback',
+      label: '❌ ยกเลิกรายการนี้',
+      data: 'action=cancel_pending',
+      displayText: 'ยกเลิก'
+    },
+    style: 'link',
+    color: '#EF4444',
+    height: 'sm',
+    margin: 'md'
+  });
+
+  const productFlex = {
+    type: 'flex',
+    altText: '📦 เลือกรุ่นสินค้าที่ถูกต้อง',
+    contents: {
+      type: 'bubble',
+      size: 'giga',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: '#1D4ED8',
+        paddingAll: '12px',
+        contents: [
+          {
+            type: 'text',
+            text: '📦 เลือกรุ่นสินค้าที่ถูกต้อง',
+            weight: 'bold',
+            color: '#FFFFFF',
+            size: 'md'
+          }
+        ]
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        paddingAll: '12px',
+        contents: [
+          {
+            type: 'text',
+            text: `พบหลายรุ่นใกล้เคียงกับ "${query}" ครับ กรุณากดเลือกรุ่นที่ถูกต้อง 👇`,
+            wrap: true,
+            size: 'xs',
+            color: '#6B7280'
+          },
+          {
+            type: 'box',
+            layout: 'vertical',
+            margin: 'md',
+            spacing: 'xs',
+            contents: optionBoxes
+          }
+        ]
+      }
+    }
+  };
+
+  const messages: any[] = [productFlex];
 
   const liffProductSearchId = process.env.LIFF_PRODUCT_SEARCH_ID || process.env.LIFF_QUOTE_ID || '';
   if (liffProductSearchId) {
@@ -398,16 +497,18 @@ export async function handleEvent(event: any): Promise<any> {
           const pdfLink = `${reqUrl}/download-pdf/${qId}?openExternalBrowser=1`;
 
           if (currentQuote.status === 'confirmed') {
+            // ยืนยันไปแล้ว — แสดงผลสำเร็จเหมือนเดิม (ผู้กดยืนยันต้องเห็น ✅ เสมอ ไม่ใช่ข้อความคลุมเครือ)
+            const confirmedNo = currentQuote.quotation_no || '-';
             replyMessages.push({
               type: 'text',
-              text: `ℹ️ ใบเสนอราคาเลขที่: ${currentQuote.quotation_no || '-'} ได้รับการยืนยันออกเอกสารเรียบร้อยแล้ว`
+              text: `✅ ยืนยันสำเร็จ!\n📄 ใบเสนอราคาเลขที่: ${confirmedNo}`
             });
             replyMessages.push({
               type: 'template',
-              altText: `ดาวน์โหลดใบเสนอราคา ${currentQuote.quotation_no} (PDF)`,
+              altText: `ดาวน์โหลดใบเสนอราคา ${confirmedNo} (PDF)`,
               template: {
                 type: 'buttons',
-                text: `ดาวน์โหลดใบเสนอราคา ${currentQuote.quotation_no}`,
+                text: `ดาวน์โหลดใบเสนอราคา ${confirmedNo}`,
                 actions: [
                   {
                     type: 'uri',
@@ -502,40 +603,13 @@ export async function handleEvent(event: any): Promise<any> {
             }
           }
 
-          // 2. ถ้ามีเลขที่อยู่แล้วให้ใช้เลขเดิม (ป้องกันการกดยืนยันซ้ำแล้วเลขรันเพิ่ม)
-          let quoteNo = currentQuote.quotation_no;
-          const isRevision = currentQuote.customer_name && currentQuote.customer_name.includes('revise_from=');
-          if (!quoteNo) {
-            quoteNo = await getQuotationNo(currentQuote);
-          }
-          
-          const updatePayload: any = {
-            status: 'confirmed',
-            quotation_no: quoteNo
-          };
-          if (isRevision) {
-            updatePayload.created_at = new Date().toISOString();
-          }
-
-          // 3. อัปเดตสถานะเป็น confirmed และบันทึก quotation_no ลงในฐานข้อมูล
-          let hasUpdateError = false;
+          // 2. ยืนยันแบบ atomic + idempotent (ออกเลข + เปลี่ยน status ใน transaction เดียว
+          //    พร้อม row lock — กันกดพร้อมกันได้เลขซ้ำ/สถานะเพี้ยน และ cancelOldRevision อยู่ใน tx เดียวกัน)
+          let confirmResult: ConfirmResult;
           try {
-            if (isRevision && updatePayload.created_at) {
-              await pool.query(
-                "UPDATE quotations SET status = $1, quotation_no = $2, created_at = $3, updated_at = NOW() WHERE id = $4",
-                [updatePayload.status, updatePayload.quotation_no, updatePayload.created_at, qId]
-              );
-            } else {
-              await pool.query(
-                "UPDATE quotations SET status = $1, quotation_no = $2, updated_at = NOW() WHERE id = $3",
-                [updatePayload.status, updatePayload.quotation_no, qId]
-              );
-            }
+            confirmResult = await confirmQuotationAtomic(qId, currentQuote);
           } catch (err) {
-            console.error("Update confirmed error:", err);
-            hasUpdateError = true;
-          }
-          if (hasUpdateError) {
+            console.error("confirmQuotationAtomic error:", err);
             replyMessages.push({
               type: 'text',
               text: `❌ เกิดข้อผิดพลาดในการยืนยันใบเสนอราคา ID: ${qId}`
@@ -543,11 +617,17 @@ export async function handleEvent(event: any): Promise<any> {
             continue;
           }
 
-          if (isRevision) {
-            await cancelOldRevision(currentQuote.customer_name);
+          if (confirmResult.outcome === 'not_found') {
+            replyMessages.push({ type: 'text', text: `❌ ไม่พบข้อมูลใบเสนอราคา ID: ${qId}` });
+            continue;
+          }
+          if (confirmResult.outcome === 'cancelled') {
+            replyMessages.push({ type: 'text', text: `❌ ใบเสนอราคานี้ถูกยกเลิกไปแล้ว ไม่สามารถยืนยันได้` });
+            continue;
           }
 
-          // สร้างลิงก์ให้ดาวน์โหลด โดยส่งแค่ quoteId ไป (ระบบจะไปวาด PDF สดๆ เมื่อเซลส์กดลิงก์)
+          // confirmed และ already_confirmed → ตอบผลสำเร็จเหมือนกัน (ผู้กดยืนยันต้องเห็น ✅ เสมอ)
+          const quoteNo = confirmResult.quotationNo;
           replyMessages.push({
             type: 'text',
             text: `✅ ยืนยันสำเร็จ!\n📄 ใบเสนอราคาเลขที่: ${quoteNo}`
@@ -764,64 +844,77 @@ export async function handleEvent(event: any): Promise<any> {
         const slotIdx = parseInt(params.get('slot') || '-1', 10);
         const pick = parseInt(params.get('pick') || '-1', 10);
 
-        // โหลด context ที่ค้างไว้ (pending_product) ของเซลส์คนนี้
-        let pending: any = null;
+        // โหลด + แก้ slot + persist แบบ atomic (SELECT ... FOR UPDATE) กัน lost update เวลากดเลือกรุ่น
+        // ซ้อนกัน (KeyedTaskQueue serialize ต่อ user อยู่แล้ว นี่คือ defense-in-depth ชั้นที่สอง)
+        // reply/processQuotationRequest ทำนอก transaction เสมอ (ห้าม network ใน tx)
+        let outcome: 'no_pending' | 'invalid' | 'next' | 'done' = 'no_pending';
+        let slots: any[] = [];
+        let billCtx: any = {};
+        let nextIdx = -1;
         try {
-          const res = await pool.query(
-            "SELECT * FROM quotations WHERE user_id = $1 AND status = 'pending_product' ORDER BY created_at DESC LIMIT 1",
-            [userId]
-          );
-          pending = res.rows[0] || null;
+          await withTransaction(async (client) => {
+            const res = await client.query(
+              "SELECT * FROM quotations WHERE user_id = $1 AND status = 'pending_product' ORDER BY created_at DESC LIMIT 1 FOR UPDATE",
+              [userId]
+            );
+            const pending = res.rows[0] || null;
+            if (!pending) { outcome = 'no_pending'; return; }
+
+            slots = Array.isArray(pending.item_details) ? pending.item_details : [];
+            billCtx = pending.customer_details || {};
+            const slot = slots[slotIdx];
+            if (!slot || slot.resolved || !Array.isArray(slot.candidates) || !slot.candidates[pick]) {
+              outcome = 'invalid';
+              return;
+            }
+
+            // resolve รุ่นที่กดเลือก → คำนวณราคา/ส่วนลดด้วยตรรกะเดียวกับตอนสกัดครั้งแรก (buildResolvedItem)
+            const chosen = slot.candidates[pick];
+            const { itemForDb } = buildResolvedItem(chosen, slot.item, billCtx);
+            slots[slotIdx] = { resolved: true, itemForDb };
+
+            nextIdx = slots.findIndex((s: any) => !s.resolved && Array.isArray(s.candidates) && s.candidates.length > 0);
+            if (nextIdx !== -1) {
+              // ยังมีรุ่นกำกวมเหลือ → อัปเดต state ไว้ก่อน
+              await client.query(
+                "UPDATE quotations SET item_details = $1, updated_at = NOW() WHERE id = $2",
+                [JSON.stringify(slots), pending.id]
+              );
+              outcome = 'next';
+            } else {
+              // ครบทุกรุ่นแล้ว → เคลียร์ pending_product แล้วค่อยเดินหน้าออกใบต่อ (นอก tx)
+              await client.query("DELETE FROM quotations WHERE id = $1", [pending.id]);
+              outcome = 'done';
+            }
+          });
         } catch (err) {
-          console.error('[select_product] load pending error:', err);
+          console.error('[select_product] transaction error:', err);
+          return lineClient.replyMessage({
+            replyToken: event.replyToken,
+            messages: [{ type: 'text', text: '❌ เกิดข้อผิดพลาด รบกวนลองใหม่อีกครั้งครับ' }]
+          });
         }
-        if (!pending) {
+
+        if (outcome === 'no_pending') {
           return lineClient.replyMessage({
             replyToken: event.replyToken,
             messages: [{ type: 'text', text: '❌ เซสชันหมดอายุหรือไม่มีรายการที่รอเลือกรุ่น รบกวนพิมพ์คำสั่งเสนอราคาใหม่อีกครั้งครับ' }]
           });
         }
-
-        const slots: any[] = Array.isArray(pending.item_details) ? pending.item_details : [];
-        const billCtx: any = pending.customer_details || {};
-        const slot = slots[slotIdx];
-
-        if (!slot || slot.resolved || !Array.isArray(slot.candidates) || !slot.candidates[pick]) {
+        if (outcome === 'invalid') {
           return lineClient.replyMessage({
             replyToken: event.replyToken,
             messages: [{ type: 'text', text: '❌ ตัวเลือกไม่ถูกต้องหรือหมดอายุ รบกวนลองใหม่อีกครั้งครับ' }]
           });
         }
-
-        // resolve รุ่นที่กดเลือก → คำนวณราคา/ส่วนลดด้วยตรรกะเดียวกับตอนสกัดครั้งแรก (buildResolvedItem)
-        const chosen = slot.candidates[pick];
-        const { itemForDb } = buildResolvedItem(chosen, slot.item, billCtx);
-        slots[slotIdx] = { resolved: true, itemForDb };
-
-        const nextIdx = slots.findIndex((s: any) => !s.resolved && Array.isArray(s.candidates) && s.candidates.length > 0);
-        if (nextIdx !== -1) {
-          // ยังมีรุ่นกำกวมเหลือ → อัปเดต state แล้วโชว์ปุ่มของตัวถัดไป
-          try {
-            await pool.query(
-              "UPDATE quotations SET item_details = $1, updated_at = NOW() WHERE id = $2",
-              [JSON.stringify(slots), pending.id]
-            );
-          } catch (err) {
-            console.error('[select_product] update pending error:', err);
-          }
+        if (outcome === 'next') {
           return lineClient.replyMessage({
             replyToken: event.replyToken,
             messages: buildProductSelectionMessages(slots[nextIdx], nextIdx, userId) as any
           });
         }
 
-        // ครบทุกรุ่นแล้ว → เคลียร์ pending_product แล้วเดินหน้าออกใบเสนอราคาต่อ (เหมือน flow QUOTATION ปกติ)
-        try {
-          await pool.query("DELETE FROM quotations WHERE id = $1", [pending.id]);
-        } catch (err) {
-          console.error('[select_product] delete pending error:', err);
-        }
-
+        // outcome === 'done'
         const itemsForDb = slots.map((s: any) => s.itemForDb).filter(Boolean);
         const result = await processQuotationRequest(
           userId,
@@ -981,11 +1074,11 @@ export async function handleEvent(event: any): Promise<any> {
           let quotes: any[] | null = null;
 
           if (quoteIds.length > 0) {
-            // Fetch quotation details from postgresdb using IDs
-            quotes = await getQuotationsByIds(quoteIds);
+            // Fetch quotation details from postgresdb using IDs (กรอง user_id กันดึงใบคนอื่น)
+            quotes = await getQuotationsByIds(quoteIds, userId);
           } else if (quotationNos.length > 0) {
-            // Fetch quotation details from postgresdb using quotation numbers
-            quotes = await getQuotationsByNos(quotationNos);
+            // Fetch quotation details from postgresdb using quotation numbers (กรอง user_id)
+            quotes = await getQuotationsByNos(quotationNos, userId);
           } else {
             // Fallback: Query the latest confirmed quotations for this user in the last 1 minute
             const oneMinuteAgo = new Date(Date.now() - 60 * 1000).toISOString();
@@ -1095,7 +1188,7 @@ export async function handleEvent(event: any): Promise<any> {
       ) {
         const quotationNos = trimmedContent.toUpperCase().match(/(?:QT|QP)-[0-9]+(?:-R[0-9]+)?/g) || [];
         try {
-          const quotes = await getQuotationsByNos(quotationNos);
+          const quotes = await getQuotationsByNos(quotationNos, userId);
 
           if (quotes && quotes.length > 0) {
             const reqUrl = process.env.APP_URL || '';

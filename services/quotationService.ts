@@ -1,4 +1,4 @@
-import { pool, type DbExecutor } from '../config/db.js';
+import { pool, withTransaction, type DbExecutor } from '../config/db.js';
 import { getCustomerByDisplayName, getFirstContact, getCompanyAddressRows, getContactById } from '../db/repositories.js';
 import {
   findCustomerCandidates,
@@ -44,100 +44,125 @@ const cleanAddressField = (fieldVal: any, rawState: any, zip: any) => {
   return filtered.join(' ');
 };
 
-export async function getNextRevisionNo(baseQuoteNo: string, executor: DbExecutor = pool): Promise<string> {
-  let data: any[] = [];
-  try {
-    const res = await executor.query(
-      "SELECT quotation_no FROM quotations WHERE quotation_no IS NOT NULL AND quotation_no ILIKE $1",
-      [`${baseQuoteNo}-%`]
-    );
-    data = res.rows;
-  } catch (error) {
-    console.error("Error fetching revisions:", error);
-    return `${baseQuoteNo}-01`;
-  }
-
-  let maxRev = 0;
-  if (data && data.length > 0) {
-    data.forEach((q: any) => {
-      const match = q.quotation_no.match(/-\d+$/);
-      if (match) {
-        const rev = parseInt(match[0].substring(1));
-        if (rev > maxRev) {
-          maxRev = rev;
-        }
-      }
-    });
-  }
-
-  const nextRev = maxRev + 1;
-  const nextRevStr = String(nextRev).padStart(2, '0');
-  return `${baseQuoteNo}-${nextRevStr}`;
+/**
+ * เพิ่มตัวนับของ key แล้วคืนลำดับใหม่แบบ atomic (row lock ผ่าน ON CONFLICT DO UPDATE)
+ * ต้องเรียกภายใน transaction (executor = PoolClient) เพื่อให้ lock ถูกถือจนกว่าจะ COMMIT
+ */
+async function bumpCounter(key: string, executor: DbExecutor): Promise<number> {
+  const { rows } = await executor.query(
+    `INSERT INTO quotation_counters (counter_key, last_seq) VALUES ($1, 1)
+     ON CONFLICT (counter_key) DO UPDATE
+       SET last_seq = quotation_counters.last_seq + 1, updated_at = NOW()
+     RETURNING last_seq`,
+    [key]
+  );
+  return rows[0].last_seq;
 }
 
-export async function getQuotationNo(quoteData: any, executor: DbExecutor = pool): Promise<string> {
-  if (!quoteData || !quoteData.created_at) {
-    return "QP-XXXX05000";
-  }
-  
-  // ตรวจสอบว่าเป็นใบเสนอราคาแก้ไข (Revision) หรือไม่
+/**
+ * จองเลขที่ใบเสนอราคาแบบ atomic ผ่านตาราง quotation_counters (แทนการ COUNT-then-INSERT ที่ race)
+ * ต้องเรียกภายใน transaction เท่านั้น (executor = PoolClient) เพราะ row lock ของ counter
+ * ต้องถูกถือไว้จนกว่าจะ COMMIT พร้อมกับการ UPDATE status
+ *
+ * เดือนของเลขยึด quoteData.created_at (วันที่ร่าง) ตามเดิม — จึงต้องไม่เขียนทับ created_at ตอนยืนยัน
+ */
+export async function allocateQuotationNo(quoteData: any, executor: DbExecutor): Promise<string> {
+  // 1) revision → นับต่อจากเลขฐาน (แกะ revise_from จาก customer_name)
   let reviseFrom: string | null = null;
-  if (quoteData.customer_name && quoteData.customer_name.includes(' | ')) {
+  if (quoteData?.customer_name && quoteData.customer_name.includes(' | ')) {
     const parts = quoteData.customer_name.split(' | ');
     if (parts[2]) {
       try {
-        const meta = Object.fromEntries(new URLSearchParams(parts[2]));
-        reviseFrom = meta.revise_from || null;
+        reviseFrom = Object.fromEntries(new URLSearchParams(parts[2])).revise_from || null;
       } catch (err) {
-        console.warn(`[getQuotationNo] parse metadata ไม่สำเร็จ (quote id=${quoteData.id}) meta="${parts[2]}"`, err);
+        console.warn(`[allocateQuotationNo] parse metadata ไม่สำเร็จ (quote id=${quoteData.id})`, err);
       }
     }
   }
-  
   if (reviseFrom) {
-    let baseQuoteNo = reviseFrom;
-    const match = reviseFrom.match(/^((?:QP|QT)-\d+)(-\d+)$/i);
-    if (match) {
-      baseQuoteNo = match[1];
-    }
-    return await getNextRevisionNo(baseQuoteNo, executor);
+    const m = reviseFrom.match(/^((?:QP|QT)-\d+)(-\d+)$/i);
+    const baseQuoteNo = m ? m[1] : reviseFrom;
+    const seq = await bumpCounter(`REV:${baseQuoteNo}`, executor);
+    return `${baseQuoteNo}-${String(seq).padStart(2, '0')}`;
   }
 
+  // 2) เลขปกติ — prefix จากสินค้ารายการแรก, เดือนจาก created_at (วันที่ร่าง)
+  if (!quoteData?.created_at) {
+    throw new Error('[allocateQuotationNo] quoteData.created_at ไม่มีค่า — ไม่สามารถออกเลขได้');
+  }
   let isThemtech = false;
   if (quoteData.items && quoteData.items.length > 0) {
-    const firstItem = quoteData.items[0];
-    const company = await resolveQuoteCompany(firstItem, executor);
-    isThemtech = (company === 'THT');
+    isThemtech = (await resolveQuoteCompany(quoteData.items[0], executor)) === 'THT';
   }
   const prefix = isThemtech ? 'QT' : 'QP';
   const dateObj = new Date(quoteData.created_at);
   const yy = String(dateObj.getFullYear()).slice(-2);
   const mm = String(dateObj.getMonth() + 1).padStart(2, '0');
-  const datePart = `${yy}${mm}`;
-  const startOfMonth = new Date(dateObj.getFullYear(), dateObj.getMonth(), 1).toISOString();
-  const endOfMonth = new Date(dateObj.getFullYear(), dateObj.getMonth() + 1, 1).toISOString();
-  
-  // ดึงรายการในเดือนนี้ที่มีรหัส quotation_no แล้วของแบรนด์นี้เท่านั้น
-  let monthQuotes: any[] = [];
-  try {
-    const res = await executor.query(
-      `SELECT id, quotation_no FROM quotations
-       WHERE status <> 'draft' AND quotation_no IS NOT NULL AND quotation_no ILIKE $1
-         AND created_at >= $2 AND created_at < $3
-       ORDER BY created_at ASC, id ASC`,
-      [`${prefix}-%`, startOfMonth, endOfMonth]
+  const period = `${yy}${mm}`;
+  const seq = await bumpCounter(`${prefix}:${period}`, executor);
+  return `${prefix}-${period}05${String(seq).padStart(3, '0')}`;
+}
+
+export type ConfirmResult =
+  | { outcome: 'confirmed';         quotationNo: string }
+  | { outcome: 'already_confirmed'; quotationNo: string }
+  | { outcome: 'cancelled' }
+  | { outcome: 'not_found' };
+
+/**
+ * ยืนยันใบเสนอราคาแบบ atomic + idempotent — จุดเดียวในระบบที่เปลี่ยน status เป็น confirmed
+ *
+ * ต้องเรียก "หลัง" enrich + ตรวจราคาขั้นต่ำ/โปรโมชันเสร็จแล้ว (ทำนอก transaction) เพราะ
+ * enrichQuotationData ผูกกับ pool ตรง ๆ ถ้าดึงเข้ามาในนี้จะขอ connection ซ้อนขณะถือ row lock จนตัน
+ *
+ * @param enrichedQuote ผลจาก enrichQuotationData ใช้แค่ items/customer_name/created_at สำหรับออกเลข
+ *                      + ตัดสิน revision — status ในนี้ห้ามเชื่อ อ่านใหม่ใต้ row lock เสมอ
+ */
+export async function confirmQuotationAtomic(
+  quoteId: string,
+  enrichedQuote: any
+): Promise<ConfirmResult> {
+  return withTransaction(async (client) => {
+    // 1) ล็อกแถว — ผู้กดยืนยันพร้อมกันคนที่ 2 จะรอตรงนี้จนคนแรก COMMIT แล้วจึงเห็น status ล่าสุด
+    const cur = await client.query(
+      `SELECT id, status, quotation_no FROM quotations WHERE id = $1 FOR UPDATE`,
+      [quoteId]
     );
-    monthQuotes = res.rows;
-  } catch (countError) {
-    console.error(`Error counting ${prefix} quotes:`, countError);
-    return `${prefix}-${datePart}05999`;
-  }
-  
-  // ค้นหาตำแหน่งของตัวนี้ถ้ามีอยู่แล้ว
-  const index = monthQuotes.findIndex((q: any) => q.id === quoteData.id);
-  const sequenceNum = index !== -1 ? (index + 1) : (monthQuotes.length + 1);
-  const sequenceStr = String(sequenceNum).padStart(3, '0');
-  return `${prefix}-${datePart}05${sequenceStr}`;
+    if (cur.rowCount === 0) return { outcome: 'not_found' as const };
+
+    const row = cur.rows[0];
+    if (row.status === 'cancelled') return { outcome: 'cancelled' as const };
+    if (row.status === 'confirmed') {
+      return { outcome: 'already_confirmed' as const, quotationNo: row.quotation_no || '-' };
+    }
+
+    // 2) จองเลข (ใช้เลขเดิมถ้ามีอยู่แล้ว เพื่อไม่เผาเลขซ้ำ) — created_at ยึดของ enrichedQuote (วันที่ร่าง)
+    const quotationNo = row.quotation_no
+      || await allocateQuotationNo(enrichedQuote, client);
+
+    // 3) UPDATE แบบมีเงื่อนไข status + เช็ค rowCount (ห้ามเขียนทับ created_at เพราะเลขคำนวณจากมัน)
+    const upd = await client.query(
+      `UPDATE quotations
+          SET status = 'confirmed',
+              quotation_no = COALESCE(quotation_no, $1),
+              updated_at = NOW()
+        WHERE id = $2 AND status <> 'confirmed' AND status <> 'cancelled'
+      RETURNING quotation_no`,
+      [quotationNo, quoteId]
+    );
+    if (upd.rowCount === 0) {
+      // มี FOR UPDATE แล้วยังโดน 0 แถว = มีทางเขียน status ที่เรายังไม่รู้ ให้ rollback ทั้งชุด
+      throw new Error(`[confirmQuotationAtomic] UPDATE ไม่โดนแถวใด (id=${quoteId}) — สถานะเปลี่ยนระหว่างล็อก`);
+    }
+
+    // 4) ยกเลิกใบเก่ากรณี revision — อยู่ใน tx เดียวกัน ล้มแล้ว rollback ทั้งการยืนยัน
+    const custName = enrichedQuote?.customer_name;
+    if (custName && custName.includes('revise_from=')) {
+      await cancelOldRevision(custName, client);
+    }
+
+    return { outcome: 'confirmed' as const, quotationNo: upd.rows[0].quotation_no };
+  });
 }
 
 export async function resolveQuoteCompany(item: any, executor: DbExecutor = pool): Promise<'PM' | 'THT'> {
@@ -245,18 +270,8 @@ export async function insertDraftQuotations(
   contactId?: number | null,
   preserveDrafts: boolean = false
 ): Promise<any[] | null> {
-  // ลบร่างใบเสนอราคาเดิมที่ค้างอยู่ทั้งหมด ของผู้ใช้รายนี้ออกถาวรทันที
-  // ยกเว้นกรณี preserveDrafts=true (เช่น การแยกใบเพิ่มระหว่างแก้ไข) ที่ต้องเก็บใบเดิมไว้
-  if (!preserveDrafts) {
-    try {
-      await pool.query(
-        "DELETE FROM quotations WHERE user_id = $1 AND status IN ('pending_company', 'pending_contact', 'draft')",
-        [userId]
-      );
-    } catch (err) {
-      console.error("[insertDraftQuotations] Exception during deleting old drafts:", err);
-    }
-  }
+  // การลบร่างเดิม (pending/draft) ย้ายไปทำใน transaction เดียวกับ INSERT ด้านล่าง
+  // เพื่อให้ DELETE+INSERT เป็น atomic — ถ้า INSERT ล้ม ร่างเดิมจะไม่ถูกลบทิ้งไปฟรี ๆ
 
   const items = itemsForDb || [];
   const pmItems: any[] = [];
@@ -482,32 +497,46 @@ export async function insertDraftQuotations(
     });
   }
 
-  const insertedQuotes: any[] = [];
+  // DELETE ร่างเดิม + INSERT ใบใหม่ ใน transaction เดียว (atomic) — enrich ทำนอก tx เสมอ
+  // เพราะ enrichQuotationData ผูกกับ pool ตรง ๆ ถ้าเรียกใน tx จะขอ connection ซ้อนจนตัน
+  let insertedRaw: any[];
   try {
-    for (const q of draftQuotesToInsert) {
-      const res = await pool.query(`
-        INSERT INTO quotations (
-          user_id, total_sum, status,
-          customer_details, item_details, salesperson_id, employee_details,
-          customer_id, contact_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-        RETURNING *
-      `, [
-        q.user_id, q.total_sum, q.status,
-        JSON.stringify(q.customer_details), JSON.stringify(q.item_details), q.salesperson_id, JSON.stringify(q.employee_details),
-        q.customer_id,
-        q.contact_id
-      ]);
-      if (res.rows[0]) {
-        const enriched = await enrichQuotationData(res.rows[0]);
-        insertedQuotes.push(enriched);
+    insertedRaw = await withTransaction(async (client) => {
+      if (!preserveDrafts) {
+        await client.query(
+          "DELETE FROM quotations WHERE user_id = $1 AND status IN ('pending_company', 'pending_contact', 'draft')",
+          [userId]
+        );
       }
-    }
-    return insertedQuotes;
+      const rows: any[] = [];
+      for (const q of draftQuotesToInsert) {
+        const res = await client.query(`
+          INSERT INTO quotations (
+            user_id, total_sum, status,
+            customer_details, item_details, salesperson_id, employee_details,
+            customer_id, contact_id
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          RETURNING *
+        `, [
+          q.user_id, q.total_sum, q.status,
+          JSON.stringify(q.customer_details), JSON.stringify(q.item_details), q.salesperson_id, JSON.stringify(q.employee_details),
+          q.customer_id,
+          q.contact_id
+        ]);
+        if (res.rows[0]) rows.push(res.rows[0]);
+      }
+      return rows;
+    });
   } catch (err) {
     console.error("[insertDraftQuotations] Database Insert Error:", err);
     return null;
   }
+
+  const insertedQuotes: any[] = [];
+  for (const row of insertedRaw) {
+    insertedQuotes.push(await enrichQuotationData(row));
+  }
+  return insertedQuotes;
 }
 
 /**
@@ -1097,6 +1126,8 @@ export async function cancelOldRevision(customerName: string, executor: DbExecut
 
   console.log(`[cancelOldRevision] Attempting to cancel old quotation with quotation_no: ${reviseFrom}`);
   try {
+    // ตั้งใจยกเลิกใบเก่าที่ confirmed อยู่ (revise = ออกใบใหม่แทนใบเดิม) quotation_no ไม่ซ้ำอยู่แล้ว
+    // จึงไม่ต้องมี status guard — การใส่ AND status <> 'confirmed' จะทำให้ไม่ยกเลิกใบเก่าเลย
     await executor.query(
       "UPDATE quotations SET status = 'cancelled' WHERE quotation_no = $1",
       [reviseFrom]

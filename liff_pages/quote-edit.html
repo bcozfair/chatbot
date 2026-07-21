@@ -1898,9 +1898,24 @@
         triggerAutoSave();
       }
 
+      // fetch ที่มี timeout กันหน้าค้างไม่รู้จบเมื่อ backend ช้า/ตัน (default 20 วิ)
+      async function fetchWithTimeout(url, options = {}, ms = 20000) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), ms);
+        try {
+          return await fetch(url, { ...options, signal: controller.signal });
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+
       async function cancelSingleQuote(quoteId) {
         try {
-          await fetch(`/api/quotation/${quoteId}/cancel`, { method: "POST" });
+          await fetchWithTimeout(`/api/quotation/${quoteId}/cancel`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ userId }),
+          });
         } catch (e) {
           console.error("Cancel quote error:", e);
         }
@@ -1919,6 +1934,14 @@
             updateAllSaveStatus("✓ บันทึกสำเร็จ", "saved");
             await refetchQuotationDataSilently();
           } catch (err) {
+            if (err && err.isConflict) {
+              // ใบถูกยืนยัน/ยกเลิกไปแล้ว — โหลดหน้าใหม่ ไม่ปล่อยให้ค้างแก้ไขต่อไม่ได้
+              hasChanges = false;
+              updateAllSaveStatus("⚠️ ใบถูกยืนยัน/ยกเลิกแล้ว", "error");
+              showToast(err.message + " กำลังโหลดใหม่...", "error");
+              setTimeout(() => location.reload(), 2000);
+              return;
+            }
             updateAllSaveStatus("⚠️ บันทึกไม่สำเร็จ", "error");
           }
         }, 1000);
@@ -1950,20 +1973,28 @@
             }
             if (!cleanCompany) cleanCompany = "ลูกค้าทั่วไป";
             if (!cleanContact) cleanContact = "-";
-            const payload = { 
-              items: quote.items, 
+            const payload = {
+              items: quote.items,
               total_sum: totalSum,
               customer_id: quote.customer_id || null,
-              contact_id: quote.contact_id || null
+              contact_id: quote.contact_id || null,
+              userId,
             };
             payload.customer_name = meta.revise_from
               ? `${cleanCompany} | ${cleanContact} | revise_from=${meta.revise_from}`
               : `${cleanCompany} | ${cleanContact}`;
-            const resp = await fetch(`/api/quotation/${quote.id}`, {
+            const resp = await fetchWithTimeout(`/api/quotation/${quote.id}`, {
               method: "PUT",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(payload),
             });
+            if (resp.status === 409) {
+              // ใบถูกยืนยัน/ยกเลิกไปแล้วระหว่างแก้ไข — แจ้งผู้ใช้แล้วปิดหน้า ไม่ปล่อยให้ค้าง
+              const body = await resp.json().catch(() => ({}));
+              const conflictErr = new Error(body.error || "ใบเสนอราคานี้ถูกยืนยันหรือยกเลิกไปแล้ว");
+              conflictErr.isConflict = true;
+              throw conflictErr;
+            }
             if (!resp.ok) throw new Error("Network response was not ok");
           }
           originalData = JSON.parse(JSON.stringify(quotesData));
@@ -2507,20 +2538,35 @@
             quotesData = quotesData.filter((q) => !emptyIds.has(q.id));
             originalData = originalData.filter((q) => !emptyIds.has(q.id));
           }
+          // ยืนยันทีละใบ แต่ไม่ทิ้งใบที่สำเร็จเมื่อใบถัดไปพัง (การยืนยันเป็น idempotent ฝั่ง server
+          // อยู่แล้ว ลองใหม่ได้ปลอดภัย) — เก็บผลสำเร็จไว้ ส่วนใบที่พังค่อยเตือนตอนท้าย
           const results = [];
+          const failures = [];
           for (const quote of quotesData) {
-            const resp = await fetch(`/api/quotation/${quote.id}/confirm`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ userId }),
-            });
-            if (!resp.ok) {
-              const errBody = await resp.json().catch(() => ({}));
-              throw new Error(
-                errBody.error || `เซิร์ฟเวอร์ตอบกลับรหัสสถานะ: ${resp.status}`,
+            try {
+              const resp = await fetchWithTimeout(`/api/quotation/${quote.id}/confirm`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ userId }),
+              });
+              if (!resp.ok) {
+                const errBody = await resp.json().catch(() => ({}));
+                failures.push(errBody.error || `เซิร์ฟเวอร์ตอบกลับรหัสสถานะ: ${resp.status}`);
+                continue;
+              }
+              results.push(await resp.json());
+            } catch (e) {
+              failures.push(
+                e.name === "AbortError" ? "หมดเวลาเชื่อมต่อ กรุณาลองใหม่อีกครั้ง" : (e.message || String(e)),
               );
             }
-            results.push(await resp.json());
+          }
+          if (results.length === 0) {
+            // ไม่มีใบไหนสำเร็จเลย → โยน error ให้ catch ด้านล่างแสดงผล
+            throw new Error(failures[0] || "ยืนยันไม่สำเร็จ");
+          }
+          if (failures.length > 0) {
+            showToast("⚠️ บางใบยืนยันไม่สำเร็จ: " + failures.join("; "), "error");
           }
           const quoteNos = results
             .map((r) => r.quotation_no)
@@ -2587,8 +2633,10 @@
         loaderScreen.style.display = "flex";
         try {
           for (const quote of quotesData)
-            await fetch(`/api/quotation/${quote.id}/cancel`, {
+            await fetchWithTimeout(`/api/quotation/${quote.id}/cancel`, {
               method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ userId }),
             });
           if (liff.isInClient()) {
             try {
