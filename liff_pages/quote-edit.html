@@ -1884,6 +1884,16 @@
         };
       }
 
+      // บริษัท/ผู้ติดต่อที่ผูกไว้จริง — อ่านจาก state เท่านั้น ห้ามอ่านจากช่องค้นหา/ดรอปดาวน์
+      // render() สร้างการ์ดลูกค้าใหม่ทั้งก้อน ทำให้ dropdown ผู้ติดต่อกลับเป็น "กำลังโหลด..." (ค่าว่าง)
+      // แล้วค่อยเติมทีหลังแบบ async — ใครอ่าน DOM ในจังหวะนั้นจะได้ค่าว่างทั้งที่ผูกลูกค้าไว้แล้ว
+      // (เคสจริง: กดบันทึกตอนมีใบว่างต้องเก็บกวาด → saveQuotes เรียก render() ก่อนบันทึกทันที)
+      // state ถูก sync ครบทุกใบโดย selectCompanyForQuote() / onContactSelectChange() / ปุ่มล้างบริษัท
+      function getSelectedCustomer() {
+        const meta = parseCustomerMeta(quotesData[0]);
+        return { company: meta.company || "", contact: meta.contact || "" };
+      }
+
       // ⚠️ mirror ของ calcNetPrice()/calcLineTotal() ใน utils/pricing.ts
       // หน้านี้เป็น vanilla JS ไม่มี bundler (ตาม AGENTS.md) จึง import ไม่ได้
       // เป็น duplication จุดเดียวที่ยอมรับโดยตั้งใจ — แก้สูตรที่ utils/pricing.ts แล้วต้องมา sync ที่นี่ด้วยมือ
@@ -2621,23 +2631,16 @@
       // บันทึกทุกใบขึ้น server — เรียกจากปุ่ม "บันทึก" เท่านั้น (ไม่มี auto-save แล้ว)
       async function saveChangesToServer() {
         try {
+          // ลูกค้าเป็นค่าเดียวของทั้งหน้า (ใช้กับทุกใบ) — อ่านครั้งเดียวนอกลูป
+          const { company: cleanCompany, contact: cleanContact } =
+            getSelectedCustomer();
+          // ระบบอนุญาตเฉพาะลูกค้าที่มีในฐานข้อมูล — ไม่เติมชื่อ default ให้อีกแล้ว
+          if (!cleanCompany || !cleanContact) {
+            throw new Error("กรุณาเลือกบริษัทและผู้ติดต่อจากระบบก่อนบันทึกครับ");
+          }
           for (const quote of quotesData) {
             const totalSum = calcQuoteTotal(quote);
             const meta = parseCustomerMeta(quote);
-            const companyEl = document.getElementById("company-search-global");
-            const contactEl = document.getElementById("contact-select-global");
-            let cleanCompany = companyEl ? companyEl.value.trim() : "";
-            let cleanContact = contactEl ? contactEl.value.trim() : "";
-            if (!companyEl || !contactEl) {
-              cleanCompany = meta.company;
-              cleanContact = meta.contact;
-            }
-            // ระบบอนุญาตเฉพาะลูกค้าที่มีในฐานข้อมูล — ไม่เติมชื่อ default ให้อีกแล้ว
-            if (!cleanCompany || !cleanContact) {
-              throw new Error(
-                "กรุณาเลือกบริษัทและผู้ติดต่อจากระบบก่อนบันทึกครับ",
-              );
-            }
             const payload = {
               items: quote.items,
               total_sum: totalSum,
@@ -3188,14 +3191,8 @@
           try {
             const firstQuote = quotesData[0];
             const meta = parseCustomerMeta(firstQuote);
-            const companyEl = document.getElementById("company-search-global");
-            const contactEl = document.getElementById("contact-select-global");
-            let cleanCompany = companyEl ? companyEl.value.trim() : "";
-            let cleanContact = contactEl ? contactEl.value.trim() : "";
-            if (!companyEl || !contactEl) {
-              cleanCompany = meta.company;
-              cleanContact = meta.contact;
-            }
+            const { company: cleanCompany, contact: cleanContact } =
+              getSelectedCustomer();
             // ระบบอนุญาตเฉพาะลูกค้าที่มีในฐานข้อมูล — ไม่เติมชื่อ default ให้อีกแล้ว
             if (!cleanCompany || !cleanContact) {
               throw new Error(
