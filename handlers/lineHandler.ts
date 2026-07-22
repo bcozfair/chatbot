@@ -44,6 +44,7 @@ import {
   checkMinSalesPrice,
   type MinPriceViolation
 } from '../services/quotationService.js';
+import { applyShippingFeeToQuoteGroup } from '../services/shippingFee.js';
 import { detectQuotationEditIntent, handleQuotationEditRequest } from '../services/quotationAgent.js';
 
 // ข้อความตอบกลับเมื่อเจตนาไม่ชัด (UNCLEAR) — ส่งแบบฟอร์มขอใบเสนอราคาให้เซลส์ก๊อปไปกรอก
@@ -467,6 +468,11 @@ export async function handleEvent(event: any): Promise<any> {
       }
       if (action === 'confirm') {
         const quoteIds = quoteIdParam.split(',').filter(Boolean);
+
+        // ค่าขนส่งอัตโนมัติ — กันเหนียวก่อนออกเลขจริง เผื่อยอดเปลี่ยนหลังบันทึกครั้งสุดท้าย
+        // (ทำก่อนลูปเพราะกฎคิดจากยอดรวมทุกใบ และไม่แตะใบที่ยืนยัน/ยกเลิกไปแล้ว)
+        await applyShippingFeeToQuoteGroup(userId);
+
         const replyMessages: any[] = [];
         for (const qId of quoteIds) {
           // 1. ดึงข้อมูลใบเสนอราคาปัจจุบันก่อนเพื่อดูเวลาสร้าง (created_at)

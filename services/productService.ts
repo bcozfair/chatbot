@@ -225,8 +225,11 @@ async function exactMatch(qNorm: string, codeTrimmed: string): Promise<Product |
       `
       SELECT *
       FROM products
-      WHERE LOWER(REGEXP_REPLACE(COALESCE(model, ''), '[\\s,\\(\\)]', '', 'g')) = $1
-         OR LOWER(REGEXP_REPLACE(COALESCE(name,  ''), '[\\s,\\(\\)]', '', 'g')) = $1
+      WHERE is_system_item = false
+        AND (
+          LOWER(REGEXP_REPLACE(COALESCE(model, ''), '[\\s,\\(\\)]', '', 'g')) = $1
+          OR LOWER(REGEXP_REPLACE(COALESCE(name,  ''), '[\\s,\\(\\)]', '', 'g')) = $1
+        )
       ORDER BY actual_quantity DESC
       LIMIT 1
       `,
@@ -282,6 +285,7 @@ async function multiTokenAndSearch(
       FROM products
       WHERE ${conditions.join(' AND ')}
         AND production NOT ILIKE '%buytosell%'
+        AND is_system_item = false
       ORDER BY actual_quantity DESC
       LIMIT 10
     `;
@@ -342,6 +346,7 @@ async function numericCodeSearch(
         OR LOWER(REGEXP_REPLACE(COALESCE(name,  ''), '[\\s,\\(\\)]', '', 'g')) LIKE $1
       )
       AND production NOT ILIKE '%buytosell%'
+      AND is_system_item = false
       ORDER BY actual_quantity DESC
       LIMIT 10
       `,
@@ -433,6 +438,7 @@ async function splitPartFuzzySearch(
       OR LOWER(REGEXP_REPLACE(COALESCE(name,  ''), '[\\s,\\(\\)]', '', 'g')) LIKE $1
     )
     AND production NOT ILIKE '%buytosell%'
+    AND is_system_item = false
     ORDER BY _score DESC
     LIMIT 5
     `,
@@ -506,6 +512,7 @@ async function fuzzySearch(codeTrimmed: string, qNorm: string, chatContext?: str
     FROM products
     WHERE
       production NOT ILIKE '%buytosell%'
+      AND is_system_item = false
       AND GREATEST(
         similarity(
           LOWER(REGEXP_REPLACE(COALESCE(model, ''), '[\\s,\\(\\)]', '', 'g')), $1

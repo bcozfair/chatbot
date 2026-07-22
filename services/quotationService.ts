@@ -206,8 +206,20 @@ export async function buildItemSnapshots(rawItems: any[], executor: DbExecutor =
     console.error('[buildItemSnapshots] Error fetching quotation rules:', err);
   }
 
+  const { isShippingFeeItem, loadShippingFeeConfig, buildShippingFeeSnapshot } =
+    await import('./shippingFee.js');
+  const shippingCfg = await loadShippingFeeConfig(executor);
+
   const snapshotItems: any[] = [];
   for (const item of rawItems) {
+    // บรรทัดค่าขนส่งมีกติกาคนละชุด: ชื่อ/ราคาเป็นของที่เซลล์ตั้งเอง (ห้ามให้ชื่อ 'ค่าบริการ'
+    // จาก products ทับ) จำนวนกับส่วนลดถูกล็อก และไม่มีวันจัดส่ง/การรับประกัน
+    // มอบงานให้ผู้สร้างบรรทัดนั้นโดยตรง เพื่อให้ shape ออกมาจากที่เดียวเสมอ
+    if (isShippingFeeItem(item, shippingCfg)) {
+      snapshotItems.push(buildShippingFeeSnapshot(shippingCfg, item));
+      continue;
+    }
+
     const code = item.product_code || item.model || item.code || '';
     let dbProduct: any = null;
     try {
@@ -274,6 +286,9 @@ const DELIVERY_DAYS_FALLBACK_OUT_OF_STOCK = 7;
  *
  * ⚠️ เป็นจุดเดียวที่คำนวณเลขนี้ — ทั้ง enrichQuotationData (ที่หน้า LIFF เอาไปโชว์)
  * และ pdfGenerator (ที่พิมพ์ลงเอกสาร) ต้องเรียกตัวนี้ ไม่งั้นเซลล์เห็นเลขคนละตัวกับในไฟล์
+ *
+ * บรรทัดค่าขนส่งถูกข้ามทั้งการนับวันและการตัดสิน all_in_stock — มันไม่ใช่ของที่ต้องผลิต/ส่ง
+ * ถ้านับด้วย สต๊อก 0 ของมันจะดึงทั้งใบไปเป็น "ของไม่พอ" แล้วดันวันส่งขึ้นเป็นเคสสต๊อกขาด
  */
 export function resolveQuotationDeliveryDays(
   items: any[],
@@ -288,12 +303,16 @@ export function resolveQuotationDeliveryDays(
   const perItemDays: number[] = [];
 
   list.forEach((item: any, idx: number) => {
+    const snap = snapsUsable ? snaps[idx] : null;
+    // ฟังก์ชันนี้เป็น sync (pdfGenerator เรียกตรง) จึงอ่าน config มาเทียบไม่ได้ —
+    // ใช้มาร์กที่ buildShippingFeeSnapshot ปั๊มไว้ใน snapshot แทน
+    if (snap?.delivery_source === 'shipping_fee') return;
+
     const qty = Number(item.quantity ?? item.qty) || 0;
     const stock = item.stock !== undefined && item.stock !== null ? Number(item.stock) : 0;
     const hasStock = qty <= stock;
     if (!hasStock) allInStock = false;
 
-    const snap = snapsUsable ? snaps[idx] : null;
     const inDays = snap && snap.delivery_in_stock_days !== undefined && snap.delivery_in_stock_days !== null
       ? Number(snap.delivery_in_stock_days)
       : DELIVERY_DAYS_FALLBACK_IN_STOCK;
@@ -382,7 +401,13 @@ export async function insertDraftQuotations(
   // การลบร่างเดิม (pending/draft) ย้ายไปทำใน transaction เดียวกับ INSERT ด้านล่าง
   // เพื่อให้ DELETE+INSERT เป็น atomic — ถ้า INSERT ล้ม ร่างเดิมจะไม่ถูกลบทิ้งไปฟรี ๆ
 
-  const items = itemsForDb || [];
+  // บรรทัดค่าขนส่งต้องไม่เข้าการแบ่ง PM/THT — มันไม่มี production/brand/series ให้ตัดสิน
+  // resolveQuoteCompany จึงจะตอบ 'PM' เสมอ แล้วสร้างใบ PM เปล่า ๆ ขึ้นมาในเคสที่สั่ง THT ล้วน
+  // ตัดทิ้งตรงนี้แล้วให้ applyShippingFeeToQuoteGroup เติมกลับเองหลัง INSERT
+  const { isShippingFeeItem, loadShippingFeeConfig, applyShippingFeeToQuoteGroup } =
+    await import('./shippingFee.js');
+  const shippingCfg = await loadShippingFeeConfig();
+  const items = (itemsForDb || []).filter((item: any) => !isShippingFeeItem(item, shippingCfg));
   const pmItems: any[] = [];
   const thtItems: any[] = [];
 
@@ -640,6 +665,24 @@ export async function insertDraftQuotations(
   } catch (err) {
     console.error("[insertDraftQuotations] Database Insert Error:", err);
     return null;
+  }
+
+  // ค่าขนส่งอัตโนมัติ — ต้องทำหลัง COMMIT เพราะกฎคิดจากยอดรวมของ "ทุกใบในกลุ่ม"
+  // ซึ่งเพิ่งมีครบตอนนี้ แล้วอ่านแถวกลับมาใหม่เพื่อให้ผู้เรียกได้ item_details ล่าสุด
+  await applyShippingFeeToQuoteGroup(userId);
+  const insertedIds = insertedRaw.map((row: any) => row.id);
+  if (insertedIds.length > 0) {
+    try {
+      const { rows: refreshed } = await pool.query(
+        'SELECT * FROM quotations WHERE id = ANY($1)',
+        [insertedIds]
+      );
+      // เรียงตามลำดับที่ INSERT ไว้เดิม (ผู้เรียกใช้ insertedQuotes[0] เป็นใบหลัก)
+      const byId = new Map(refreshed.map((row: any) => [row.id, row]));
+      insertedRaw = insertedIds.map((id: any) => byId.get(id) ?? insertedRaw.find((r: any) => r.id === id));
+    } catch (err) {
+      console.error('[insertDraftQuotations] อ่านใบกลับหลังปรับค่าขนส่งไม่สำเร็จ — ใช้ค่าก่อนปรับ', err);
+    }
   }
 
   const insertedQuotes: any[] = [];
@@ -1437,6 +1480,12 @@ export async function enrichQuotationData(quoteDb: any): Promise<any> {
       }
     }
 
+    // ค่าขนส่งใช้ config ตัวเดียวกับฝั่งเขียน — is_shipping_fee ที่ส่งออกไปเป็นค่า "คำนวณสด"
+    // ทุกครั้ง ไม่ใช่ field ที่เก็บไว้ จึงไม่ต้องพึ่ง whitelist ด้านล่างในการเดินทางกลับ
+    const { isShippingFeeItem: isShippingFeeLine, loadShippingFeeConfig: loadShippingCfg } =
+      await import('./shippingFee.js');
+    const shippingCfgForEnrich = await loadShippingCfg();
+
     // จัดระเบียบ items เพื่อความเข้ากันได้ย้อนหลังกับ Frontend
     //
     // ⚠️ นี่เป็น whitelist — field ที่ไม่อยู่ในลิสต์นี้จะหายตอน round-trip ผ่าน LIFF editor
@@ -1444,8 +1493,8 @@ export async function enrichQuotationData(quoteDb: any): Promise<any> {
     //   - field ที่ buildItemSnapshots() คำนวณใหม่ได้เอง (warranty_display, delivery_*_days,
     //     delivery_source) → ไม่ต้องเพิ่ม เพราะ input ของมัน (quantity, production/brand/series)
     //     อยู่ในลิสต์นี้แล้ว หายไปก็สร้างใหม่ได้ค่าเดิม
-    //   - field ที่เป็นข้อเท็จจริงของบรรทัดนั้นเองและสร้างใหม่ไม่ได้ (เช่นธง is_shipping_fee
-    //     ที่จะมาในอนาคต) → **ต้องเพิ่ม** ไม่งั้นข้อมูลหายถาวร
+    //   - field ที่เป็นข้อเท็จจริงของบรรทัดนั้นเองและสร้างใหม่ไม่ได้ → **ต้องเพิ่ม**
+    //     ไม่งั้นข้อมูลหายถาวร (ตัวอย่าง: name ของบรรทัดค่าขนส่งที่เซลล์ตั้งเอง — มีในลิสต์แล้ว)
     const legacyItems = itemDetails.map((item: any) => {
       const stockKey = item.model || item.internal_reference;
       const liveStock = stockKey !== undefined && stockMap[stockKey] !== undefined
@@ -1456,6 +1505,8 @@ export async function enrichQuotationData(quoteDb: any): Promise<any> {
         model: item.model || item.internal_reference,
         product_code: item.model || item.internal_reference,
         name: item.name,
+        // ธงสำหรับฝั่งแสดงผล (LIFF / PDF / Flex) — ล็อกช่องจำนวน ซ่อนปุ่มลบ ซ่อนสถานะสต๊อก
+        is_shipping_fee: isShippingFeeLine(item, shippingCfgForEnrich),
         sales_description: item.sales_description || '',
         price: item.price,
         quantity: item.quantity,

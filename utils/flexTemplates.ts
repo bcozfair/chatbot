@@ -910,7 +910,10 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
       
       // สต๊อกโชว์ทุกรายการ ไม่ใช่เฉพาะตอนของไม่พอ — เซลล์จะได้เห็นของที่พร้อมส่งด้วย
       // (ของที่ไม่มีใน products จะไม่มีใน stockMap → นับเป็น 0 = ไม่พอ ตามเดิม)
+      // ยกเว้นค่าขนส่ง: เป็นค่าบริการ ไม่มีสต๊อก จึงโชว์ชื่อรายการแทนรหัสสินค้าและไม่มีแถบสต๊อก
+      const isShippingFeeLine = !!item.is_shipping_fee;
       const itemKey = item.model || item.product_code;
+      const itemLabel = isShippingFeeLine ? `${item.name || 'ค่าขนส่ง'}` : itemKey;
       const stock = stockMap[itemKey] !== undefined ? stockMap[itemKey] : 0;
       const isOut = qty > stock;
       const stockText = isOut
@@ -918,13 +921,14 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
         : `✅ พร้อมส่ง คงเหลือ ${stock} ชิ้น`;
 
       // Add to plain text summary
-      summaryText += `${itemIdx + 1}. ${itemKey}\n   ${qty} x ${price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${discDesc} = ${itemTotal.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} บ.\n   (${stockText})\n`;
+      summaryText += `${itemIdx + 1}. ${itemLabel}\n   ${qty} x ${price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${discDesc} = ${itemTotal.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} บ.\n`;
+      if (!isShippingFeeLine) summaryText += `   (${stockText})\n`;
 
       // Add to Flex body
       const itemBoxContents: any[] = [
         {
           type: "text",
-          text: `${itemIdx + 1}. ${itemKey}`,
+          text: `${itemIdx + 1}. ${itemLabel}`,
           weight: "bold",
           size: "sm",
           color: "#1F2937",
@@ -939,27 +943,30 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
         }
       ];
 
-      // ไฮไลท์สถานะสต๊อก: ไม่พอ = แดง / พร้อมส่ง = เขียว
-      itemBoxContents.push({
-        type: "box",
-        layout: "vertical",
-        margin: "xs",
-        paddingAll: "xs",
-        cornerRadius: "md",
-        backgroundColor: isOut ? "#FEF2F2" : "#ECFDF5",
-        contents: [
-          {
-            type: "text",
-            text: stockText,
-            size: "xs",
-            color: isOut ? "#DC2626" : "#059669",
-            weight: "bold",
-            wrap: true
-          }
-        ]
-      });
+      // ไฮไลท์สถานะสต๊อก: ไม่พอ = แดง / พร้อมส่ง = เขียว (ค่าขนส่งไม่มีสต๊อก จึงไม่มีแถบนี้)
+      if (!isShippingFeeLine) {
+        itemBoxContents.push({
+          type: "box",
+          layout: "vertical",
+          margin: "xs",
+          paddingAll: "xs",
+          cornerRadius: "md",
+          backgroundColor: isOut ? "#FEF2F2" : "#ECFDF5",
+          contents: [
+            {
+              type: "text",
+              text: stockText,
+              size: "xs",
+              color: isOut ? "#DC2626" : "#059669",
+              weight: "bold",
+              wrap: true
+            }
+          ]
+        });
+      }
 
       // ตรวจสอบราคาหลังหักส่วนลดเทียบกับราคาขั้นต่ำ
+      // (ค่าขนส่งมี minimum_sales_price = 0 อยู่แล้ว เงื่อนไข minPrice > 0 จึงกันให้เองโดยปริยาย)
       const minPrice = minPriceMap[itemKey] || 0;
       if (minPrice > 0 && netPrice < minPrice - 0.01) {
         // เช็คว่าผ่านเงื่อนไขโปรโมชันใดๆ หรือไม่ (ถ้าผ่านสิทธิ์โปรโมชันจริง ก็ไม่ต้องแจ้งเตือนและไม่บล็อก)

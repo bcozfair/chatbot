@@ -229,11 +229,28 @@ app.post('/api/quotations', express.json(), async (req: any, res: any) => {
       return res.status(400).json({ error: 'Missing userId' });
     }
 
-    const { insertDraftQuotations } = await import('./services/quotationService.js');
+    const { insertDraftQuotations, getBlockedProductError, validateAndPrepareItems } =
+      await import('./services/quotationService.js');
+
+    // ด่านตรวจกฎสินค้า — ชุดเดียวกับ /api/quotation/draft-cart และ PUT /api/quotation/:id
+    //
+    // endpoint นี้ไม่ได้ถูกเรียกแค่ตอนสร้างใบใหม่ธรรมดา แต่หน้า LIFF ใช้ตอน "แยกใบใหม่"
+    // ด้วย (เพิ่มสินค้าคนละบริษัทกับใบที่เปิดอยู่ → addProductToQuote ยิงมาที่นี่)
+    // เดิมเส้นทางนี้ไม่มีการตรวจเลย สินค้าที่ติดกฎห้ามเสนอราคา/ระงับเมื่อหมดสต็อก
+    // จึงหลุดเข้าใบได้ทั้งที่เส้นทางอื่นดักไว้หมดแล้ว
+    const blockedErrorOnCreate = await getBlockedProductError(items);
+    if (blockedErrorOnCreate) {
+      return res.status(400).json({ error: blockedErrorOnCreate });
+    }
+    const { items: expandedOnCreate, errors: createErrors } = await validateAndPrepareItems(items);
+    if (createErrors.length > 0) {
+      return res.status(422).json({ error: 'VALIDATION_ERROR', violations: createErrors });
+    }
+
     // ยังไม่ได้ระบุบริษัท = ร่างที่ยืนยันไม่ได้ ต้องคาสถานะ pending_company ไว้เสมอ
     const hasCompany = !!(customerName && customerName.split(' | ')[0].trim());
     const finalStatus = hasCompany ? (status || 'draft') : 'pending_company';
-    const insertedQuotes = await insertDraftQuotations(userId, customerName || ' | ', items || [], finalStatus, customerId, contactId, !!preserveDrafts);
+    const insertedQuotes = await insertDraftQuotations(userId, customerName || ' | ', expandedOnCreate, finalStatus, customerId, contactId, !!preserveDrafts);
 
     if (!insertedQuotes || insertedQuotes.length === 0) {
       return res.status(500).json({ error: 'Failed to create quotation' });
@@ -292,6 +309,29 @@ app.post('/api/quotations/delivery-preview', express.json(), async (req: any, re
   }
 });
 
+// --- API: ค่าคงที่ของกฎค่าขนส่ง สำหรับหน้า LIFF จำลองกฎฝั่ง client ---
+// หน้า LIFF ต้องโชว์/ถอดบรรทัดค่าขนส่งทันทีระหว่างเซลล์แก้จำนวน ยังไม่ได้บันทึก
+// จึงต้องรู้เกณฑ์กับราคา — server ยังเป็นผู้ตัดสินจริงตอน PUT เสมอ (services/shippingFee.ts)
+app.get('/api/shipping-fee/config', async (req: any, res: any) => {
+  try {
+    const { loadShippingFeeConfig } = await import('./services/shippingFee.js');
+    const cfg = await loadShippingFeeConfig();
+    res.json({
+      is_active: cfg.isActive && cfg.productId !== null,
+      threshold_before_vat: cfg.thresholdBeforeVat,
+      fee_price: cfg.feePrice,
+      fee_quantity: cfg.feeQuantity,
+      default_item_name: cfg.defaultItemName,
+      product_id: cfg.productId,
+      product_model: cfg.productModel,
+      internal_reference: cfg.productInternalReference
+    });
+  } catch (err: any) {
+    console.error('GET /api/shipping-fee/config error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- API: ค้นหาสินค้าแบบ Real-time ---
 app.get('/api/products/search', async (req: any, res: any) => {
   try {
@@ -324,6 +364,7 @@ app.get('/api/products/search', async (req: any, res: any) => {
       LEFT JOIN product_stock_rules sr ON p.internal_reference = sr.internal_reference
       WHERE (p.model ILIKE $1 OR p.name ILIKE $1 OR p.internal_reference ILIKE $1 OR p.brand ILIKE $1 OR p.product_template_id::text = $2)
         AND (p.production IS NULL OR LOWER(REPLACE(p.production, ' ', '')) NOT LIKE '%buytosell%')
+        AND p.is_system_item = false
       ORDER BY p.actual_quantity DESC
       LIMIT $3
     `, [searchPattern, qTrim, dbLimit]);
@@ -983,6 +1024,11 @@ app.put('/api/quotation/:id', express.json(), async (req: any, res: any) => {
       });
     }
 
+    // ค่าขนส่งอัตโนมัติ — คิดจากยอดรวมทุกใบในกลุ่ม จึงต้องทำหลังใบนี้ถูกเขียนลงไปแล้ว
+    // (หน้า LIFF บันทึกทีละใบ ใบสุดท้ายที่บันทึกจะเป็นตัวสรุปค่าที่ถูกต้อง)
+    const { applyShippingFeeToQuoteGroup } = await import('./services/shippingFee.js');
+    await applyShippingFeeToQuoteGroup(quoteRes.rows[0].user_id);
+
     res.json({ success: true });
   } catch (err: any) {
     console.error("API PUT quotation error:", err);
@@ -1022,8 +1068,15 @@ app.post('/api/quotation/:id/confirm', express.json(), async (req: any, res: any
       return res.status(400).json({ error: 'Cannot confirm a cancelled quotation' });
     }
 
+    // ค่าขนส่งอัตโนมัติ — กันเหนียวก่อนออกเลขจริง เผื่อยอดเปลี่ยนหลังบันทึกครั้งสุดท้าย
+    // ไม่แตะใบที่ยืนยัน/ยกเลิกไปแล้ว จึงไม่กระทบ idempotency ของ endpoint นี้
+    const { applyShippingFeeToQuoteGroup: applyShippingFeeOnConfirm } = await import('./services/shippingFee.js');
+    await applyShippingFeeOnConfirm(quoteRaw.user_id);
+    const refreshedRes = await pool.query('SELECT * FROM quotations WHERE id = $1', [quoteId]);
+    const quoteAfterFee = refreshedRes.rows[0] || quoteRaw;
+
     // Enrich ก่อนเพื่อให้ quote.items มีข้อมูลสำหรับตรวจราคาขั้นต่ำและ allocateQuotationNo
-    const quote = await enrichQuotationData(quoteRaw);
+    const quote = await enrichQuotationData(quoteAfterFee);
 
     // กันการยืนยันใบเสนอราคาที่ไม่มีสินค้า (defense-in-depth เผื่อ frontend ถูก bypass)
     if (!quote.items || !Array.isArray(quote.items) || quote.items.length === 0) {
@@ -2175,6 +2228,81 @@ app.delete('/api/admin/quotation-rules/:id', adminAuthMiddleware, async (req: an
   }
 });
 
+// ============================================================
+//  API Endpoints: Shipping Fee Config (ค่าขนส่งอัตโนมัติ)
+//  ตารางนี้มีแถวเดียว (id = 1) จึงไม่มี POST/DELETE — มีแค่ GET กับ PUT
+// ============================================================
+
+app.get('/api/admin/shipping-fee-config', adminAuthMiddleware, async (req: any, res: any) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT c.*, p.product_template_id, p.model, p.name AS product_name,
+             p.product_group, p.product_category, p.product_sub_category
+        FROM shipping_fee_config c
+        LEFT JOIN LATERAL (
+          SELECT product_template_id, model, name, product_group, product_category, product_sub_category
+            FROM products
+           WHERE internal_reference = c.product_internal_reference AND is_system_item = true
+           ORDER BY product_template_id
+           LIMIT 1
+        ) p ON true
+       WHERE c.id = 1
+    `);
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'ยังไม่มีค่าตั้งค่าค่าขนส่ง — ต้องรัน migration 2026-07-22_01_shipping_fee.sql ก่อน' });
+    }
+    res.json(rows[0]);
+  } catch (err: any) {
+    console.error('GET /api/admin/shipping-fee-config error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+app.put('/api/admin/shipping-fee-config', adminAuthMiddleware, express.json(), async (req: any, res: any) => {
+  try {
+    const { is_active, threshold_before_vat, fee_price, fee_quantity, default_item_name } = req.body;
+
+    const threshold = Number(threshold_before_vat);
+    const price = Number(fee_price);
+    const qty = Number(fee_quantity);
+    const name = String(default_item_name ?? '').trim();
+
+    // ตรวจฝั่ง server ด้วย ไม่พึ่งแค่ฟอร์ม (CHECK constraint เป็นด่านสุดท้าย แต่ error จะอ่านไม่รู้เรื่อง)
+    if (!Number.isFinite(threshold) || threshold < 0) {
+      return res.status(400).json({ error: 'เกณฑ์ยอดก่อน VAT ต้องเป็นตัวเลขไม่ติดลบ' });
+    }
+    if (!Number.isFinite(price) || price < 0) {
+      return res.status(400).json({ error: 'ราคาค่าขนส่งต้องเป็นตัวเลขไม่ติดลบ' });
+    }
+    if (!Number.isFinite(qty) || qty <= 0) {
+      return res.status(400).json({ error: 'จำนวนต้องมากกว่า 0' });
+    }
+    if (!name) {
+      return res.status(400).json({ error: 'ต้องระบุชื่อรายการตั้งต้น' });
+    }
+
+    const { rows } = await pool.query(`
+      UPDATE shipping_fee_config
+         SET is_active = $1, threshold_before_vat = $2, fee_price = $3,
+             fee_quantity = $4, default_item_name = $5, updated_at = NOW()
+       WHERE id = 1
+       RETURNING *
+    `, [is_active !== false, threshold, price, qty, name]);
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'ยังไม่มีค่าตั้งค่าค่าขนส่ง — ต้องรัน migration ก่อน' });
+    }
+
+    // ต้องล้าง cache ทันที ไม่งั้นค่าที่เพิ่งบันทึกจะยังไม่มีผลไปอีกไม่เกิน 60 วินาที
+    invalidateRuleCache('shipping_fee_config');
+
+    res.json(rows[0]);
+  } catch (err: any) {
+    console.error('PUT /api/admin/shipping-fee-config error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- API Endpoints: Products and Customers Search (for Promotions Modal) ---
 
 // 1. GET /api/admin/products/search - Search product models
@@ -2182,10 +2310,11 @@ app.get('/api/admin/products/search', adminAuthMiddleware, async (req: any, res:
   const query = req.query.q || '';
   try {
     const result = await pool.query(
-      `SELECT DISTINCT model 
-       FROM products 
-       WHERE model IS NOT NULL AND model != '' AND model ILIKE $1 
-       ORDER BY model 
+      `SELECT DISTINCT model
+       FROM products
+       WHERE model IS NOT NULL AND model != '' AND model ILIKE $1
+         AND is_system_item = false
+       ORDER BY model
        LIMIT 30`,
       [`%${query}%`]
     );
@@ -2524,8 +2653,9 @@ app.get('/api/admin/stock-rules', adminAuthMiddleware, async (req: any, res: any
   }
 });
 
-// เงื่อนไขสินค้าที่นำมาตั้งกฎระงับได้ (ตัดกลุ่ม Buy to sell ออกให้ตรงกับ /api/products/search)
-const STOCK_RULE_PRODUCT_FILTER = `(p.production IS NULL OR LOWER(REPLACE(p.production, ' ', '')) NOT LIKE '%buytosell%')`;
+// เงื่อนไขสินค้าที่นำมาตั้งกฎระงับได้ (ตัดกลุ่ม Buy to sell + สินค้าที่ระบบสร้างเอง
+// ออกให้ตรงกับ /api/products/search)
+const STOCK_RULE_PRODUCT_FILTER = `(p.production IS NULL OR LOWER(REPLACE(p.production, ' ', '')) NOT LIKE '%buytosell%') AND p.is_system_item = false`;
 const STOCK_RULE_HAS_REF = `(p.internal_reference IS NOT NULL AND TRIM(p.internal_reference) <> '' AND p.internal_reference <> 'N/A')`;
 
 // GET /api/admin/stock-rules/productions - รายชื่อสายการผลิตพร้อมจำนวนสินค้าที่ตั้งกฎได้
@@ -2627,6 +2757,7 @@ app.post('/api/admin/stock-rules', adminAuthMiddleware, express.json(), async (r
           AND p.internal_reference IS NOT NULL
           AND TRIM(p.internal_reference) <> ''
           AND p.internal_reference <> 'N/A'
+          AND p.is_system_item = false
         ON CONFLICT (internal_reference) DO UPDATE SET is_active = EXCLUDED.is_active, updated_at = NOW()
       `, [names, extraRefs, is_active !== false]);
 

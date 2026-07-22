@@ -440,7 +440,8 @@ CREATE TABLE public.products (
     optional_products text,
     sales_description text,
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP
+    updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+    is_system_item boolean DEFAULT false NOT NULL
 );
 
 
@@ -578,6 +579,28 @@ CREATE TABLE public.salesperson (
     branch character varying(255),
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP
+);
+
+
+--
+-- Name: shipping_fee_config; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.shipping_fee_config (
+    id integer DEFAULT 1 NOT NULL,
+    is_active boolean DEFAULT true NOT NULL,
+    threshold_before_vat numeric(15,2) DEFAULT 1000 NOT NULL,
+    fee_price numeric(15,2) DEFAULT 200 NOT NULL,
+    fee_quantity numeric(15,2) DEFAULT 1 NOT NULL,
+    default_item_name text DEFAULT 'ค่าขนส่ง'::text NOT NULL,
+    product_internal_reference text DEFAULT 'SOFBLDXXXX0010'::text NOT NULL,
+    updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    CONSTRAINT shipping_fee_config_name CHECK ((btrim(default_item_name) <> ''::text)),
+    CONSTRAINT shipping_fee_config_price CHECK ((fee_price >= (0)::numeric)),
+    CONSTRAINT shipping_fee_config_qty CHECK ((fee_quantity > (0)::numeric)),
+    CONSTRAINT shipping_fee_config_ref CHECK ((btrim(product_internal_reference) <> ''::text)),
+    CONSTRAINT shipping_fee_config_single_row CHECK ((id = 1)),
+    CONSTRAINT shipping_fee_config_threshold CHECK ((threshold_before_vat >= (0)::numeric))
 );
 
 
@@ -745,6 +768,14 @@ ALTER TABLE ONLY public.salesperson
 
 
 --
+-- Name: shipping_fee_config shipping_fee_config_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shipping_fee_config
+    ADD CONSTRAINT shipping_fee_config_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: sync_state sync_state_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -757,6 +788,13 @@ ALTER TABLE ONLY public.sync_state
 --
 
 CREATE INDEX idx_optional_links_trigger ON public.product_optional_links USING btree (trigger_product_id);
+
+
+--
+-- Name: idx_products_is_system_item; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_products_is_system_item ON public.products USING btree (is_system_item) WHERE (is_system_item = true);
 
 
 --

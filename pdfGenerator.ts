@@ -85,6 +85,10 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
     itemsList.forEach((_item: any, idx: number) => {
       const snap = itemSnapshots[idx];
 
+      // ค่าขนส่งไม่มีการรับประกัน — ถ้าปล่อยผ่าน warranty_display ที่ว่างจะกลายเป็น "1 ปี"
+      // แล้วลากการรับประกันของทั้งใบลงมาเหลือ 1 ปี ทั้งที่สินค้าจริงอาจรับประกัน 3 ปี
+      if (snap?.delivery_source === 'shipping_fee') return;
+
       // ดึงเงื่อนไขการรับประกันจาก snapshot (วันจัดส่งคำนวณรวมทีเดียวหลังลูป)
       const warrantyText = snap.warranty_display || '1 ปี';
       let inMonths = 12;
@@ -133,6 +137,10 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
     let minWarrantyMonths = Infinity;
 
     itemsList.forEach((item: any) => {
+      // ค่าขนส่งไม่ใช่ของที่ต้องผลิต/ส่ง/รับประกัน และ scope ของมันว่างเปล่า
+      // ถ้าปล่อยเข้า resolveQuotationRule จะไปแมตช์กฏ wildcard แล้วเพี้ยนทั้งใบ
+      if (item.is_shipping_fee) return;
+
       const qty = Number(item.quantity) || 0;
       const stock = item.stock !== undefined && item.stock !== null ? Number(item.stock) : 0;
       const hasStock = qty <= stock;
@@ -332,8 +340,9 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
     if (item.remark && item.remark.trim()) {
       weight += 0.4;
     }
+    // ค่าขนส่งไม่แสดงคำเตือนสต๊อก (ดูเงื่อนไขตอน render แถว) จึงไม่กินน้ำหนักส่วนนี้
     const stock = item.stock !== undefined && item.stock !== null ? Number(item.stock) : 0;
-    if ((Number(item.quantity) || 0) > stock) {
+    if (!item.is_shipping_fee && (Number(item.quantity) || 0) > stock) {
       weight += 0.3;
     }
     return weight;
@@ -398,9 +407,10 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
           discountDisplay = "";
         }
 
+        // ค่าขนส่งเป็นค่าบริการ ไม่ใช่ของในสต๊อก — คำเตือน "สินค้าคงเหลือ 0" จะทำให้ลูกค้าสับสน
         const stock = item.stock !== undefined && item.stock !== null ? Number(item.stock) : 0;
         let warningHtml = "";
-        if (qty > stock) {
+        if (!item.is_shipping_fee && qty > stock) {
           warningHtml = `<div style="color: #ef4444; font-size: 10px; font-weight: bold; margin-top: 2px;">(*** สินค้าคงเหลือ ${stock} pcs. ***)</div>`;
         }
 

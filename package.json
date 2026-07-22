@@ -19,6 +19,7 @@
     "sync:customers": "tsx scripts/sync/syncCustomers.ts",
     "sync:saleorders": "tsx scripts/sync/syncSaleorders.ts",
     "diag:confirm-race": "tsx scripts/diag/confirmRaceDiag.ts",
+    "diag:shipping-fee": "tsx scripts/diag/shippingFeeSmoke.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {

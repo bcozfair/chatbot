@@ -287,6 +287,48 @@
         color: var(--danger);
       }
 
+      /* ─── การ์ดค่าบริการ (ค่าขนส่งอัตโนมัติ) ───
+         ใช้โทนส้มแยกจากสินค้าจริงที่เป็นเขียว ให้เห็นตั้งแต่แวบแรกว่าบรรทัดนี้
+         ระบบเป็นคนใส่ ไม่ใช่ของที่เซลล์เพิ่มเอง (และลบเองไม่ได้) */
+      .item-top-bar.is-fee {
+        background: #fff3e0;
+        border-bottom-color: #ffd9a8;
+      }
+      .item-top-bar.is-fee .item-index {
+        background: var(--warning);
+      }
+      .item-top-bar.is-fee .item-code {
+        color: var(--warning);
+      }
+      .item-top-bar.is-fee .item-stock-badge {
+        background: rgba(184, 92, 0, 0.12);
+        color: var(--warning);
+      }
+
+      /* 2 แถวจบ: [ชื่อ | ราคา] / [คำชี้แจง | ยอดรวม] — ไม่โชว์จำนวนเพราะแก้ไม่ได้อยู่แล้ว */
+      .fee-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .fee-row .inp-fee-name {
+        flex: 1;
+        min-width: 0;
+        max-width: none; /* .edit-input ตั้ง max-width 120px ไว้ ช่องชื่อต้องยาวเต็มแถว */
+      }
+      /* ต้องระบุ .item-pq-col ด้วย เพื่อให้ specificity ชนะ .item-pq-col.price-col
+         ที่ประกาศทีหลังในไฟล์นี้และตั้ง flex:1 ไว้ (ไม่งั้นช่องราคาจะกินพื้นที่ครึ่งแถว) */
+      .fee-row .item-pq-col.fee-price-col {
+        flex: 0 0 104px;
+      }
+      .fee-note {
+        font-size: 10px;
+        line-height: 1.35;
+        color: var(--text-muted);
+        flex: 1;
+        min-width: 0;
+      }
+
       /* ─── ITEM BODY ─── */
       .item-body {
         padding: 7px 9px;
@@ -1908,6 +1950,136 @@
         return quote.items.reduce((s, i) => s + calcItemTotal(i), 0);
       }
 
+      // ── ค่าขนส่งอัตโนมัติ ──
+      // ⚠️ mirror ของ services/shippingFee.ts — หน้านี้เป็น vanilla JS ไม่มี bundler (ตาม AGENTS.md)
+      // จึง import ไม่ได้ เป็น duplication แบบเดียวกับสูตรราคาด้านบน แก้ที่ shippingFee.ts
+      // แล้วต้องมา sync ที่นี่ด้วยมือ
+      //
+      // ทำไมต้องมีฝั่ง client: server ปรับบรรทัดนี้ตอน "บันทึก" เท่านั้น แต่เซลล์ต้องเห็นบรรทัด
+      // ขยับทันทีตอนแก้จำนวน/ราคา ไม่งั้นยอดรวมบนหน้าจอจะไม่ตรงกับที่บันทึกจริง
+      // server เป็นผู้ตัดสินเสมอ — ค่าที่คำนวณตรงนี้เป็นแค่ภาพ preview
+      let shippingFeeCfg = null;
+
+      async function loadShippingFeeConfig() {
+        try {
+          const resp = await fetchWithTimeout("/api/shipping-fee/config", {}, 8000);
+          if (!resp.ok) throw new Error(`สถานะ ${resp.status}`);
+          shippingFeeCfg = await resp.json();
+        } catch (err) {
+          // โหลดไม่ได้ = ไม่จำลองกฎฝั่ง client (server ยังทำงานปกติตอนบันทึก)
+          console.error("โหลดค่าตั้งค่าค่าขนส่งไม่สำเร็จ:", err);
+          shippingFeeCfg = null;
+        }
+      }
+
+      function isShippingFeeItem(item) {
+        if (!item || !shippingFeeCfg) return false;
+        const code = String(item.model || item.product_code || "").trim();
+        if (shippingFeeCfg.product_model && code === shippingFeeCfg.product_model)
+          return true;
+        const ref = String(item.internal_reference || "").trim();
+        return (
+          !!shippingFeeCfg.internal_reference &&
+          ref === shippingFeeCfg.internal_reference
+        );
+      }
+
+      /** "มีเครดิต" = customer_payment_terms เป็นรูปแบบ "<เลข> Days" เท่านั้น */
+      function hasCreditTerms(paymentTerms) {
+        return /^\d+\s*days$/i.test(String(paymentTerms == null ? "" : paymentTerms).trim());
+      }
+
+      /**
+       * ปรับบรรทัดค่าขนส่งของทุกใบให้ตรงกฎ — คืน true ถ้ามีอะไรเปลี่ยน (ผู้เรียกจะได้ re-render)
+       * ยอดที่ใช้ตัดสินคิดรวมทุกใบ แล้วใส่บรรทัดเดียวในใบ PM ก่อน (ตรงกับฝั่ง server)
+       */
+      function recalcShippingFee() {
+        if (!shippingFeeCfg || !shippingFeeCfg.is_active) return false;
+        if (!quotesData.length) return false;
+
+        // เก็บบรรทัดเดิมไว้ก่อนถอด เพื่อรักษาชื่อ/ราคาที่เซลล์แก้
+        let prevFee = null;
+        const before = JSON.stringify(quotesData.map((q) => q.items || []));
+        quotesData.forEach((q) => {
+          const goods = [];
+          (q.items || []).forEach((it) => {
+            if (isShippingFeeItem(it)) {
+              if (!prevFee) prevFee = it;
+            } else goods.push(it);
+          });
+          q.items = goods;
+        });
+
+        const goodsTotal = quotesData.reduce(
+          (s, q) => s + q.items.reduce((n, i) => n + calcItemTotal(i), 0),
+          0,
+        );
+        const meta = parseCustomerMeta(quotesData[0]);
+        const bound = !!(meta.company && meta.contact);
+        const terms = quotesData[0].payment_terms || "";
+
+        const shouldHave =
+          bound &&
+          goodsTotal > 0 &&
+          goodsTotal < Number(shippingFeeCfg.threshold_before_vat) &&
+          !hasCreditTerms(terms);
+
+        if (shouldHave) {
+          // ใบ PM ก่อน (quote_company มากับ /api/quotations) ไม่มีก็ใบแรกที่มีสินค้า
+          let target = quotesData.findIndex(
+            (q) => q.quote_company !== "THT" && q.items.length > 0,
+          );
+          if (target === -1)
+            target = quotesData.findIndex((q) => q.items.length > 0);
+          if (target === -1) target = 0;
+
+          const prevName = String((prevFee && prevFee.name) || "").trim();
+          // ต้องเช็ค prevFee ก่อน — Number(null) = 0 ซึ่ง isFinite ผ่าน ทำให้บรรทัดใหม่
+          // ได้ราคา ฿0 แทนราคาตั้งต้นทุกครั้งที่ยังไม่เคยมีบรรทัดนี้
+          const prevPrice = prevFee ? Number(prevFee.price) : NaN;
+          quotesData[target].items.push({
+            product_id: shippingFeeCfg.product_id,
+            internal_reference: shippingFeeCfg.internal_reference,
+            model: shippingFeeCfg.product_model,
+            product_code: shippingFeeCfg.product_model,
+            name: prevName || shippingFeeCfg.default_item_name,
+            sales_description: "",
+            price: Number.isFinite(prevPrice) ? prevPrice : Number(shippingFeeCfg.fee_price),
+            quantity: Number(shippingFeeCfg.fee_quantity),
+            discount_1: 0,
+            discount_2: 0,
+            remark: "",
+            brand: "",
+            series: "",
+            production: "",
+            stock: 0,
+            is_optional: false,
+            is_shipping_fee: true,
+          });
+        }
+
+        return JSON.stringify(quotesData.map((q) => q.items)) !== before;
+      }
+
+      // หน่วงก่อนปรับบรรทัด แล้วค่อย re-render ครั้งเดียว — ระหว่างที่เซลล์ยังพิมพ์อยู่ห้ามแตะ DOM
+      // เพราะ render() สร้าง input ใหม่ทั้งชุด ช่องที่โฟกัสอยู่จะถูกทำลาย (คีย์บอร์ดเด้งแล้วหุบ)
+      let shippingRecalcTimer = null;
+
+      function scheduleShippingFeeRecalc() {
+        if (shippingRecalcTimer) clearTimeout(shippingRecalcTimer);
+        shippingRecalcTimer = setTimeout(runShippingFeeRecalc, 400);
+      }
+
+      function runShippingFeeRecalc() {
+        const active = document.activeElement;
+        if (active && active.classList && active.classList.contains("edit-input")) {
+          scheduleShippingFeeRecalc(); // ยังพิมพ์อยู่ — รอจนวาง
+          return;
+        }
+        if (!recalcShippingFee()) return;
+        render(); // render() เรียก checkDirty() ให้ท้ายสุดอยู่แล้ว
+      }
+
       // ── วันจัดส่ง (ระดับใบ) ──
       // delivery_days_auto = ค่าที่ server คำนวณจาก quotation_rules (มากับ /api/quotations)
       // delivery_days_override = ค่าที่เซลล์ตั้งทับไว้ (null = ใช้ค่าอัตโนมัติ)
@@ -1962,8 +2134,10 @@
       let deliveryRefreshTimer = null;
 
       // มีผลกับวันจัดส่งแค่ รุ่น · จำนวน · สต๊อก (แก้ราคา/ส่วนลด/หมายเหตุ ไม่ต้องยิง)
+      // ค่าขนส่งไม่นับ — ฝั่ง server ข้ามบรรทัดนี้ตอนคำนวณอยู่แล้ว การนับจะทำให้ยิงฟรีทุกครั้งที่มันโผล่/หาย
       function deliverySignature(quote) {
         return (quote.items || [])
+          .filter((i) => !isShippingFeeItem(i))
           .map((i) => `${i.model || i.product_code}|${i.quantity}|${i.stock}`)
           .join(";");
       }
@@ -2114,6 +2288,8 @@
         // ถูกเรียกหลังการแก้ไขทุกชนิด — refreshDeliveryAuto() กรองเองด้วย signature
         // ให้ยิง server เฉพาะตอนที่รุ่น/จำนวน/สต๊อกเปลี่ยนจริง
         scheduleDeliveryRefresh();
+        // ยอดเปลี่ยน = บรรทัดค่าขนส่งอาจต้องโผล่/หายไป (recalc เองก็เช็คว่าเปลี่ยนจริงไหมก่อน render)
+        scheduleShippingFeeRecalc();
       }
 
       // ── Render ──
@@ -2277,6 +2453,42 @@
 
         quote.items.forEach((item, idx) => {
           const itemTotal = calcItemTotal(item);
+
+          // ── บรรทัดค่าขนส่ง: ระบบใส่/ถอดเอง เซลล์แก้ได้แค่ชื่อกับราคา ──
+          // ไม่มีปุ่มลบ (ระบบเอาออกเองเมื่อยอดถึงเกณฑ์) · จำนวนล็อก · ไม่มีส่วนลด · ไม่มีสถานะสต๊อก
+          if (isShippingFeeItem(item)) {
+            const feeEl = document.createElement("div");
+            feeEl.className = "item-card";
+            feeEl.innerHTML = `
+            <div class="item-top-bar is-fee">
+              <span class="item-index">${idx + 1}</span>
+              <span class="item-code">ค่าบริการ</span>
+              <span class="item-stock-badge">ระบบเพิ่มให้อัตโนมัติ</span>
+            </div>
+            <div class="item-body">
+              <div class="fee-row">
+                <input type="text" class="edit-input inp-fee-name"
+                  value="${String(item.name || "").replace(/"/g, "&quot;")}"
+                  placeholder="ชื่อรายการที่จะแสดงในใบเสนอราคา"
+                  data-q="${qIdx}" data-i="${idx}" data-field="name">
+                <div class="item-pq-col price-col fee-price-col">
+                  <span class="item-pq-sign">฿</span>
+                  <input type="number" class="edit-input inp-price item-price-input"
+                    min="0" step="any"
+                    value="${item.price}"
+                    data-q="${qIdx}" data-i="${idx}" data-field="price">
+                </div>
+              </div>
+              <div class="fee-row">
+                <span class="fee-note">ลูกค้าไม่มีเครดิต · ยอดก่อน VAT ต่ำกว่า ฿${formatNumber(Number(shippingFeeCfg.threshold_before_vat), 2)} — ระบบเอาออกให้เองเมื่อยอดถึงเกณฑ์</span>
+                <span class="item-total item-total-chip">฿${formatNumber(itemTotal, 2)}</span>
+              </div>
+            </div>
+          `;
+            container.appendChild(feeEl);
+            return;
+          }
+
           const originalTotal = item.price * item.quantity;
           const discountText = formatNumber(originalTotal - itemTotal, 2);
           const stock = Number(item.stock) || 0;
@@ -2344,7 +2556,7 @@
                 <span class="item-discount-baht item-discount-baht-chip${hasDiscount ? "" : " is-hidden"}">-฿${discountText}</span>
               </div>
               ${
-                quote.items.length > 1
+                discountableCount(quote) > 1
                   ? `<button type="button" class="btn-apply-disc-all" data-q="${qIdx}" data-i="${idx}">${applyBtnLabel(quote, item)}</button>`
                   : ""
               }
@@ -2395,12 +2607,17 @@
         input.focus();
       }
 
-      /** ข้อความบนปุ่ม — บอกชัดว่ากดแล้วจะใช้ส่วนลดเท่าไหร่ */
+      /** ข้อความบนปุ่ม — บอกชัดว่ากดแล้วจะใช้ส่วนลดเท่าไหร่ (ไม่นับค่าขนส่งที่ลดไม่ได้) */
       function applyBtnLabel(quote, item) {
         const d1 = item.discount_1 || 0;
         const d2 = item.discount_2 || 0;
         const pct = d2 > 0 ? `${d1}+${d2}%` : `${d1}%`;
-        return `⇩ ใช้ ${pct} กับทุกรายการ (${quote.items.length} รายการ)`;
+        return `⇩ ใช้ ${pct} กับทุกรายการ (${discountableCount(quote)} รายการ)`;
+      }
+
+      /** จำนวนรายการที่ตั้งส่วนลดได้ในใบ — ค่าขนส่งไม่นับ */
+      function discountableCount(quote) {
+        return (quote.items || []).filter((it) => !isShippingFeeItem(it)).length;
       }
 
       /** โชว์ปุ่มของรายการ activeIdx และซ่อนของรายการอื่น (activeIdx = -1 คือซ่อนหมด) */
@@ -2444,22 +2661,25 @@
         const d1 = src.discount_1 || 0;
         const d2 = src.discount_2 || 0;
 
+        // ค่าขนส่งเป็นค่าบริการที่ระบบคุมเอง ไม่ใช่สินค้าที่เอาส่วนลดไปลงได้
+        const targets = quote.items.filter((it) => !isShippingFeeItem(it));
+
         // ถามก่อนเฉพาะเมื่อมีชิ้นอื่นที่ส่วนลดไม่ตรง — กันเผลอทับค่าที่ตั้งแยกไว้
-        const willOverwrite = quote.items.some(
-          (it, i) =>
-            i !== iIdx &&
+        const willOverwrite = targets.some(
+          (it) =>
+            it !== src &&
             ((it.discount_1 || 0) !== d1 || (it.discount_2 || 0) !== d2),
         );
         if (willOverwrite) {
           const ok = await showCustomConfirm(
             "ใช้ส่วนลดกับทุกรายการ",
-            `ตั้งส่วนลด ${d1}+${d2}% ให้ครบทั้ง ${quote.items.length} รายการในใบนี้? ส่วนลดที่ตั้งไว้แยกรายชิ้นจะถูกเขียนทับ`,
+            `ตั้งส่วนลด ${d1}+${d2}% ให้ครบทั้ง ${targets.length} รายการในใบนี้? ส่วนลดที่ตั้งไว้แยกรายชิ้นจะถูกเขียนทับ`,
             { okText: "ใช้กับทุกรายการ", icon: "🏷️" },
           );
           if (!ok) return;
         }
 
-        quote.items.forEach((it) => {
+        targets.forEach((it) => {
           it.discount_1 = d1;
           it.discount_2 = d2;
         });
@@ -2470,7 +2690,7 @@
           totalEl.textContent = `฿${formatNumber(calcQuoteTotal(quote), 2)}`;
         checkDirty();
         showToast(
-          `🏷️ ใช้ส่วนลด ${d1}+${d2}% กับ ${quote.items.length} รายการแล้ว`,
+          `🏷️ ใช้ส่วนลด ${d1}+${d2}% กับ ${targets.length} รายการแล้ว`,
           "success",
         );
       }
@@ -2481,6 +2701,12 @@
         const field = e.target.dataset.field;
         if (field === "remark") {
           quotesData[qIdx].items[iIdx].remark = e.target.value;
+          checkDirty();
+          return;
+        }
+        // ชื่อรายการ — ใช้เฉพาะบรรทัดค่าขนส่ง (สินค้าจริงเอาชื่อจาก products เสมอ)
+        if (field === "name") {
+          quotesData[qIdx].items[iIdx].name = e.target.value;
           checkDirty();
           return;
         }
@@ -2529,7 +2755,8 @@
           }
           const stock = Number(item.stock) || 0;
           const stockEl = itemCard.querySelector(".item-stock-badge");
-          if (stockEl) {
+          // ค่าขนส่งไม่มีสต๊อก — ป้ายบนการ์ดมันคือ "ระบบเพิ่มให้อัตโนมัติ" ห้ามเขียนทับ
+          if (stockEl && !isShippingFeeItem(item)) {
             const rem = stock - item.quantity;
             stockEl.className = `item-stock-badge ${rem < 0 ? "out-of-stock" : "in-stock"}`;
             stockEl.textContent =
@@ -3217,8 +3444,19 @@
                 preserveDrafts: true, // ★ ห้ามลบ draft เดิม (ใบที่กำลังแก้อยู่)
               }),
             });
-            if (!resp.ok)
-              throw new Error("Failed to create new quotation on server");
+            if (!resp.ok) {
+              // ดึงสาเหตุจริงจาก backend มาแสดง (422 = ผิดกฎ MOQ/สต๊อก, 400 = สินค้าถูกบล็อก)
+              // แบบเดียวกับ saveChangesToServer — ไม่งั้นเซลล์เห็นแค่ error กลาง ๆ แล้วงงว่าทำไมเพิ่มไม่ได้
+              const errBody = await resp.json().catch(() => ({}));
+              const violations = Array.isArray(errBody.violations)
+                ? errBody.violations.map(formatViolation).filter(Boolean)
+                : [];
+              throw new Error(
+                violations.length
+                  ? violations.join("\n")
+                  : errBody.error || `เซิร์ฟเวอร์ตอบกลับรหัสสถานะ: ${resp.status}`,
+              );
+            }
 
             const newQuote = await resp.json();
             quotesData.push(newQuote); // ใบใหม่มีสินค้าอยู่แล้ว ไม่ต้อง push ซ้ำ
@@ -3471,7 +3709,11 @@
               `ใบเสนอราคานี้ได้รับการ${finalized.status === "confirmed" ? "ยืนยันและออกเอกสาร" : "ยกเลิก"}ไปแล้ว ไม่สามารถแก้ไขได้`,
             );
           quotesData = data;
-          originalData = JSON.parse(JSON.stringify(data));
+          // ต้องโหลดก่อน originalData เพราะ recalcShippingFee() อาจเติมบรรทัดให้ใบเก่าที่ยังไม่มี
+          // ถ้าจับ originalData ไว้ก่อนปรับ หน้าจะขึ้น "ยังไม่ได้บันทึก" ตั้งแต่เปิดทั้งที่ยังไม่แตะอะไร
+          await loadShippingFeeConfig();
+          recalcShippingFee();
+          originalData = JSON.parse(JSON.stringify(quotesData));
           // ค่าที่ server ส่งมาตรงกับรายการปัจจุบันอยู่แล้ว — จำไว้กัน render() แรกยิงถามซ้ำฟรี ๆ
           seedDeliverySignatures();
           mainContent.style.display = "block";

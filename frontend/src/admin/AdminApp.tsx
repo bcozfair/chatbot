@@ -8,6 +8,7 @@ import { QuotationRules } from './QuotationRules';
 import { OptionalLinks } from './OptionalLinks';
 import { StockRules } from './StockRules';
 import { ProductMoqRules } from './ProductMoqRules';
+import { ShippingFee } from './ShippingFee';
 import { SyncPanel } from './SyncPanel';
 import {
   LogOut,
@@ -28,7 +29,7 @@ import {
 } from 'lucide-react';
 
 type MainTab = 'dashboard' | 'quotations' | 'salespersons' | 'promotions' | 'settings';
-type SubTab = 'quotation' | 'optional' | 'stock' | 'moq';
+type SubTab = 'quotation' | 'optional' | 'stock' | 'moq' | 'shipping';
 
 interface AdminStats {
   quotations: number;
@@ -57,6 +58,7 @@ const SETTINGS_SUBITEMS: { key: SubTab; label: string }[] = [
   { key: 'optional', label: 'สินค้าพ่วงเสริม' },
   { key: 'stock', label: 'ระงับเมื่อหมดสต็อก' },
   { key: 'moq', label: 'ขั้นต่ำสั่งซื้อ' },
+  { key: 'shipping', label: 'ค่าขนส่ง' },
 ];
 
 const PAGE_TITLES: Record<MainTab, string> = {
@@ -431,6 +433,7 @@ function AdminContent() {
               {subTab === 'optional' && <OptionalLinks />}
               {subTab === 'stock' && <StockRules />}
               {subTab === 'moq' && <ProductMoqRules />}
+              {subTab === 'shipping' && <ShippingFee />}
             </div>
           )}
 
