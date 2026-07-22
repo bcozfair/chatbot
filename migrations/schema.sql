@@ -615,7 +615,11 @@ CREATE TABLE public.sync_state (
     sync_cursor_timestamp text,
     sync_mode text DEFAULT 'full'::text NOT NULL,
     pages_synced integer DEFAULT 0 NOT NULL,
-    records_synced integer DEFAULT 0 NOT NULL
+    records_synced integer DEFAULT 0 NOT NULL,
+    last_status text,
+    last_run_at timestamp with time zone,
+    last_error text,
+    last_error_at timestamp with time zone
 );
 
 

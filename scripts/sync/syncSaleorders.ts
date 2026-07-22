@@ -1,81 +1,11 @@
-import dotenv from 'dotenv';
 import { pathToFileURL } from 'url';
 import { pool } from '../../config/db.js';
-
-dotenv.config();
+import { createGatewayGet, sleep } from './gatewayClient.js';
 
 const INITIAL_SINCE = '1970-01-01T00:00:00.000Z';
 const PAGE_LIMIT = 500;
 
-function requiredEnv(...names: string[]) {
-  for (const name of names) {
-    const value = process.env[name];
-    if (typeof value === 'string' && value.trim()) {
-      return value.trim();
-    }
-  }
-
-  throw new Error(`Missing required environment variable. Expected one of: ${names.join(', ')}`);
-}
-
-function trimTrailingSlash(value: string) {
-  return value.endsWith('/') ? value.slice(0, -1) : value;
-}
-
-const GATEWAY_BASE_URL = trimTrailingSlash(requiredEnv('GATEWAY_BASE_URL', 'gateway_host'));
-const GATEWAY_API_KEY = requiredEnv('Saleorder_full_sync', 'GATEWAY_API_KEY');
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-async function gatewayGet(path: string) {
-  const url = `${GATEWAY_BASE_URL}${path}`;
-  const maxAttempts = 5;
-  let attempts = 0;
-  let delay = 2000;
-
-  while (attempts < maxAttempts) {
-    attempts += 1;
-    try {
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          'x-api-key': GATEWAY_API_KEY
-        }
-      });
-
-      if (response.status === 429 || response.status === 503 || response.status === 504) {
-        if (attempts >= maxAttempts) {
-          throw new Error(`Gateway API Error: ${response.status} - ${response.statusText} (max attempts reached)`);
-        }
-        console.warn(`[gateway] temporary ${response.status}, retrying in ${delay / 1000}s (${attempts}/${maxAttempts})`);
-        await sleep(delay);
-        delay *= 2;
-        continue;
-      }
-
-      const body: any = await response.json();
-      if (!response.ok) {
-        const err: any = new Error(body?.message || body?.error || `Gateway API Error: ${response.status}`);
-        err.status = response.status;
-        throw err;
-      }
-
-      return body;
-    } catch (error: any) {
-      if (error?.status && [400, 401, 403, 404].includes(error.status)) {
-        throw error;
-      }
-      if (attempts >= maxAttempts) {
-        throw error;
-      }
-      console.warn(`[gateway] request failed: ${error.message}. retrying in ${delay / 1000}s (${attempts}/${maxAttempts})`);
-      await sleep(delay);
-      delay *= 2;
-    }
-  }
-
-  throw new Error('Gateway request failed unexpectedly');
-}
+const gatewayGet = createGatewayGet(['Saleorder_full_sync', 'GATEWAY_API_KEY']);
 
 async function ensureSyncState(dbClient: any) {
   await dbClient.query(`

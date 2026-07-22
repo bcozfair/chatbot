@@ -15,12 +15,20 @@ const BRAND = '#009032';
 
 type ResourceId = 'products' | 'customers' | 'saleorders';
 
+type RunStatus = 'success' | 'failed' | 'aborted' | 'skipped';
+
 interface ResourceStatus {
   id: ResourceId;
   label: string;
+  /** เวลาที่ commit หน้าล่าสุดสำเร็จ — ไม่ใช่ "รอบล่าสุดสำเร็จ" ต้องอ่านคู่กับ last_status */
   last_success_at: string | null;
   records_synced: number;
   sync_mode: string | null;
+  last_status: RunStatus | null;
+  last_run_at: string | null;
+  /** error ล่าสุด — ไม่ถูกล้างเมื่อรอบถัดไปสำเร็จ จึงยังเห็นได้แม้ตอนนี้ปกติแล้ว */
+  last_error: string | null;
+  last_error_at: string | null;
 }
 
 interface SyncSettings {
@@ -38,12 +46,29 @@ interface SyncStatus {
   startedAt: string | null;
   finishedAt: string | null;
   lastError: string | null;
+  aborted: boolean;
   trigger: 'manual' | 'schedule' | null;
   resources: ResourceStatus[];
   settings: SyncSettings;
 }
 
 const INTERVAL_OPTIONS = [1, 3, 5, 10, 15, 30, 60];
+
+const STATUS_LABEL: Record<RunStatus, string> = {
+  success: 'สำเร็จ',
+  failed: 'ล้มเหลว',
+  aborted: 'ถูกยกเลิก',
+  skipped: 'ถูกข้าม',
+};
+
+const RECENT_ERROR_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** error เก่ากว่า 7 วันไม่ต้องเตือนแล้ว (ไม่งั้นแถบเตือนค้างตลอดกาลเพราะเราไม่ล้างค่า) */
+function isRecent(iso: string | null): boolean {
+  if (!iso) return false;
+  const t = new Date(iso).getTime();
+  return !isNaN(t) && Date.now() - t < RECENT_ERROR_WINDOW_MS;
+}
 
 function formatThaiDateTime(iso: string | null): string {
   if (!iso) return 'ยังไม่เคย sync';
@@ -218,6 +243,10 @@ export function SyncPanel() {
   }
 
   const resources = status?.resources ?? [];
+  const failing = resources.filter((r) => r.last_status && r.last_status !== 'success');
+  const recovered = resources.filter(
+    (r) => r.last_status === 'success' && r.last_error && isRecent(r.last_error_at)
+  );
 
   return (
     <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
@@ -260,18 +289,63 @@ export function SyncPanel() {
         </div>
       )}
 
+      {/* แถบแดงค้าง — รอบล่าสุดยังพังอยู่ ต่างจาก toast ตรงที่ไม่หายไปใน 4 วิ */}
+      {!running && failing.length > 0 && (
+        <div className="px-4 sm:px-5 py-2 bg-red-50 border-b border-red-100 text-red-800 text-[11px] space-y-0.5">
+          {failing.map((r) => (
+            <div key={r.id} className="flex items-start gap-2">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />
+              <span className="min-w-0">
+                <span className="font-bold">
+                  {r.label}: {STATUS_LABEL[r.last_status as RunStatus]}
+                </span>{' '}
+                {formatThaiDateTime(r.last_run_at)} — {r.last_error}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* แถบเหลือง — ตอนนี้ปกติแล้ว แต่เคยพังภายใน 7 วัน (error ไม่ถูกล้างตอน sync สำเร็จ
+          เพราะ auto sync แบบ interval จะทับ error กลางดึกทิ้งก่อนมีคนเห็น) */}
+      {!running && failing.length === 0 && recovered.length > 0 && (
+        <div className="px-4 sm:px-5 py-2 bg-amber-50 border-b border-amber-100 text-amber-800 text-[11px] space-y-0.5">
+          {recovered.map((r) => (
+            <div key={r.id} className="flex items-start gap-2">
+              <Info className="w-3.5 h-3.5 shrink-0 mt-px" />
+              <span className="min-w-0">
+                <span className="font-bold">{r.label}</span> เคยผิดพลาด{' '}
+                {formatThaiDateTime(r.last_error_at)} — {r.last_error}{' '}
+                <span className="text-amber-600">(ตอนนี้ปกติแล้ว)</span>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Per-resource rows */}
       <div className="divide-y divide-slate-100">
         {resources.map((r) => {
           const isCurrent = running && status?.currentResource === r.id;
+          const failed = !!r.last_status && r.last_status !== 'success';
           return (
             <div key={r.id} className="flex items-center justify-between gap-3 px-4 sm:px-5 py-2">
               <div className="flex items-center gap-2 min-w-0">
                 <span className="text-sm font-semibold text-slate-800 shrink-0">{r.label}</span>
+                {failed ? (
+                  <span className="shrink-0 px-1.5 py-px rounded bg-red-100 text-red-700 text-[10px] font-bold">
+                    {STATUS_LABEL[r.last_status as RunStatus]}
+                  </span>
+                ) : r.last_status === 'success' ? (
+                  <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-emerald-500" />
+                ) : null}
                 <span className="text-[11px] text-slate-400 flex items-center gap-1 min-w-0">
                   <Clock className="w-3 h-3 shrink-0" />
                   <span className="truncate">
-                    {formatThaiDateTime(r.last_success_at)}
+                    {/* รอบที่ล้ม: last_success_at คือ "ข้อมูลไหลถึงไหน" ไม่ใช่เวลาที่ sync สำเร็จ */}
+                    {failed
+                      ? `ล้มเหลว ${formatThaiDateTime(r.last_run_at)} · ข้อมูลถึง ${formatThaiDateTime(r.last_success_at)}`
+                      : formatThaiDateTime(r.last_run_at ?? r.last_success_at)}
                     {r.records_synced ? ` · ${r.records_synced.toLocaleString('th-TH')}` : ''}
                   </span>
                 </span>

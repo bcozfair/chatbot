@@ -1,4 +1,5 @@
 import { pool } from '../config/db.js';
+import { GatewayUnreachableError } from '../scripts/sync/gatewayClient.js';
 
 // ============================================================
 // Registry ของ resource ที่ sync ได้
@@ -54,6 +55,8 @@ interface RunState {
   startedAt: string | null;
   finishedAt: string | null;
   lastError: string | null;
+  /** true = รอบล่าสุดถูกยกเลิกกลางคันเพราะติดต่อ gateway ไม่ได้ */
+  aborted: boolean;
   trigger: 'manual' | 'schedule' | null;
 }
 
@@ -64,11 +67,81 @@ const runState: RunState = {
   startedAt: null,
   finishedAt: null,
   lastError: null,
+  aborted: false,
   trigger: null,
 };
 
 export function isRunning() {
   return runState.running;
+}
+
+// ============================================================
+// บันทึกผลรอบ sync ลง sync_state (แถวเดียวกับที่เก็บ cursor)
+//
+// กติกาสำคัญ: รอบที่ "สำเร็จ" ห้ามแตะ last_error / last_error_at
+// เพราะ auto sync เป็นแบบ interval ถ้าล้าง error ทุกครั้งที่สำเร็จ error ตอนตี 2
+// จะถูกทับตอน 2:15 แล้วเช้ามาไม่มีใครรู้ว่าเมื่อคืนระบบล่มไป
+// ============================================================
+type RunStatus = 'success' | 'failed' | 'aborted' | 'skipped';
+
+/** ตัดข้อความ error ยาว ๆ (เช่น HTML error page) ไม่ให้ยัดลง DB ทั้งก้อน */
+function trimErrorMessage(message: string) {
+  const clean = String(message).replace(/\s+/g, ' ').trim();
+  return clean.length > 1000 ? `${clean.slice(0, 997)}...` : clean;
+}
+
+/**
+ * upsert เพราะ resource ที่ยังไม่เคย sync สำเร็จจะยังไม่มีแถวใน sync_state
+ * (เกิดจริงกับสถานะ skipped — ถูกข้ามตั้งแต่รอบแรกที่ gateway ล่ม)
+ * ตัวนี้ห้ามโยน error ออกไป ไม่งั้นการบันทึกผลจะไปล้ม loop ของ sync เอง
+ */
+async function recordResult(id: ResourceId, status: RunStatus, errorMessage?: string) {
+  const stateKey = RESOURCES[id].stateKey;
+  try {
+    if (status === 'success') {
+      await pool.query(
+        `INSERT INTO sync_state (resource, last_status, last_run_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (resource) DO UPDATE
+           SET last_status = EXCLUDED.last_status,
+               last_run_at = EXCLUDED.last_run_at`,
+        [stateKey, status]
+      );
+      return;
+    }
+
+    await pool.query(
+      `INSERT INTO sync_state (resource, last_status, last_run_at, last_error, last_error_at)
+       VALUES ($1, $2, NOW(), $3, NOW())
+       ON CONFLICT (resource) DO UPDATE
+         SET last_status = EXCLUDED.last_status,
+             last_run_at = EXCLUDED.last_run_at,
+             last_error = EXCLUDED.last_error,
+             last_error_at = EXCLUDED.last_error_at`,
+      [stateKey, status, trimErrorMessage(errorMessage || 'ไม่ทราบสาเหตุ')]
+    );
+  } catch (err: any) {
+    console.error(`[sync] บันทึกผล (${id}=${status}) ล้มเหลว:`, err?.message || err);
+  }
+}
+
+/** เพิ่ม 4 คอลัมน์ผลรอบล่าสุด — เรียกตอน boot เพื่อให้ deploy แล้วใช้ได้เลยไม่ต้องรันมือ */
+async function ensureSyncStateColumns() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sync_state (
+      resource TEXT PRIMARY KEY,
+      sync_cursor TEXT,
+      sync_cursor_timestamp TEXT,
+      sync_mode TEXT NOT NULL DEFAULT 'full',
+      pages_synced INTEGER NOT NULL DEFAULT 0,
+      records_synced INTEGER NOT NULL DEFAULT 0,
+      last_success_at TIMESTAMPTZ
+    )
+  `);
+  await pool.query(`ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS last_status TEXT`);
+  await pool.query(`ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS last_run_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS last_error TEXT`);
+  await pool.query(`ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS last_error_at TIMESTAMPTZ`);
 }
 
 /**
@@ -88,30 +161,50 @@ export function startSync(resources: ResourceId[], trigger: 'manual' | 'schedule
   runState.startedAt = new Date().toISOString();
   runState.finishedAt = null;
   runState.lastError = null;
+  runState.aborted = false;
   runState.trigger = trigger;
 
   // ไม่ await — ปล่อยรันเบื้องหลัง
   void (async () => {
-    for (const id of list) {
-      runState.currentResource = id;
-      const def = RESOURCES[id];
-      try {
-        console.log(`[sync] เริ่ม sync ${def.label} (${id}) — trigger=${trigger}`);
-        const fn = await def.load();
-        await fn();
-        console.log(`[sync] sync ${def.label} เสร็จแล้ว`);
-      } catch (err: any) {
-        // resource ที่ล้ม ไม่บล็อกตัวถัดไป แต่บันทึก error ไว้
-        const msg = err?.message || String(err);
-        runState.lastError = `${def.label}: ${msg}`;
-        console.error(`[sync] sync ${def.label} ล้มเหลว:`, msg);
+    // try/finally: running ต้องถูกปลดทุกเส้นทาง ไม่งั้น mutex ค้างและ sync ทั้งระบบตายจน restart
+    try {
+      for (let i = 0; i < list.length; i++) {
+        const id = list[i];
+        runState.currentResource = id;
+        const def = RESOURCES[id];
+        try {
+          console.log(`[sync] เริ่ม sync ${def.label} (${id}) — trigger=${trigger}`);
+          const fn = await def.load();
+          await fn();
+          console.log(`[sync] sync ${def.label} เสร็จแล้ว`);
+          await recordResult(id, 'success');
+        } catch (err: any) {
+          const msg = err?.message || String(err);
+          runState.lastError = `${def.label}: ${msg}`;
+          console.error(`[sync] sync ${def.label} ล้มเหลว:`, msg);
+
+          // ติดต่อ gateway ไม่ได้ → ยิง resource ที่เหลือก็พังเหมือนกัน ยกเลิกทั้งรอบเลย
+          // (error อื่น เช่น payload ผิดรูป/DB พัง/env หาย ยังไปต่อตัวถัดไปตามเดิม)
+          if (err instanceof GatewayUnreachableError) {
+            runState.aborted = true;
+            await recordResult(id, 'aborted', msg);
+            for (const rest of list.slice(i + 1)) {
+              await recordResult(rest, 'skipped', `ยกเลิกทั้งรอบ: ${msg}`);
+            }
+            console.error(`[sync] ยกเลิกทั้งรอบ — ข้าม ${list.length - i - 1} รายการที่เหลือ (รอรอบถัดไป)`);
+            break;
+          }
+
+          await recordResult(id, 'failed', msg);
+        }
       }
+    } finally {
+      runState.running = false;
+      runState.currentResource = null;
+      runState.queue = [];
+      runState.finishedAt = new Date().toISOString();
+      console.log(runState.aborted ? '[sync] จบรอบ sync (ถูกยกเลิก)' : '[sync] จบรอบ sync ทั้งหมด');
     }
-    runState.running = false;
-    runState.currentResource = null;
-    runState.queue = [];
-    runState.finishedAt = new Date().toISOString();
-    console.log('[sync] จบรอบ sync ทั้งหมด');
   })();
 
   return true;
@@ -230,7 +323,8 @@ export async function getStatus() {
   try {
     const keys = RESOURCE_IDS.map((id) => RESOURCES[id].stateKey);
     const { rows } = await pool.query(
-      `SELECT resource, sync_mode, records_synced, last_success_at
+      `SELECT resource, sync_mode, records_synced, last_success_at,
+              last_status, last_run_at, last_error, last_error_at
          FROM sync_state
         WHERE resource = ANY($1)`,
       [keys]
@@ -248,9 +342,15 @@ export async function getStatus() {
     return {
       id,
       label: def.label,
+      // หมายเหตุ: last_success_at = "commit หน้าล่าสุดสำเร็จ" (ถูกเด้งทุกหน้าระหว่างรอบ)
+      // ไม่ใช่ "รอบล่าสุดสำเร็จ" — ฝั่ง UI ต้องอ่านคู่กับ last_status เสมอ
       last_success_at: row?.last_success_at ? new Date(row.last_success_at).toISOString() : null,
       records_synced: row ? Number(row.records_synced) || 0 : 0,
       sync_mode: row?.sync_mode || null,
+      last_status: row?.last_status || null,
+      last_run_at: row?.last_run_at ? new Date(row.last_run_at).toISOString() : null,
+      last_error: row?.last_error || null,
+      last_error_at: row?.last_error_at ? new Date(row.last_error_at).toISOString() : null,
     };
   });
 
@@ -260,6 +360,7 @@ export async function getStatus() {
     startedAt: runState.startedAt,
     finishedAt: runState.finishedAt,
     lastError: runState.lastError,
+    aborted: runState.aborted,
     trigger: runState.trigger,
     resources,
     settings,
@@ -324,8 +425,9 @@ async function schedulerTick() {
 export async function initScheduler() {
   try {
     await ensureSyncSettings();
+    await ensureSyncStateColumns();
   } catch (err: any) {
-    console.error('[scheduler] ensureSyncSettings ล้มเหลว:', err?.message || err);
+    console.error('[scheduler] เตรียมตาราง sync ล้มเหลว:', err?.message || err);
   }
   lastIntervalRun = Date.now(); // เริ่มนับ interval จากตอน boot
   if (schedulerTimer) clearInterval(schedulerTimer);
