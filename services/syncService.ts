@@ -213,51 +213,103 @@ export function startSync(resources: ResourceId[], trigger: 'manual' | 'schedule
 // ============================================================
 // ตาราง config ตารางเวลา (sync_settings) — แถวเดียว id=1
 // ============================================================
-/** ค่าที่อนุญาตสำหรับ interval (นาที) */
-export const INTERVAL_MINUTE_OPTIONS = [1, 3, 5, 10, 15, 30, 60] as const;
-const DEFAULT_INTERVAL_MINUTES = 15;
+/** ขอบเขตของ interval — ต่ำกว่า 30 วิ ไม่มีประโยชน์เพราะรอบ sync จริงกินเวลาเป็นนาที */
+export const MIN_INTERVAL_SECONDS = 30;
+export const MAX_INTERVAL_SECONDS = 86400; // 24 ชม.
+const DEFAULT_INTERVAL_SECONDS = 900; // 15 นาที
+
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 export interface SyncSettings {
   auto_enabled: boolean;
-  mode: 'daily' | 'interval';
-  daily_time: string; // 'HH:MM'
-  interval_minutes: number;
+  /** วันที่ให้ทำงาน 0=อาทิตย์ … 6=เสาร์ (ตรงกับ Date.getDay()) — ว่าง = ทุกวัน */
+  days: number[];
+  window_start: string; // 'HH:MM' เวลาไทย
+  window_end: string; // 'HH:MM' เวลาไทย (>= window_start)
+  interval_seconds: number;
   resources: ResourceId[];
   updated_at: string | null;
 }
 
 const DEFAULT_SETTINGS: SyncSettings = {
   auto_enabled: false,
-  mode: 'daily',
-  daily_time: '02:00',
-  interval_minutes: DEFAULT_INTERVAL_MINUTES,
+  days: [0, 1, 2, 3, 4, 5, 6],
+  window_start: '00:00',
+  window_end: '23:59',
+  interval_seconds: DEFAULT_INTERVAL_SECONDS,
   resources: [...RESOURCE_IDS],
   updated_at: null,
 };
 
+// ensure ทำงานครั้งเดียวพอ — scheduler เรียก getSettings() ทุก 5 วินาที ถ้าปล่อยให้ยิง
+// DDL ทุกครั้งจะกลายเป็นหลายพันคำสั่งต่อชั่วโมงโดยไม่ได้อะไรเลย
+let settingsTableReady = false;
+
 async function ensureSyncSettings() {
+  if (settingsTableReady) return;
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS sync_settings (
       id INTEGER PRIMARY KEY DEFAULT 1,
       auto_enabled BOOLEAN NOT NULL DEFAULT FALSE,
-      mode TEXT NOT NULL DEFAULT 'daily',
-      daily_time TEXT NOT NULL DEFAULT '02:00',
-      interval_minutes INTEGER NOT NULL DEFAULT 15,
+      days INTEGER[] NOT NULL DEFAULT '{0,1,2,3,4,5,6}',
+      window_start TEXT NOT NULL DEFAULT '00:00',
+      window_end TEXT NOT NULL DEFAULT '23:59',
+      interval_seconds INTEGER NOT NULL DEFAULT 900,
       resources TEXT[] NOT NULL DEFAULT ARRAY['products','customers','saleorders'],
       updated_at TIMESTAMPTZ,
       CONSTRAINT sync_settings_singleton CHECK (id = 1)
     )
   `);
-  // migration: เดิมเก็บเป็นชั่วโมง (interval_hours) — เปลี่ยนเป็นนาที
+  // ตารางที่สร้างไว้ก่อนหน้าจะยังไม่มีคอลัมน์ชุดใหม่ — เติมให้ครบ
+  await pool.query(`ALTER TABLE sync_settings ADD COLUMN IF NOT EXISTS days INTEGER[] NOT NULL DEFAULT '{0,1,2,3,4,5,6}'`);
+  await pool.query(`ALTER TABLE sync_settings ADD COLUMN IF NOT EXISTS window_start TEXT NOT NULL DEFAULT '00:00'`);
+  await pool.query(`ALTER TABLE sync_settings ADD COLUMN IF NOT EXISTS window_end TEXT NOT NULL DEFAULT '23:59'`);
+  await pool.query(`ALTER TABLE sync_settings ADD COLUMN IF NOT EXISTS interval_seconds INTEGER NOT NULL DEFAULT 900`);
+
+  // แปลงค่าจากโหมดเดิม (daily/interval) แล้วทิ้งคอลัมน์เก่า — ทำในโค้ดเหมือนที่เคยทำกับ
+  // interval_hours เพื่อไม่ให้ตารางเวลาที่ผู้ใช้ตั้งไว้เพี้ยนไปเป็น default ถ้ายังไม่ได้รัน
+  // migration ไฟล์ 2026-07-22_02_* (ซึ่งมีคำสั่งชุดเดียวกัน ไว้สำหรับตั้ง DB ใหม่/รันมือ)
   await pool.query(`
-    ALTER TABLE sync_settings ADD COLUMN IF NOT EXISTS interval_minutes INTEGER NOT NULL DEFAULT 15
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'sync_settings' AND column_name = 'mode'
+      ) THEN
+        UPDATE sync_settings
+           SET window_start = COALESCE(NULLIF(daily_time, ''), '02:00'),
+               window_end   = COALESCE(NULLIF(daily_time, ''), '02:00'),
+               interval_seconds = 3600,
+               days = '{0,1,2,3,4,5,6}'
+         WHERE mode = 'daily';
+        UPDATE sync_settings
+           SET window_start = '00:00',
+               window_end   = '23:59',
+               interval_seconds = GREATEST(30, COALESCE(interval_minutes, 15) * 60),
+               days = '{0,1,2,3,4,5,6}'
+         WHERE mode = 'interval';
+      END IF;
+    END $$;
   `);
-  await pool.query(`
-    ALTER TABLE sync_settings DROP COLUMN IF EXISTS interval_hours
-  `);
+  await pool.query(`ALTER TABLE sync_settings DROP COLUMN IF EXISTS mode`);
+  await pool.query(`ALTER TABLE sync_settings DROP COLUMN IF EXISTS daily_time`);
+  await pool.query(`ALTER TABLE sync_settings DROP COLUMN IF EXISTS interval_minutes`);
+
   await pool.query(`
     INSERT INTO sync_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING
   `);
+
+  settingsTableReady = true;
+}
+
+/** กรองให้เหลือเลขวัน 0–6 ไม่ซ้ำ เรียงจากอาทิตย์ */
+function normalizeDays(input: any): number[] {
+  if (!Array.isArray(input)) return [...DEFAULT_SETTINGS.days];
+  const days = Array.from(
+    new Set(input.map((d: any) => Math.trunc(Number(d))).filter((d: number) => d >= 0 && d <= 6))
+  ).sort((a, b) => a - b);
+  return days.length ? days : [...DEFAULT_SETTINGS.days];
 }
 
 export async function getSettings(): Promise<SyncSettings> {
@@ -268,9 +320,10 @@ export async function getSettings(): Promise<SyncSettings> {
   const resources = (Array.isArray(r.resources) ? r.resources : []).filter(isValidResource);
   return {
     auto_enabled: !!r.auto_enabled,
-    mode: r.mode === 'interval' ? 'interval' : 'daily',
-    daily_time: r.daily_time || DEFAULT_SETTINGS.daily_time,
-    interval_minutes: Number(r.interval_minutes) || DEFAULT_SETTINGS.interval_minutes,
+    days: normalizeDays(r.days),
+    window_start: TIME_RE.test(r.window_start) ? r.window_start : DEFAULT_SETTINGS.window_start,
+    window_end: TIME_RE.test(r.window_end) ? r.window_end : DEFAULT_SETTINGS.window_end,
+    interval_seconds: Number(r.interval_seconds) || DEFAULT_SETTINGS.interval_seconds,
     resources: resources.length ? resources : [...RESOURCE_IDS],
     updated_at: r.updated_at ? new Date(r.updated_at).toISOString() : null,
   };
@@ -280,17 +333,23 @@ export async function getSettings(): Promise<SyncSettings> {
 export async function saveSettings(input: any): Promise<SyncSettings> {
   await ensureSyncSettings();
 
-  const mode: 'daily' | 'interval' = input?.mode === 'interval' ? 'interval' : 'daily';
+  const days = normalizeDays(input?.days);
 
-  // daily_time ต้องเป็น HH:MM 00:00–23:59
-  let dailyTime = String(input?.daily_time ?? DEFAULT_SETTINGS.daily_time).trim();
-  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(dailyTime)) dailyTime = DEFAULT_SETTINGS.daily_time;
+  let start = String(input?.window_start ?? DEFAULT_SETTINGS.window_start).trim();
+  if (!TIME_RE.test(start)) start = DEFAULT_SETTINGS.window_start;
 
-  let intervalMinutes = Math.trunc(Number(input?.interval_minutes));
-  // อนุญาตเฉพาะค่าในชุด {1,3,5,10,15,30,60} — ถ้าไม่ตรง ใช้ค่า default
-  if (!(INTERVAL_MINUTE_OPTIONS as readonly number[]).includes(intervalMinutes)) {
-    intervalMinutes = DEFAULT_INTERVAL_MINUTES;
+  let end = String(input?.window_end ?? DEFAULT_SETTINGS.window_end).trim();
+  if (!TIME_RE.test(end)) end = DEFAULT_SETTINGS.window_end;
+
+  // ไม่รองรับช่วงข้ามเที่ยงคืน (22:00–02:00) เพราะเงื่อนไข "วัน" จะกำกวมว่านับวันเริ่มหรือวันจบ
+  // → ยุบให้เป็นช่วงจุดเดียวแทนการเดาใจ
+  if (end < start) end = start;
+
+  let intervalSeconds = Math.trunc(Number(input?.interval_seconds));
+  if (!Number.isFinite(intervalSeconds) || intervalSeconds <= 0) {
+    intervalSeconds = DEFAULT_INTERVAL_SECONDS;
   }
+  intervalSeconds = Math.min(MAX_INTERVAL_SECONDS, Math.max(MIN_INTERVAL_SECONDS, intervalSeconds));
 
   const resources: ResourceId[] = Array.isArray(input?.resources)
     ? input.resources.filter(isValidResource)
@@ -301,10 +360,10 @@ export async function saveSettings(input: any): Promise<SyncSettings> {
 
   await pool.query(
     `UPDATE sync_settings
-       SET auto_enabled = $1, mode = $2, daily_time = $3, interval_minutes = $4,
-           resources = $5, updated_at = NOW()
+       SET auto_enabled = $1, days = $2, window_start = $3, window_end = $4,
+           interval_seconds = $5, resources = $6, updated_at = NOW()
      WHERE id = 1`,
-    [autoEnabled, mode, dailyTime, intervalMinutes, finalResources]
+    [autoEnabled, days, start, end, intervalSeconds, finalResources]
   );
 
   // reset ตัวจับเวลา interval เพื่อให้เริ่มนับใหม่จากตอนบันทึก
@@ -370,15 +429,22 @@ export async function getStatus() {
 // ============================================================
 // Scheduler — เช็คทุก 60 วินาที
 // ============================================================
-let lastTriggeredDay: string | null = null; // 'YYYY-MM-DD' สำหรับโหมด daily
-let lastIntervalRun = Date.now(); // epoch ms สำหรับโหมด interval
+let lastIntervalRun = Date.now(); // epoch ms ของรอบล่าสุดที่สั่งไป
 let schedulerTimer: NodeJS.Timeout | null = null;
 
-/** เวลาปัจจุบันโซน Asia/Bangkok เป็น { date:'YYYY-MM-DD', time:'HH:MM' } */
-function bangkokNow(): { date: string; time: string } {
+/** ต้องถี่กว่า MIN_INTERVAL_SECONDS พอสมควร ไม่งั้น interval 30 วิ จะเพี้ยนเป็น 60 วิ */
+const TICK_MS = 5000;
+
+const WEEKDAY_INDEX: Record<string, number> = {
+  Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6,
+};
+
+/** เวลาปัจจุบันโซน Asia/Bangkok เป็น { date:'YYYY-MM-DD', time:'HH:MM', day:0-6 } */
+function bangkokNow(): { date: string; time: string; day: number } {
   const parts = new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Asia/Bangkok',
     hour12: false,
+    weekday: 'short',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -388,7 +454,31 @@ function bangkokNow(): { date: string; time: string } {
   const get = (t: string) => parts.find((p) => p.type === t)?.value || '';
   let hh = get('hour');
   if (hh === '24') hh = '00'; // Intl อาจคืน 24 ตอนเที่ยงคืน
-  return { date: `${get('year')}-${get('month')}-${get('day')}`, time: `${hh}:${get('minute')}` };
+  return {
+    date: `${get('year')}-${get('month')}-${get('day')}`,
+    time: `${hh}:${get('minute')}`,
+    day: WEEKDAY_INDEX[get('weekday')] ?? 0,
+  };
+}
+
+/**
+ * ถึงเวลา sync หรือยัง — ฟังก์ชันบริสุทธิ์ แยกออกมาให้เทสได้โดยไม่ต้องรอเวลาจริง
+ *
+ * เงื่อนไขต้องผ่านครบ 3 ข้อ: วันตรง → อยู่ในช่วงเวลา → เว้นระยะครบ interval
+ */
+export function shouldRunNow(
+  settings: Pick<SyncSettings, 'days' | 'window_start' | 'window_end' | 'interval_seconds'>,
+  now: { time: string; day: number },
+  msSinceLastRun: number
+): boolean {
+  // 1) วันนี้อยู่ในวันที่เลือกไหม (อาเรย์ว่าง = ทุกวัน)
+  if (settings.days.length > 0 && !settings.days.includes(now.day)) return false;
+
+  // 2) อยู่ในช่วงเวลาไหม — เทียบ 'HH:MM' เป็นสตริงได้ตรง ๆ เพราะเลขศูนย์นำครบ
+  if (now.time < settings.window_start || now.time > settings.window_end) return false;
+
+  // 3) เว้นระยะครบ interval หรือยัง
+  return msSinceLastRun >= settings.interval_seconds * 1000;
 }
 
 async function schedulerTick() {
@@ -397,25 +487,15 @@ async function schedulerTick() {
     const settings = await getSettings();
     if (!settings.auto_enabled) return;
 
-    let shouldRun = false;
-    if (settings.mode === 'daily') {
-      const { date, time } = bangkokNow();
-      if (time === settings.daily_time && lastTriggeredDay !== date) {
-        shouldRun = true;
-        lastTriggeredDay = date;
-      }
-    } else {
-      const elapsed = Date.now() - lastIntervalRun;
-      if (elapsed >= settings.interval_minutes * 60 * 1000) {
-        shouldRun = true;
-        lastIntervalRun = Date.now();
-      }
-    }
+    const { time, day } = bangkokNow();
+    if (!shouldRunNow(settings, { time, day }, Date.now() - lastIntervalRun)) return;
 
-    if (shouldRun) {
-      const started = startSync(settings.resources, 'schedule');
-      console.log(`[scheduler] ถึงเวลา auto sync (${settings.mode}) — started=${started}`);
-    }
+    lastIntervalRun = Date.now();
+    const started = startSync(settings.resources, 'schedule');
+    console.log(
+      `[scheduler] ถึงเวลา auto sync (วัน ${day} เวลา ${time} ในช่วง ${settings.window_start}-${settings.window_end}` +
+        ` ทุก ${settings.interval_seconds} วิ) — started=${started}`
+    );
   } catch (err: any) {
     console.error('[scheduler] tick error:', err?.message || err);
   }
@@ -431,6 +511,6 @@ export async function initScheduler() {
   }
   lastIntervalRun = Date.now(); // เริ่มนับ interval จากตอน boot
   if (schedulerTimer) clearInterval(schedulerTimer);
-  schedulerTimer = setInterval(schedulerTick, 60 * 1000);
-  console.log('[scheduler] เริ่มทำงาน (เช็คทุก 60 วินาที)');
+  schedulerTimer = setInterval(schedulerTick, TICK_MS);
+  console.log(`[scheduler] เริ่มทำงาน (เช็คทุก ${TICK_MS / 1000} วินาที)`);
 }

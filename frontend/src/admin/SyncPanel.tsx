@@ -33,9 +33,11 @@ interface ResourceStatus {
 
 interface SyncSettings {
   auto_enabled: boolean;
-  mode: 'daily' | 'interval';
-  daily_time: string;
-  interval_minutes: number;
+  /** 0=อาทิตย์ … 6=เสาร์ ตรงกับ Date.getDay() — ว่าง = ทุกวัน */
+  days: number[];
+  window_start: string; // 'HH:MM'
+  window_end: string; // 'HH:MM'
+  interval_seconds: number;
   resources: ResourceId[];
   updated_at: string | null;
 }
@@ -52,7 +54,54 @@ interface SyncStatus {
   settings: SyncSettings;
 }
 
-const INTERVAL_OPTIONS = [1, 3, 5, 10, 15, 30, 60];
+/** เรียงแบบปฏิทินไทย จันทร์ก่อน แต่ค่าที่เก็บตรงกับ Date.getDay() */
+const DAY_CHIPS: { value: number; label: string }[] = [
+  { value: 1, label: 'จ' },
+  { value: 2, label: 'อ' },
+  { value: 3, label: 'พ' },
+  { value: 4, label: 'พฤ' },
+  { value: 5, label: 'ศ' },
+  { value: 6, label: 'ส' },
+  { value: 0, label: 'อา' },
+];
+
+const MIN_INTERVAL_SECONDS = 30;
+const WEEKDAYS = [1, 2, 3, 4, 5];
+const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
+
+const sameDays = (a: number[], b: number[]) => a.length === b.length && b.every((d) => a.includes(d));
+
+/** ปุ่มลัด — ติดสถานะ active ด้วย จึงบอกได้ในตัวว่าตอนนี้เลือกอยู่แบบไหน */
+const DAY_PRESETS: { label: string; days: number[]; isActive: (days: number[]) => boolean }[] = [
+  { label: 'ทุกวัน', days: ALL_DAYS, isActive: (d) => d.length === 0 || sameDays(d, ALL_DAYS) },
+  { label: 'จ.-ศ.', days: WEEKDAYS, isActive: (d) => sameDays(d, WEEKDAYS) },
+];
+
+type IntervalUnit = 'sec' | 'min';
+
+/** วินาที → ค่าที่โชว์ในช่องกรอก + หน่วยที่เหมาะ (90 วิ ไม่ลงตัวนาที จึงโชว์เป็นวินาที) */
+function splitInterval(seconds: number): { value: number; unit: IntervalUnit } {
+  if (seconds >= 60 && seconds % 60 === 0) return { value: seconds / 60, unit: 'min' };
+  return { value: seconds, unit: 'sec' };
+}
+
+function describeSchedule(s: SyncSettings): string {
+  const days =
+    s.days.length === 0 || s.days.length === 7
+      ? 'ทุกวัน'
+      : s.days.length === 5 && WEEKDAYS.every((d) => s.days.includes(d))
+      ? 'จ.-ศ.'
+      : DAY_CHIPS.filter((d) => s.days.includes(d.value))
+          .map((d) => d.label)
+          .join(' ');
+
+  const { value, unit } = splitInterval(s.interval_seconds);
+  const every = `ทุก ${value} ${unit === 'min' ? 'นาที' : 'วินาที'}`;
+  const when =
+    s.window_start === s.window_end ? `เวลา ${s.window_start}` : `${s.window_start}-${s.window_end}`;
+
+  return `${days} ${when} · ${every}`;
+}
 
 const STATUS_LABEL: Record<RunStatus, string> = {
   success: 'สำเร็จ',
@@ -93,6 +142,10 @@ export function SyncPanel() {
 
   // ฟอร์มตั้งเวลา (แยกจาก status เพื่อแก้ไขได้อิสระ)
   const [form, setForm] = useState<SyncSettings | null>(null);
+  // ช่อง interval แยกเก็บเป็นสตริง+หน่วย เพื่อให้พิมพ์ลบจนว่างได้โดยฟอร์มไม่กระตุก
+  const [intervalInput, setIntervalInput] = useState('15');
+  const [intervalUnit, setIntervalUnit] = useState<IntervalUnit>('min');
+  const intervalReady = useRef(false);
 
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -118,6 +171,12 @@ export function SyncPanel() {
         setError(null);
         // ตั้งค่าฟอร์มครั้งแรก / เมื่อยังไม่แตะ (ถ้าแตะแล้วไม่ทับ)
         setForm((prev) => prev ?? data.settings);
+        if (!intervalReady.current) {
+          const { value, unit } = splitInterval(data.settings.interval_seconds);
+          setIntervalInput(String(value));
+          setIntervalUnit(unit);
+          intervalReady.current = true;
+        }
         return data;
       } catch (err: unknown) {
         if (!opts?.silent) {
@@ -199,6 +258,10 @@ export function SyncPanel() {
       if (!res.ok) throw new Error(result.error || 'ไม่สามารถบันทึกการตั้งค่าได้');
       setForm(result.settings);
       setStatus((prev) => (prev ? { ...prev, settings: result.settings } : prev));
+      // server clamp ค่าให้อยู่ในช่วงที่รับได้ → sync ช่องกรอกกลับตามของจริงที่บันทึกลงไป
+      const applied = splitInterval(result.settings.interval_seconds);
+      setIntervalInput(String(applied.value));
+      setIntervalUnit(applied.unit);
       showToast('บันทึกการตั้งค่าตารางเวลาสำเร็จ', 'success');
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : 'บันทึกไม่สำเร็จ', 'error');
@@ -214,6 +277,24 @@ export function SyncPanel() {
       const next = has ? prev.resources.filter((r) => r !== id) : [...prev.resources, id];
       return { ...prev, resources: next };
     });
+  };
+
+  const toggleDay = (day: number) => {
+    setForm((prev) => {
+      if (!prev) return prev;
+      const has = prev.days.includes(day);
+      const next = has ? prev.days.filter((d) => d !== day) : [...prev.days, day];
+      return { ...prev, days: next.sort((a, b) => a - b) };
+    });
+  };
+
+  /** ช่องเลข interval — อัปเดต form เฉพาะตอนที่ค่าใช้ได้ ระหว่างพิมพ์ปล่อยให้ว่างได้ */
+  const applyInterval = (raw: string, unit: IntervalUnit) => {
+    setIntervalInput(raw);
+    setIntervalUnit(unit);
+    const n = Math.trunc(Number(raw));
+    if (!Number.isFinite(n) || n <= 0) return;
+    setForm((prev) => (prev ? { ...prev, interval_seconds: unit === 'min' ? n * 60 : n } : prev));
   };
 
   if (loading) {
@@ -391,57 +472,112 @@ export function SyncPanel() {
 
           {form.auto_enabled && (
             <div className="space-y-2.5 animate-fade-in">
-              {/* Mode selector + detail on one row */}
+              {/* วัน */}
               <div className="flex flex-wrap items-center gap-2 text-xs">
-                {(['daily', 'interval'] as const).map((m) => {
-                  const active = form.mode === m;
-                  return (
-                    <button
-                      key={m}
-                      type="button"
-                      onClick={() => setForm({ ...form, mode: m })}
-                      className={`px-3 py-1.5 rounded-lg font-semibold border transition-all ${
-                        active
-                          ? 'text-white border-transparent shadow-sm'
-                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                      }`}
-                      style={active ? { backgroundColor: BRAND } : undefined}
-                    >
-                      {m === 'daily' ? 'รายวัน' : 'ทุกช่วงเวลา'}
-                    </button>
-                  );
-                })}
+                <span className="text-[11px] font-semibold text-slate-400 w-12 shrink-0">วัน</span>
 
-                <span className="text-slate-300">|</span>
+                {/* segmented control — 7 วันเป็นก้อนเดียว ไม่ใช่ปุ่มลอย 7 ตัว */}
+                <div className="flex rounded-lg border border-slate-200 overflow-hidden divide-x divide-slate-200">
+                  {DAY_CHIPS.map((d) => {
+                    // days ว่าง = ทุกวัน จึงโชว์เป็นเลือกครบ
+                    const active = form.days.length === 0 || form.days.includes(d.value);
+                    return (
+                      <button
+                        key={d.value}
+                        type="button"
+                        onClick={() => toggleDay(d.value)}
+                        aria-pressed={active}
+                        className={`w-8 py-1 text-[11px] font-bold transition-colors ${
+                          active ? 'text-white' : 'bg-slate-50 text-slate-400 hover:bg-white'
+                        }`}
+                        style={active ? { backgroundColor: BRAND } : undefined}
+                      >
+                        {d.label}
+                      </button>
+                    );
+                  })}
+                </div>
 
-                {form.mode === 'daily' ? (
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-slate-500">ทุกวันเวลา</span>
-                    <input
-                      type="time"
-                      value={form.daily_time}
-                      onChange={(e) => setForm({ ...form, daily_time: e.target.value })}
-                      className="px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#009032]/20 focus:border-[#009032]"
-                    />
-                    <span className="text-slate-400">น.</span>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-slate-500">ทุก ๆ</span>
-                    <select
-                      value={form.interval_minutes}
-                      onChange={(e) => setForm({ ...form, interval_minutes: Number(e.target.value) })}
-                      className="px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#009032]/20 focus:border-[#009032]"
-                    >
-                      {INTERVAL_OPTIONS.map((m) => (
-                        <option key={m} value={m}>
-                          {m} นาที
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
+                {/* ชิดขวาตามแพตเทิร์นของการ์ดนี้ (ป้ายซ้าย–ปุ่มขวา) ให้อ่านว่าคนละหน้าที่กับชิปวัน */}
+                <div className="flex items-center gap-1 ml-auto">
+                  {DAY_PRESETS.map((p) => {
+                    const active = p.isActive(form.days);
+                    return (
+                      <button
+                        key={p.label}
+                        type="button"
+                        onClick={() => setForm({ ...form, days: [...p.days] })}
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold transition-colors ${
+                          active ? '' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'
+                        }`}
+                        style={active ? { backgroundColor: 'rgba(0,144,50,0.10)', color: BRAND } : undefined}
+                      >
+                        {p.label}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
+
+              {/* ช่วงเวลา */}
+              <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                <span className="text-[11px] font-semibold text-slate-400 w-12 shrink-0">เวลา</span>
+                <input
+                  type="time"
+                  value={form.window_start}
+                  onChange={(e) => setForm({ ...form, window_start: e.target.value })}
+                  className="px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#009032]/20 focus:border-[#009032]"
+                />
+                <span className="text-slate-500">ถึง</span>
+                <input
+                  type="time"
+                  value={form.window_end}
+                  onChange={(e) => setForm({ ...form, window_end: e.target.value })}
+                  className="px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#009032]/20 focus:border-[#009032]"
+                />
+                <span className="text-slate-400">น.</span>
+              </div>
+
+              {/* interval */}
+              <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                <span className="text-[11px] font-semibold text-slate-400 w-12 shrink-0">ทุก ๆ</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={intervalInput}
+                  onChange={(e) => applyInterval(e.target.value, intervalUnit)}
+                  className="w-20 px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#009032]/20 focus:border-[#009032]"
+                />
+                <select
+                  value={intervalUnit}
+                  onChange={(e) => applyInterval(intervalInput, e.target.value as IntervalUnit)}
+                  className="px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#009032]/20 focus:border-[#009032]"
+                >
+                  <option value="sec">วินาที</option>
+                  <option value="min">นาที</option>
+                </select>
+              </div>
+
+              {/* สรุปเป็นประโยค — config มี 3 มิติแล้ว อ่านจากฟอร์มเปล่า ๆ ตีความยาก */}
+              <p className="flex items-center gap-1 text-[11px] font-semibold" style={{ color: BRAND }}>
+                <Clock className="w-3 h-3 shrink-0" />
+                {describeSchedule(form)}
+              </p>
+
+              {form.window_start === form.window_end && (
+                <p className="flex items-start gap-1 text-[11px] text-slate-400">
+                  <Info className="w-3 h-3 shrink-0 mt-0.5" />
+                  เวลาเริ่มกับสิ้นสุดเท่ากัน = ยิงครั้งเดียวต่อวัน (ถ้า interval ตั้งไว้ตั้งแต่ 1 นาทีขึ้นไป)
+                </p>
+              )}
+
+              {form.interval_seconds < 60 && (
+                <p className="flex items-start gap-1 text-[11px] text-amber-600">
+                  <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
+                  รอบ sync จริงใช้เวลาหลายนาที ตั้งต่ำกว่า 1 นาทีจะกลายเป็นวิ่งต่อเนื่องตลอดช่วงเวลา
+                  (ต่ำสุดที่ระบบรับคือ {MIN_INTERVAL_SECONDS} วินาที)
+                </p>
+              )}
 
               {/* Resource selection (compact chips) */}
               <div className="flex flex-wrap items-center gap-1.5">
