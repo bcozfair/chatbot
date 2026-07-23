@@ -2876,7 +2876,9 @@
             v.is_optional && v.linked_to_model
               ? ` (สินค้าเสริมของ ${v.linked_to_model})`
               : "";
-          return `📦 ห้ามเสนอราคาเมื่อไม่มีสินค้า รายการ ${model}${optionalNote}`;
+          // warn_msg จาก server ระบุจำนวนที่ขายได้/ที่สั่ง ("ของว่างขายได้ 1 ชิ้น ไม่พอกับจำนวนที่สั่ง 2 ชิ้น")
+          const detail = v.warn_msg ? `: ${v.warn_msg}` : "";
+          return `📦 ระงับเมื่อสต็อกไม่พอ รายการ ${model}${optionalNote}${detail}`;
         }
         if (v.type === "MIN_PRICE_VIOLATION") {
           const price = Number(v.price ?? 0).toLocaleString("en-US", {

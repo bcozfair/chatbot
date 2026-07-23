@@ -21,6 +21,7 @@
     "diag:confirm-race": "tsx scripts/diag/confirmRaceDiag.ts",
     "diag:shipping-fee": "tsx scripts/diag/shippingFeeSmoke.ts",
     "diag:stock-rule": "tsx scripts/diag/stockRuleSmoke.ts",
+    "diag:stock-rule-put": "tsx scripts/diag/stockRulePutSmoke.ts",
     "diag:odoo-export": "tsx scripts/diag/odooExportSmoke.ts",
     "diag:orphan-contacts": "tsx scripts/diag/orphanContactsDiag.ts",
     "backfill:contacts": "tsx scripts/backfillContactsFromSaleOrders.ts",
