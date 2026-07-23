@@ -21,7 +21,7 @@ import {
   getBranches,
   getProductUomByTemplateIds,
 } from './db/repositories.js';
-import { confirmQuotationAtomic, enrichQuotationData, buildItemSnapshots, checkMinSalesPrice } from './services/quotationService.js';
+import { confirmQuotationAtomic, enrichQuotationData, buildItemSnapshots } from './services/quotationService.js';
 import {
   buildOdooSaleOrderRows,
   collectProductTemplateIds,
@@ -1078,36 +1078,13 @@ app.post('/api/quotation/:id/confirm', express.json(), async (req: any, res: any
       return res.status(400).json({ error: 'ไม่สามารถยืนยันใบเสนอราคาที่ยังไม่ได้ระบุลูกค้าได้ กรุณาเลือกบริษัทและผู้ติดต่อก่อน' });
     }
 
-    // ราคาหลังหักส่วนลดต้อง >= minimum_sales_price หรือเข้าเงื่อนไขโปรโมชัน (กฎเดียวกับตอนบันทึก)
-    let minPriceViolationsOnConfirm;
-    try {
-      minPriceViolationsOnConfirm = await checkMinSalesPrice(quote.items, quote.customer_name);
-    } catch (minPriceErr) {
-      console.error("Error fetching minimum_sales_price for confirmation:", minPriceErr);
-      return res.status(500).json({ error: 'ไม่สามารถตรวจสอบราคาขั้นต่ำได้' });
-    }
-    if (minPriceViolationsOnConfirm.length > 0) {
-      const v = minPriceViolationsOnConfirm[0];
-      return res.status(400).json({
-        error: `ไม่สามารถยืนยันได้เนื่องจากราคาหลังหักส่วนลดของสินค้า ${v.model} (฿${v.price.toFixed(2)}) ต่ำกว่าราคาขั้นต่ำที่กำหนด (฿${v.min_price.toFixed(2)}) และไม่เข้าเงื่อนไขโปรโมชันใดๆ`
-      });
-    }
-
-    // ระงับเมื่อของว่างขายได้ไม่พอกับจำนวนที่สั่ง (กฎเดียวกับตอนบันทึก) — กันเหนียวก่อนออกเลข
-    // เผื่อสต็อกลดลงหลังร่างไว้ ตอน confirm เดิมไม่ตรวจ ทำให้ออกใบสินค้าที่หมดสต็อกได้
-    let stockViolationsOnConfirm;
-    try {
-      const { checkStockRules } = await import('./services/productService.js');
-      stockViolationsOnConfirm = await checkStockRules(quote.items);
-    } catch (stockErr) {
-      console.error("Error checking stock rules for confirmation:", stockErr);
-      return res.status(500).json({ error: 'ไม่สามารถตรวจสอบสต็อกสินค้าได้' });
-    }
-    if (stockViolationsOnConfirm.length > 0) {
-      const lines = stockViolationsOnConfirm.map(v => ` - [${v.model}]: ${v.warn_msg}`);
-      return res.status(400).json({
-        error: `❌ ไม่สามารถยืนยันได้ สินค้าถูกระงับเมื่อสต็อกไม่พอ:\n${lines.join('\n')}\nกรุณาแก้ไขจำนวน หรือติดต่อแอดมิน`
-      });
+    // ด่านตรวจกฎรวมก่อนออกเลข (fail-closed) — blocked/stock/MOQ/min-price
+    const { validateQuotationItems: validateOnConfirm } = await import('./services/quotationService.js');
+    const { violations: confirmViolations } = await validateOnConfirm(quote.items, {
+      customerName: quote.customer_name, stage: 'confirm'
+    });
+    if (confirmViolations.length > 0) {
+      return res.status(422).json({ error: 'VALIDATION_ERROR', violations: confirmViolations });
     }
 
     const protocol = req.headers['x-forwarded-proto'] || req.protocol;

@@ -26,7 +26,7 @@ import {
   createRevisionFlex,
   isCustomerInfoIncomplete
 } from '../utils/flexTemplates.js';
-import { findProduct, checkStockRules, type StockViolation } from '../services/productService.js';
+import { findProduct } from '../services/productService.js';
 import { 
   findCustomerCandidates,
   findContactCandidates,
@@ -40,9 +40,7 @@ import {
   resolveContactFlow,
   updateQuotationCustomerSnapshot,
   insertDraftQuotations,
-  enrichQuotationData,
-  checkMinSalesPrice,
-  type MinPriceViolation
+  enrichQuotationData
 } from '../services/quotationService.js';
 import { applyShippingFeeToQuoteGroup } from '../services/shippingFee.js';
 import { detectQuotationEditIntent, handleQuotationEditRequest } from '../services/quotationAgent.js';
@@ -541,37 +539,21 @@ export async function handleEvent(event: any): Promise<any> {
             continue;
           }
 
-          // ราคาหลังหักส่วนลดต้อง >= minimum_sales_price หรือเข้าเงื่อนไขโปรโมชัน (กฎเดียวกับตอนบันทึกจาก LIFF)
-          let minPriceViolations: MinPriceViolation[] = [];
+          // ด่านตรวจกฎรวมก่อนออกเลข (fail-closed — throw ในด่านกลางกลายเป็น SYSTEM_ERROR violation)
+          let confirmViolations: import('../services/quotationService.js').Violation[];
           try {
-            minPriceViolations = await checkMinSalesPrice(currentQuote.items, currentQuote.customer_name);
-          } catch (minPriceErr) {
-            console.error("Error checking minimum_sales_price in chatbot confirm:", minPriceErr);
-          }
-          if (minPriceViolations.length > 0) {
-            const lines = minPriceViolations.map(
-              v => `• ${v.model}: ราคาหลังลด ฿${v.price.toFixed(2)} < ขั้นต่ำ ฿${v.min_price.toFixed(2)} (ไม่เข้าเงื่อนไขโปรโมชัน)`
-            );
-            replyMessages.push({
-              type: 'text',
-              text: `❌ ไม่สามารถยืนยันใบเสนอราคาได้\nราคาหลังหักส่วนลดต่ำกว่าราคาขั้นต่ำที่กำหนด และไม่เข้าเงื่อนไขโปรโมชัน:\n${lines.join('\n')}\n\nกรุณาแก้ไขส่วนลดหรือราคาแล้วลองใหม่อีกครั้ง`
+            const { validateQuotationItems } = await import('../services/quotationService.js');
+            const r = await validateQuotationItems(currentQuote.items, {
+              customerName: currentQuote.customer_name, stage: 'confirm'
             });
-            continue;
+            confirmViolations = r.violations;
+          } catch (valErr) {
+            console.error('validateQuotationItems on confirm error:', valErr);
+            confirmViolations = [{ type: 'SYSTEM_ERROR', model: '-', display_message: '⚠️ ตรวจสอบกฎไม่สำเร็จ กรุณาลองใหม่หรือติดต่อแอดมิน' }];
           }
-
-          // ระงับเมื่อของว่างขายได้ไม่พอกับจำนวนที่สั่ง (กฎเดียวกับตอนบันทึกจาก LIFF) — กันเหนียวก่อนออกเลข
-          let stockViolations: StockViolation[] = [];
-          try {
-            stockViolations = await checkStockRules(currentQuote.items);
-          } catch (stockErr) {
-            console.error("Error checking stock rules in chatbot confirm:", stockErr);
-          }
-          if (stockViolations.length > 0) {
-            const lines = stockViolations.map(v => ` - [${v.model}]: ${v.warn_msg}`);
-            replyMessages.push({
-              type: 'text',
-              text: `❌ ไม่สามารถยืนยันใบเสนอราคาได้\nสินค้าถูกระงับเมื่อสต็อกไม่พอ:\n${lines.join('\n')}\n\nกรุณาแก้ไขจำนวน หรือติดต่อแอดมิน`
-            });
+          if (confirmViolations.length > 0) {
+            const { buildViolationText } = await import('../services/quotationService.js');
+            replyMessages.push({ type: 'text', text: buildViolationText(confirmViolations) });
             continue;
           }
 
