@@ -106,6 +106,15 @@ export async function handleQuotationEditRequest(params: {
 
   const revisedCustomerName = appendReviseFrom(activeQuote.customer_name, activeQuote.quotation_no);
 
+  // ตรวจกฎก่อนสร้างร่าง revision (เดิมข้ามการตรวจ — สินค้าที่ติดกฎหลุดเข้าร่างได้)
+  const { validateQuotationItems } = await import('./quotationService.js');
+  const { violations: revViolations } = await validateQuotationItems(activeQuote.items, { stage: 'draft' });
+  if (revViolations.length > 0) {
+    const { buildViolationText } = await import('./quotationService.js');
+    const t = buildViolationText(revViolations);
+    return { messages: [{ type: 'text', text: t }], replyText: t };
+  }
+
   let newQuote: any = null;
   try {
     const insertedQuotes = await insertDraftQuotations(

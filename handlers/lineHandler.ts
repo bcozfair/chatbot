@@ -1375,6 +1375,18 @@ export async function handleEvent(event: any): Promise<any> {
             });
           }
 
+          // ตรวจกฎก่อนสร้างร่าง revision (เดิมข้ามการตรวจ) — reply แบบเดียวกับ error อื่นใน handler นี้
+          {
+            const { validateQuotationItems, buildViolationText } = await import('../services/quotationService.js');
+            const { violations: revV } = await validateQuotationItems(quote.items, { stage: 'draft' });
+            if (revV.length > 0) {
+              return lineClient.replyMessage({
+                replyToken: replyToken,
+                messages: [{ type: 'text', text: buildViolationText(revV) }]
+              });
+            }
+          }
+
           const revisedCustomerName = appendReviseFrom(quote.customer_name, quote.quotation_no);
 
           try {

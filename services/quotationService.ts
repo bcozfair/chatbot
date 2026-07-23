@@ -1049,39 +1049,9 @@ export async function validateQuotationItems(
 }
 
 export async function processQuotationRequest(userId: string, rawCustomerQuery: string, rawContactQuery: string, itemsForDb: any[] | null, salesperson: any): Promise<any> {
-  const blockedError = await getBlockedProductError(itemsForDb);
-  if (blockedError) {
-    return { text: blockedError };
-  }
-
-  // เรียกใช้ Validation Pipeline (F2, F3, F4)
-  const { items: expanded, errors } = await validateAndPrepareItems(itemsForDb);
-  if (errors && errors.length > 0) {
-    const stockErrors = errors.filter(e => e.type === 'OUT_OF_STOCK');
-    const moqErrors = errors.filter(e => e.type === 'MOQ_VIOLATION');
-    
-    let errorText = '❌ ระงับการเสนอราคา ตามเงื่อนไขด้านล่าง\nกรุณาแก้ไข หรือติดต่อแอดมิน\n\n';
-    
-    if (stockErrors.length > 0) {
-      errorText += '📦 สินค้านี้ถูกระงับเมื่อไม่มีสต็อก:\n';
-      stockErrors.forEach(e => {
-        if (e.is_optional && e.linked_to_model) {
-          errorText += ` - [${e.model}] (สินค้าเสริมของ ${e.linked_to_model}): ${e.warn_msg}\n`;
-        } else {
-          errorText += ` - [${e.model}]: ${e.warn_msg}\n`;
-        }
-      });
-      errorText += '\n';
-    }
-    
-    if (moqErrors.length > 0) {
-      errorText += '⬇️ จำนวนไม่ถึงขั้นต่ำ (MOQ):\n';
-      moqErrors.forEach(e => {
-        errorText += ` - [${e.model}]: ${e.warn_msg}\n`;
-      });
-    }
-    
-    return { text: errorText.trim() };
+  const { items: expanded, violations } = await validateQuotationItems(itemsForDb, { stage: 'draft' });
+  if (violations && violations.length > 0) {
+    return { text: buildViolationText(violations) };
   }
 
   let cleanCust = String(rawCustomerQuery || '').trim();
