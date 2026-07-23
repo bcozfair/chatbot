@@ -921,11 +921,10 @@
         console.error('Error checking blocked status:', err);
       }
 
+      // ไม่บล็อกที่ client จากสต๊อกดิบ — สินค้าที่ "ไม่ได้ตั้งกฎระงับ" ต้องเพิ่มได้แม้ของไม่พอ
+      // การระงับจริงทำที่ server gate (validateQuotationItems) ซึ่งรู้ว่าสินค้าไหนติด product_stock_rules
+      // ป้ายบอกสต๊อก (badge) ยังโชว์เตือน "ไม่พอ" ตามเดิมเพื่อให้เซลส์เห็น
       const stock = Number(prod.stock) || 0;
-      if (1 > stock) {
-        showAlert(`สินค้าไม่เพียงพอ (พร้อมส่ง ${stock} ชิ้น) — เพิ่มลงตะกร้าไม่ได้`);
-        return;
-      }
       cart.push({ product_code: code, model: code, name: prod.name, price: Number(prod.price)||0, quantity: 1, stock });
       renderProducts();
       updateCartBar();
@@ -937,10 +936,7 @@
       const item = cart[idx];
       const newQty = item.quantity + delta;
       if (newQty <= 0) { cart.splice(idx, 1); renderProducts(); updateCartBar(); return; }
-      if (newQty > item.stock) {
-        showAlert(`สินค้าไม่เพียงพอ (พร้อมส่ง ${item.stock} ชิ้น) — เพิ่มจำนวนไม่ได้`);
-        return;
-      }
+      // ไม่บล็อกจำนวนจากสต๊อกดิบที่ client — server gate เป็นผู้ระงับเฉพาะสินค้าที่ติดกฎ
       item.quantity = newQty;
       renderProducts();
       updateCartBar();
@@ -952,10 +948,7 @@
       if (idx < 0) return;
       const item = cart[idx];
       const newQty = Math.max(1, val);
-      if (newQty > item.stock) {
-        showAlert(`สินค้าไม่เพียงพอ (พร้อมส่ง ${item.stock} ชิ้น) — เพิ่มจำนวนไม่ได้`);
-        return;
-      }
+      // ไม่บล็อกจำนวนจากสต๊อกดิบที่ client — server gate เป็นผู้ระงับเฉพาะสินค้าที่ติดกฎ
       item.quantity = newQty;
       renderProducts();
       updateCartBar();

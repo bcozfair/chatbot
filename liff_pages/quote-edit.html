@@ -2758,13 +2758,8 @@
         if (field === "quantity") {
           val = Math.max(1, Math.round(val));
           const item = quotesData[qIdx].items[iIdx];
-          if (val > (Number(item.stock) || 0)) {
-            showCustomAlert(
-              `สินค้าไม่เพียงพอ (พร้อมส่ง ${item.stock} ชิ้น) — เพิ่มจำนวนไม่ได้`,
-            );
-            e.target.value = item.quantity; // คืนค่าเดิมในช่อง
-            return;
-          }
+          // ไม่บล็อกจำนวนจากสต๊อกดิบที่ client — สินค้าที่ไม่ได้ตั้งกฎระงับต้องปรับจำนวนได้แม้ของไม่พอ
+          // server gate (validateQuotationItems) เป็นผู้ระงับเฉพาะสินค้าที่ติด product_stock_rules
           item.quantity = val;
         } else if (field === "price") {
           val = Math.max(0, val);
@@ -3416,12 +3411,8 @@
           product_sub_category: prod.category || "",
           sales_description: prod.sales_description || "",
         };
-        if (1 > stock) {
-          showCustomAlert(
-            `สินค้าไม่เพียงพอ (พร้อมส่ง ${stock} ชิ้น) — เพิ่มลงใบเสนอราคาไม่ได้`,
-          );
-          return;
-        }
+        // ไม่บล็อกที่ client จากสต๊อกดิบ — สินค้าที่ไม่ได้ตั้งกฎระงับต้องเพิ่มได้แม้ของไม่พอ
+        // การระงับจริงทำที่ server gate ตอน save/submit (รู้ว่าสินค้าไหนติด product_stock_rules)
 
         // ── ไม่มีใบของบริษัทสินค้านี้ → แยกใบใหม่ (สร้างพร้อมสินค้าเลย + ห้ามลบ draft เดิม) ──
         if (targetQIdx === -1) {

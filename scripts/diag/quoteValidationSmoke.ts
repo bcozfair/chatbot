@@ -38,6 +38,16 @@ import { pool } from '../../config/db.js';
   const msgB = b.violations.find(v => v.type === 'OUT_OF_STOCK')?.display_message;
   ok('parity: draft vs confirm ข้อความ OUT_OF_STOCK ตรงกัน', !!msgA && msgA === msgB);
 }
+{
+  // ── สินค้าที่ "ไม่ได้ตั้งกฎระงับสต็อก" ต้องเพิ่มได้แม้ของว่างไม่พอ → ต้องไม่มี violation เลย ──
+  //   fixture: product 8789 (CM-002N-1-110) unreserved=0, ไม่มี stock rule / ไม่มี MOQ,
+  //   ราคา 2800 >= minimum_sales_price(~1960) จึงไม่ชนกฎราคาด้วย → สั่ง 5 ชิ้นต้องผ่าน
+  const ruleless = [{ product_id: 8789, product_template_id: 8789, model: 'CM-002N-1-110', quantity: 5, price: 2800 }];
+  const r = await validateQuotationItems(ruleless, { stage: 'save' });
+  const detail = r.violations.length ? ` (หลุดเป็น ${r.violations.map(v => v.type).join(',')})` : '';
+  ok(`ruleless: สินค้าไม่มีกฎ ของว่าง 0 สั่ง 5 → ไม่บล็อก (0 violations)${detail}`,
+    r.violations.length === 0);
+}
 await pool.end();
 
 console.log(failures === 0 ? '\n✅ ผ่านทั้งหมด' : `\n❌ FAIL ${failures}`);
