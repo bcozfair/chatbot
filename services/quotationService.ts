@@ -268,7 +268,10 @@ export async function buildItemSnapshots(rawItems: any[], executor: DbExecutor =
       delivery_in_stock_days: outcome.delivery_in_stock_days,
       delivery_out_of_stock_days: outOfStock.days,
       delivery_source: outOfStock.source,
-      is_optional: !!item.is_optional
+      is_optional: !!item.is_optional,
+      // ผูกสินค้าเสริมกลับไปยังสินค้าหลัก — ต้อง persist ลง snapshot ด้วย
+      // ไม่งั้นหายตอน round-trip แล้วฝั่งแสดงผล (Flex/LIFF) แยกสินค้าพ่วงไม่ออก
+      linked_to_product_id: item.linked_to_product_id ?? null
     });
   }
   return snapshotItems;

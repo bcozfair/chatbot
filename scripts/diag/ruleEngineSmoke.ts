@@ -106,11 +106,19 @@ const snaps = await buildItemSnapshots([
 const s0 = snaps[0];
 const expectedKeys = ['internal_reference', 'product_id', 'model', 'name', 'sales_description',
   'price', 'quantity', 'discount_1', 'discount_2', 'remark', 'brand', 'series', 'production',
-  'warranty_display', 'delivery_in_stock_days', 'delivery_out_of_stock_days', 'delivery_source', 'is_optional'];
+  'warranty_display', 'delivery_in_stock_days', 'delivery_out_of_stock_days', 'delivery_source',
+  'is_optional', 'linked_to_product_id'];
 ok('snapshot มี field ครบและไม่เกิน',
   JSON.stringify(Object.keys(s0)) === JSON.stringify(expectedKeys),
   Object.keys(s0).join(','));
 ok('snapshot เติมข้อมูลสินค้าจาก DB', s0.model === prods[0].model && s0.quantity === 2);
+// สินค้าพ่วงต้อง persist linked_to_product_id ลง snapshot (ไม่งั้นหายตอน round-trip → Flex/LIFF แยกไม่ออก)
+const optSnap = (await buildItemSnapshots([
+  { model: prods[0].model, price: 100, quantity: 2, is_optional: true, linked_to_product_id: 999 }
+]))[0];
+ok('snapshot เก็บ linked_to_product_id ของสินค้าพ่วง',
+  optSnap.is_optional === true && optSnap.linked_to_product_id === 999,
+  `is_optional=${optSnap.is_optional} linked=${optSnap.linked_to_product_id}`);
 
 // ── 5. end-to-end กับข้อมูล seed จริง: สินค้า Production 3 (tier 20/30/45/60) ──
 const { rows: p3 } = await pool.query(
