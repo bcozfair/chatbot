@@ -40,6 +40,7 @@ import {
   resolveContactFlow,
   updateQuotationCustomerSnapshot,
   insertDraftQuotations,
+  validateAndPrepareItems,
   enrichQuotationData,
   checkMinSalesPrice,
   type MinPriceViolation
@@ -1404,9 +1405,27 @@ export async function handleEvent(event: any): Promise<any> {
             console.error("Error cancelling pending quotations:", err);
           }
 
+          // เดินรายการใบเดิมผ่าน validateAndPrepareItems ก่อน insert เพื่อ re-expand สินค้าเสริม
+          // (ใบเก่าอาจไม่เคยผ่าน expand — กฎคู่สินค้าหลัก-เสริม ต้องพ่วงให้ครบตอนคัดลอกมาแก้)
+          let itemsForRevise = quote.items;
+          try {
+            const prepared = await validateAndPrepareItems(quote.items);
+            if (prepared.errors && prepared.errors.length > 0) {
+              const lines = prepared.errors.map((v: any) => ` - [${v.model}]: ${v.warn_msg}`);
+              return lineClient.replyMessage({
+                replyToken: replyToken,
+                messages: [{ type: 'text', text: `❌ ไม่สามารถคัดลอกใบเสนอราคาเพื่อแก้ไขได้\n${lines.join('\n')}` }]
+              });
+            }
+            itemsForRevise = prepared.items;
+          } catch (prepError) {
+            console.error("validateAndPrepareItems (chat revise) error:", prepError);
+            // ล้มเหลว → ใช้ items เดิมต่อ ไม่ปิดกั้นการแก้ไข
+          }
+
           let newQuote: any = null;
           try {
-            const insertedQuotes = await insertDraftQuotations(userId, revisedCustomerName, quote.items, 'draft', quote.customer_id, quote.contact_id);
+            const insertedQuotes = await insertDraftQuotations(userId, revisedCustomerName, itemsForRevise, 'draft', quote.customer_id, quote.contact_id);
             if (insertedQuotes && insertedQuotes.length > 0) {
               newQuote = insertedQuotes[0];
             }

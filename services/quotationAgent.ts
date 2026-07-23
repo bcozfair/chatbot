@@ -1,6 +1,7 @@
 import { pool } from '../config/db.js';
 import {
   insertDraftQuotations,
+  validateAndPrepareItems,
   enrichQuotationData
 } from './quotationService.js';
 import {
@@ -106,12 +107,28 @@ export async function handleQuotationEditRequest(params: {
 
   const revisedCustomerName = appendReviseFrom(activeQuote.customer_name, activeQuote.quotation_no);
 
+  // เดินรายการใบเดิมผ่าน validateAndPrepareItems ก่อน insert เพื่อ re-expand สินค้าเสริม
+  // (ใบเก่าอาจไม่เคยผ่าน expand — กฎคู่สินค้าหลัก-เสริม ต้องพ่วงให้ครบตอนคัดลอกมาแก้)
+  let itemsForRevise = activeQuote.items;
+  try {
+    const prepared = await validateAndPrepareItems(activeQuote.items);
+    if (prepared.errors && prepared.errors.length > 0) {
+      const lines = prepared.errors.map((v: any) => ` - [${v.model}]: ${v.warn_msg}`);
+      const t = `❌ ไม่สามารถเตรียมใบเสนอราคาเพื่อแก้ไขได้\n${lines.join('\n')}`;
+      return { messages: [{ type: 'text', text: t }], replyText: t };
+    }
+    itemsForRevise = prepared.items;
+  } catch (err) {
+    console.error('[quotationAgent] validateAndPrepareItems error:', err);
+    // ล้มเหลว → ใช้ items เดิมต่อ ไม่ปิดกั้นการแก้ไข
+  }
+
   let newQuote: any = null;
   try {
     const insertedQuotes = await insertDraftQuotations(
       userId,
       revisedCustomerName,
-      activeQuote.items,
+      itemsForRevise,
       'draft',
       activeQuote.customer_id,
       activeQuote.contact_id

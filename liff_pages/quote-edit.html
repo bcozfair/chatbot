@@ -329,6 +329,45 @@
         color: var(--warning);
       }
 
+      /* ─── การ์ดสินค้าพ่วง (สินค้าเสริมที่ระบบพ่วงตามสินค้าหลัก) ───
+         ใช้โทนน้ำเงินแยกจากสินค้าปกติ (เขียว) และค่าบริการ (ส้ม) ให้เห็นตั้งแต่แวบแรกว่า
+         บรรทัดนี้ผูกกับสินค้าหลัก จำนวน/ลบ ถูกล็อก จัดการผ่านสินค้าหลักเท่านั้น
+         (mirror ของ expandOptionalProducts ฝั่ง backend) */
+      .item-top-bar.is-optional-link {
+        background: #e3f0fb;
+        border-bottom-color: #b6d6f2;
+      }
+      .item-top-bar.is-optional-link .item-index {
+        background: var(--blue);
+      }
+      .item-top-bar.is-optional-link .item-code {
+        color: var(--blue-dark);
+      }
+      .item-top-bar.is-optional-link .item-stock-badge {
+        background: rgba(21, 101, 192, 0.12);
+        color: var(--blue-dark);
+      }
+
+      /* ป้าย 🔗 สินค้าพ่วง — บอกว่าบรรทัดนี้พ่วงมากับสินค้าหลัก */
+      .optional-link-badge {
+        font-family: "Outfit", sans-serif;
+        font-size: 10px;
+        font-weight: 800;
+        padding: 2px 7px;
+        border-radius: 20px;
+        white-space: nowrap;
+        flex-shrink: 0;
+        background: rgba(21, 101, 192, 0.12);
+        color: var(--blue-dark);
+      }
+
+      /* ช่องจำนวนของสินค้าพ่วงถูกล็อก (input/ปุ่ม disabled จาก JS อยู่แล้ว) —
+         ทำให้ดูจางลงและกันการกดเพื่อสื่อว่าต้องแก้จากสินค้าหลัก */
+      .item-card.is-optional-link .qty-control.compact {
+        opacity: 0.55;
+        pointer-events: none;
+      }
+
       /* 2 แถวจบ: [ชื่อ | ราคา] / [คำชี้แจง | ยอดรวม] — ไม่โชว์จำนวนเพราะแก้ไม่ได้อยู่แล้ว */
       .fee-row {
         display: flex;
@@ -2546,15 +2585,24 @@
           const hasDiscount = (item.discount_1 || 0) + (item.discount_2 || 0) > 0;
           const hasRemark = !!(item.remark || "").trim();
 
+          // สินค้าพ่วง (สินค้าเสริมที่ระบบพ่วงตามสินค้าหลัก) — จำนวน + ลบ ถูกล็อก
+          // จัดการผ่านสินค้าหลักเท่านั้น (mirror สิ่งที่ backend บังคับ) ราคา/ส่วนลดยังแก้ได้
+          const isOptLink = isOptionalLinkItem(item);
+
           const itemEl = document.createElement("div");
-          itemEl.className = "item-card";
+          itemEl.className = "item-card" + (isOptLink ? " is-optional-link" : "");
           itemEl.innerHTML = `
           <!-- TOP BAR: index · code · stock badge · delete -->
-          <div class="item-top-bar">
+          <div class="item-top-bar${isOptLink ? " is-optional-link" : ""}">
             <span class="item-index">${idx + 1}</span>
             <span class="item-code">${item.model || item.product_code}</span>
+            ${isOptLink ? `<span class="optional-link-badge">🔗 สินค้าพ่วง</span>` : ""}
             <span class="item-stock-badge ${stockClass}">${stockText}</span>
-            <button type="button" class="btn-delete-item" data-q="${qIdx}" data-i="${idx}" title="ลบรายการ">🗑️</button>
+            ${
+              isOptLink
+                ? ""
+                : `<button type="button" class="btn-delete-item" data-q="${qIdx}" data-i="${idx}" title="ลบรายการ">🗑️</button>`
+            }
           </div>
 
           <!-- BODY -->
@@ -2572,10 +2620,10 @@
               <span class="item-pq-sign">×</span>
               <div class="item-pq-col qty-col">
                 <div class="qty-control compact">
-                  <button type="button" class="qty-btn btn-minus" data-q="${qIdx}" data-i="${idx}">−</button>
+                  <button type="button" class="qty-btn btn-minus" data-q="${qIdx}" data-i="${idx}" ${isOptLink ? "disabled" : ""}>−</button>
                   <input type="number" class="edit-input qty-input" min="1"
-                    value="${item.quantity}" data-q="${qIdx}" data-i="${idx}" data-field="quantity">
-                  <button type="button" class="qty-btn btn-plus" data-q="${qIdx}" data-i="${idx}">+</button>
+                    value="${item.quantity}" data-q="${qIdx}" data-i="${idx}" data-field="quantity" ${isOptLink ? "disabled" : ""}>
+                  <button type="button" class="qty-btn btn-plus" data-q="${qIdx}" data-i="${idx}" ${isOptLink ? "disabled" : ""}>+</button>
                 </div>
               </div>
               <span class="item-total item-total-chip">฿${formatNumber(itemTotal, 2)}</span>
@@ -2739,6 +2787,41 @@
         );
       }
 
+      // อัปเดตจำนวน + ยอดรวมของ "แถวสินค้าเสริม" ในหน้าจอแบบ in-place (ไม่ re-render เต็มหน้า)
+      // เรียกตอนแก้จำนวนสินค้าหลัก — mirror สิ่งที่ backend ทำ (บังคับ opt.qty = main.qty)
+      // ต้องเป็น in-place เพราะ onFieldChange จงใจไม่ re-render เพื่อรักษา focus ช่องที่พิมพ์อยู่
+      // (ช่องจำนวนของสินค้าเสริมถูก disable ไว้อยู่แล้ว user จึงไม่ได้พิมพ์ที่แถวนี้ — เขียนทับได้เสมอ)
+      function syncLinkedOptionalsQty(qIdx, mainProductId, newQty) {
+        const quote = quotesData[qIdx];
+        if (!quote || !quote.items || mainProductId == null) return;
+        const container = document.getElementById(`items-${qIdx}`);
+        quote.items.forEach((it, idx) => {
+          if (String(it.linked_to_product_id) !== String(mainProductId)) return;
+          it.quantity = newQty; // sync state
+          if (!container) return;
+          // หา DOM node ของแถวสินค้าเสริมด้วย data-i (แถวเรียงตาม index ใน quote.items)
+          const qtyInput = container.querySelector(
+            `.qty-input[data-i="${idx}"]`,
+          );
+          if (qtyInput) qtyInput.value = newQty;
+          const card = qtyInput ? qtyInput.closest(".item-card") : null;
+          if (card) {
+            const totalEl = card.querySelector(".item-total");
+            if (totalEl)
+              totalEl.textContent = `฿${formatNumber(calcItemTotal(it), 2)}`;
+            // ป้ายสต๊อกของสินค้าเสริมก็ต้องขยับตามจำนวนที่ sync
+            const stockEl = card.querySelector(".item-stock-badge");
+            if (stockEl) {
+              const stock = Number(it.stock) || 0;
+              const rem = stock - it.quantity;
+              stockEl.className = `item-stock-badge ${rem < 0 ? "out-of-stock" : "in-stock"}`;
+              stockEl.textContent =
+                rem < 0 ? `ไม่พอคงเหลือ ${stock} ชิ้น` : `พร้อมส่ง ${stock}`;
+            }
+          }
+        });
+      }
+
       function onFieldChange(e) {
         const qIdx = parseInt(e.target.dataset.q);
         const iIdx = parseInt(e.target.dataset.i);
@@ -2767,6 +2850,11 @@
             );
           }
           item.quantity = val;
+          // สินค้าพ่วง sync จำนวนตามสินค้าหลัก — อัปเดต state + DOM แบบ in-place (ไม่ re-render)
+          // ทำก่อนคำนวณยอดรวมด้านล่าง เพื่อให้ calcQuoteTotal นับจำนวนใหม่ของสินค้าเสริมด้วย
+          // (ถ้าแถวนี้เป็นสินค้าเสริมเอง จะไม่มีตัวไหน linked มาหามัน — no-op)
+          if (item.product_id != null)
+            syncLinkedOptionalsQty(qIdx, item.product_id, val);
         } else if (field === "price") {
           val = Math.max(0, val);
           quotesData[qIdx].items[iIdx].price = val;
@@ -2826,7 +2914,14 @@
           { isDestructive: true, okText: "ลบรายการ", icon: "🗑️" },
         );
         if (!confirmed) return;
+        // จำ product_id ของสินค้าหลักไว้ก่อน splice เพื่อลบสินค้าเสริมที่ผูกด้วย (cascade)
+        const removedProductId = item.product_id;
+        const wasOptional = isOptionalLinkItem(item);
         quotesData[qIdx].items.splice(iIdx, 1);
+        // ลบสินค้าเสริมที่ผูกกับสินค้าหลักตัวนี้ทั้งหมด — mirror backend (ลบหลัก → เสริมหายตาม)
+        // ข้ามถ้าตัวที่ลบเป็นสินค้าเสริมเอง (ไม่มีอะไร linked มาหามัน และปุ่มลบก็ถูก disable อยู่แล้ว)
+        if (!wasOptional && removedProductId != null)
+          removeLinkedOptionals(quotesData[qIdx], removedProductId);
         // ไม่ยกเลิกใบอัตโนมัติเมื่อสินค้าหมด — เก็บการ์ดไว้ในสถานะว่างให้เพิ่มสินค้ากลับได้
         // (ใบว่างจะถูกเก็บกวาดตอนกดบันทึก ดู saveQuotes)
         render();
@@ -3259,6 +3354,80 @@
         return null;
       }
 
+      // ── สินค้าพ่วง (Optional / สินค้าเสริม) ──
+      // ⚠️ mirror ของ expandOptionalProducts() ใน services/productService.ts (บรรทัด ~953)
+      // หน้านี้เป็น vanilla JS ไม่มี bundler (ตาม AGENTS.md) จึง import ไม่ได้
+      // เป็น duplication ที่ยอมรับโดยตั้งใจ แบบเดียวกับ calcNetPrice/shippingFee
+      // backend ยังเป็น source of truth และ de-dupe กันซ้ำเมื่อ client ส่งสินค้าเสริมไปด้วย
+
+      // สินค้าเสริม (พ่วงมากับสินค้าหลัก) — มี is_optional:true + linked_to_product_id
+      // แยกจากบรรทัดค่าขนส่ง (is_shipping_fee) ซึ่งก็ตั้ง is_optional:false ไว้
+      function isOptionalLinkItem(item) {
+        return !!(
+          item &&
+          item.is_optional === true &&
+          item.linked_to_product_id != null
+        );
+      }
+
+      // de-dupe แบบเดียวกับ backend (productService.ts บรรทัด 977-981):
+      // สินค้าเสริมตัวนี้ถูกสั่งเป็นรายการอยู่แล้วในใบเดียวกันหรือยัง
+      // (match by product_id หรือ model/product_code แบบ trim + lowercase)
+      function quoteHasProduct(quote, opt) {
+        const optModel = String(opt.model || "").trim().toLowerCase();
+        return (quote.items || []).some((it) => {
+          if (
+            opt.product_id != null &&
+            it.product_id != null &&
+            String(it.product_id) === String(opt.product_id)
+          )
+            return true;
+          if (!optModel) return false;
+          const itModel = String(it.model || "").trim().toLowerCase();
+          const itCode = String(it.product_code || "").trim().toLowerCase();
+          return itModel === optModel || itCode === optModel;
+        });
+      }
+
+      // พ่วงสินค้าเสริมของสินค้าหลัก (mainItem) ลงใบเดียวกัน จำนวนเท่ากับสินค้าหลัก
+      // อ่านคู่พ่วงจาก prod.optional_products ที่ search API ส่งมา (สัญญาฟิลด์ตายตัว)
+      // ข้ามตัวที่มีอยู่แล้วในใบ (de-dupe) — ครอบเคสที่ user เพิ่งเพิ่มมันเป็นรายการปกติเอง
+      function attachOptionalProducts(quote, prod, mainItem) {
+        const optionals = (prod && prod.optional_products) || [];
+        if (!Array.isArray(optionals) || optionals.length === 0) return;
+        if (!quote.items) quote.items = [];
+        for (const opt of optionals) {
+          if (!opt) continue;
+          if (quoteHasProduct(quote, opt)) continue; // มีแล้ว → ไม่พ่วงซ้ำ
+          quote.items.push({
+            product_id: opt.product_id,
+            internal_reference: opt.internal_reference || "",
+            brand: opt.brand || "",
+            product_code: opt.model,
+            model: opt.model,
+            name: opt.name,
+            quantity: mainItem.quantity, // จำนวนเท่ากับสินค้าหลัก
+            price: opt.price,
+            discount_1: 0,
+            discount_2: 0,
+            production: "",
+            stock: Number(opt.stock) || 0,
+            product_sub_category: "",
+            sales_description: "",
+            is_optional: true,
+            linked_to_product_id: mainItem.product_id, // ★ ผูกกับสินค้าหลัก
+          });
+        }
+      }
+
+      // ลบสินค้าเสริมทั้งหมดในใบที่ผูกกับสินค้าหลัก product_id นี้ (cascade ตอนลบสินค้าหลัก)
+      function removeLinkedOptionals(quote, mainProductId) {
+        if (!quote || !quote.items || mainProductId == null) return;
+        quote.items = quote.items.filter(
+          (it) => String(it.linked_to_product_id) !== String(mainProductId),
+        );
+      }
+
       function sheetActionHtml(qty) {
         if (qty > 0)
           return `
@@ -3347,7 +3516,11 @@
         const next = found.item.quantity + delta;
         if (next <= 0) {
           // ลดจนเหลือ 0 = เอาออกจากใบ (ให้ความรู้สึกเหมือนหยิบของออกจากตะกร้า)
+          // จำ product_id ไว้ก่อน splice เพื่อลบสินค้าเสริมที่ผูกด้วย (cascade แบบเดียวกับ onDeleteItem)
+          const removedProductId = found.item.product_id;
           quotesData[found.q].items.splice(found.i, 1);
+          if (removedProductId != null)
+            removeLinkedOptionals(quotesData[found.q], removedProductId);
           render();
           syncSheetRows();
           showToast(`🗑️ เอา ${prod.model || prod.code} ออกจากใบแล้ว`);
@@ -3505,6 +3678,15 @@
             }
 
             const newQuote = await resp.json();
+            // พ่วงสินค้าเสริมของสินค้าหลักเข้าใบใหม่ — backend expand ให้แล้วตอน POST
+            // (validateQuotationItems → expandOptionalProducts) แต่เรียกซ้ำที่นี่เพื่อความชัวร์
+            // de-dupe (quoteHasProduct) จับตัวที่ backend ใส่มาแล้ว → ไม่พ่วงซ้ำ
+            const newMainItem = (newQuote.items || []).find(
+              (it) =>
+                it.product_id != null &&
+                String(it.product_id) === String(newItem.product_id),
+            );
+            attachOptionalProducts(newQuote, prod, newMainItem || newItem);
             quotesData.push(newQuote); // ใบใหม่มีสินค้าอยู่แล้ว ไม่ต้อง push ซ้ำ
             // ใบใหม่มาพร้อมวันจัดส่งที่ server คำนวณให้ตรงกับสินค้าชิ้นนั้นแล้ว
             deliverySigByQuote[newQuote.id] = deliverySignature(newQuote);
@@ -3533,6 +3715,8 @@
         const quote = quotesData[targetQIdx];
         if (!quote.items) quote.items = [];
         quote.items.push(newItem);
+        // พ่วงสินค้าเสริมเข้าใบเดียวกับสินค้าหลัก จำนวนเท่ากัน (de-dupe กันซ้ำในตัว)
+        attachOptionalProducts(quote, prod, newItem);
         render();
       }
 

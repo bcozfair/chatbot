@@ -406,6 +406,49 @@
       align-items: center;
       gap: 10px;
     }
+
+    /* ─── สินค้าพ่วง (optional / auto-paired) ─── */
+    /* แถวสินค้าเสริมเป็น read-only จัดการผ่านสินค้าหลัก — ใช้โทนส้ม (warning) เหมือนบรรทัดที่ระบบเติมให้ */
+    .sheet-item.is-optional {
+      background: rgba(184,92,0,0.06);
+      border-color: rgba(184,92,0,0.35);
+      border-style: dashed;
+    }
+    .optional-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      align-self: flex-start;
+      background: rgba(184,92,0,0.12);
+      color: var(--warning);
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 20px;
+      margin-bottom: 4px;
+      white-space: nowrap;
+    }
+    /* +/− / ช่องจำนวน / ปุ่มลบ ในแถวสินค้าเสริม ถูก disable — ทำให้ดูจางและกดไม่ได้ */
+    .sheet-item.is-optional .qty-stepper {
+      border-color: var(--border-strong);
+      opacity: 0.55;
+    }
+    .sheet-item.is-optional .qty-btn,
+    .sheet-item.is-optional .qty-val {
+      color: var(--text-light);
+      cursor: not-allowed;
+    }
+    .sheet-item.is-optional .btn-remove {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .qty-btn:disabled,
+    .qty-val:disabled,
+    .btn-remove:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+
     .sheet-item-info { flex: 1; min-width: 0; }
     .sheet-item-code {
       font-family: 'Outfit', sans-serif;
@@ -868,6 +911,7 @@
 
       productsList.forEach(prod => {
         const ci = cart.find(c => (c.model || c.product_code) === prod.code);
+        const isOpt = !!(ci && ci.is_optional && ci.linked_to_product_id != null);
         const price = Number(prod.price) || 0;
         const stock = Number(prod.stock) || 0;
         const safeCode = prod.code.replace(/"/g, '&quot;');
@@ -877,7 +921,11 @@
         else if (ci && ci.quantity > stock)      { badgeCls = 'low'; badgeTxt = `ไม่พอ (เหลือ ${stock})`; }
         else                                     { badgeCls = 'ok';  badgeTxt = `พร้อมส่ง ${stock}`; }
 
-        const actionHtml = ci
+        // สินค้าที่อยู่ในตะกร้าในฐานะสินค้าเสริม → แสดงว่าเพิ่มแล้ว (badge) แต่แก้จำนวน/ลบเองไม่ได้
+        // ผู้ใช้จัดการผ่านสินค้าหลักในตะกร้า
+        const actionHtml = isOpt
+          ? `<div class="optional-badge">🔗 สินค้าพ่วง ×${ci.quantity}</div>`
+          : ci
           ? `<div class="qty-stepper">
                <button class="qty-btn btn-dec" data-code="${safeCode}">−</button>
                <input type="number" class="qty-val qty-input" value="${ci.quantity}" min="1" data-code="${safeCode}">
@@ -925,21 +973,61 @@
       if (stock <= 0) {
         showAlert(`สินค้าไม่เพียงพอ (พร้อมส่ง ${stock} ชิ้น)`);
       }
-      cart.push({ product_code: code, model: code, name: prod.name, price: Number(prod.price)||0, quantity: 1, stock });
+      // เพิ่ม product_id/internal_reference ให้ cart item เพื่อให้ pairing + de-dupe ทำงาน
+      // และให้ backend expandOptionalProducts ไม่พ่วงซ้ำตอน draft-cart
+      cart.push({
+        product_code: code, model: code, name: prod.name,
+        price: Number(prod.price)||0, quantity: 1, stock,
+        product_id: prod.product_id, internal_reference: prod.internal_reference
+      });
+
+      // พ่วงสินค้าเสริม (mirror expandOptionalProducts ฝั่ง backend) — จำนวนเท่าสินค้าหลัก (1 ตอนเพิ่ม)
+      // de-dupe: ข้ามถ้ามีสินค้านั้นในตะกร้าอยู่แล้ว (ทั้งที่เป็นรายการปกติหรือสินค้าเสริมของตัวอื่น)
+      const optionals = Array.isArray(prod.optional_products) ? prod.optional_products : [];
+      optionals.forEach(opt => {
+        if (cartHasProduct(opt)) return;
+        cart.push({
+          product_code: opt.model, model: opt.model, name: opt.name,
+          price: Number(opt.price)||0, quantity: 1, stock: Number(opt.stock)||0,
+          product_id: opt.product_id, internal_reference: opt.internal_reference,
+          is_optional: true, linked_to_product_id: prod.product_id
+        });
+      });
+
       renderProducts();
       updateCartBar();
+    }
+
+    // จับคู่ตัวตนสินค้า — ตรงกับ de-dupe ฝั่ง backend (match ด้วย product_id หรือ model/product_code)
+    // ref = อ็อบเจกต์ที่มี product_id/model/product_code (สินค้าเสริมหรือ cart item ก็ได้)
+    function sameProduct(a, b) {
+      if (a.product_id != null && b.product_id != null) return a.product_id === b.product_id;
+      const ka = String(a.model || a.product_code || '').trim().toLowerCase();
+      const kb = String(b.model || b.product_code || '').trim().toLowerCase();
+      return ka !== '' && ka === kb;
+    }
+    function cartHasProduct(ref) {
+      return cart.some(c => sameProduct(c, ref));
     }
 
     function changeQty(code, delta) {
       const idx = cart.findIndex(c => (c.model || c.product_code) === code);
       if (idx < 0) return;
       const item = cart[idx];
+      if (item.is_optional) return; // สินค้าเสริมแก้จำนวนเองไม่ได้ จัดการผ่านสินค้าหลัก
       const newQty = item.quantity + delta;
-      if (newQty <= 0) { cart.splice(idx, 1); renderProducts(); updateCartBar(); return; }
+      if (newQty <= 0) {
+        // ลบสินค้าหลัก + สินค้าเสริมที่ผูกไว้ทั้งหมด
+        cart = cart.filter(c => c !== item && !(item.product_id != null && c.linked_to_product_id === item.product_id));
+        renderProducts(); updateCartBar();
+        if (sheetOverlay.style.display === 'flex') renderSheet();
+        return;
+      }
       if (item.quantity <= item.stock && newQty > item.stock) {
         showAlert(`สินค้าไม่เพียงพอ (พร้อมส่ง ${item.stock} ชิ้น)`);
       }
       item.quantity = newQty;
+      syncOptionalQty(item);
       renderProducts();
       updateCartBar();
       if (sheetOverlay.style.display === 'flex') renderSheet();
@@ -949,18 +1037,32 @@
       const idx = cart.findIndex(c => (c.model || c.product_code) === code);
       if (idx < 0) return;
       const item = cart[idx];
+      if (item.is_optional) return; // สินค้าเสริมแก้จำนวนเองไม่ได้ จัดการผ่านสินค้าหลัก
       const newQty = Math.max(1, val);
       if (item.quantity <= item.stock && newQty > item.stock) {
         showAlert(`สินค้าไม่เพียงพอ (พร้อมส่ง ${item.stock} ชิ้น)`);
       }
       item.quantity = newQty;
+      syncOptionalQty(item);
       renderProducts();
       updateCartBar();
       if (sheetOverlay.style.display === 'flex') renderSheet();
     }
 
+    // sync จำนวนสินค้าเสริมที่ผูกกับสินค้าหลักให้เท่ากับสินค้าหลัก (mirror ฝั่ง backend)
+    function syncOptionalQty(mainItem) {
+      if (mainItem.product_id == null) return;
+      cart.forEach(c => {
+        if (c.linked_to_product_id === mainItem.product_id) c.quantity = mainItem.quantity;
+      });
+    }
+
     function removeFromCart(code) {
-      cart = cart.filter(c => (c.model || c.product_code) !== code);
+      const item = cart.find(c => (c.model || c.product_code) === code);
+      if (!item) return;
+      if (item.is_optional) return; // สินค้าเสริมลบเองไม่ได้ จัดการผ่านสินค้าหลัก
+      // ลบสินค้าหลัก + สินค้าเสริมที่ผูกไว้ทั้งหมด
+      cart = cart.filter(c => c !== item && !(item.product_id != null && c.linked_to_product_id === item.product_id));
       renderProducts();
       updateCartBar();
       renderSheet();
@@ -1024,21 +1126,26 @@
           : `✓ พร้อมส่ง ${item.stock} ชิ้น`;
         const lineTotal = item.price * item.quantity;
         totalVal += lineTotal;
+        const isOpt = !!(item.is_optional && item.linked_to_product_id != null);
+        // สินค้าเสริม: มี badge + ปุ่ม/ช่องจำนวน/ลบ ถูก disable (จัดการผ่านสินค้าหลัก)
+        const optBadge = isOpt ? `<div class="optional-badge">🔗 สินค้าพ่วง</div>` : '';
+        const disAttr  = isOpt ? ' disabled' : '';
         const div = document.createElement('div');
-        div.className = 'sheet-item';
+        div.className = 'sheet-item' + (isOpt ? ' is-optional' : '');
         div.innerHTML = `
           <div class="sheet-item-info">
+            ${optBadge}
             <div class="sheet-item-code">${itemKey}</div>
             <div class="sheet-item-price">${item.price.toLocaleString('th-TH',{minimumFractionDigits:2})} บ./ชิ้น · รวม ${lineTotal.toLocaleString('th-TH',{minimumFractionDigits:2})} บ.</div>
             <div class="sheet-stock-status" style="color:${stockColor}">${stockText}</div>
           </div>
           <div class="sheet-item-actions">
             <div class="qty-stepper" style="width:90px">
-              <button class="qty-btn btn-dec" data-code="${safeCode}">−</button>
-              <input type="number" class="qty-val qty-input" value="${item.quantity}" min="1" data-code="${safeCode}">
-              <button class="qty-btn btn-inc" data-code="${safeCode}">+</button>
+              <button class="qty-btn btn-dec" data-code="${safeCode}"${disAttr}>−</button>
+              <input type="number" class="qty-val qty-input" value="${item.quantity}" min="1" data-code="${safeCode}"${disAttr}>
+              <button class="qty-btn btn-inc" data-code="${safeCode}"${disAttr}>+</button>
             </div>
-            <button class="btn-remove" data-code="${safeCode}">🗑️</button>
+            <button class="btn-remove" data-code="${safeCode}"${disAttr}>🗑️</button>
           </div>`;
         sheetItems.appendChild(div);
       });

@@ -919,6 +919,37 @@ export async function getProductById(productId: number): Promise<any | null> {
   }
 }
 
+// resolve สินค้าเสริมของสินค้าหลัก 1 ตัว → คืน array ที่มีฟิลด์พอสร้าง line item ฝั่ง client
+// (สัญญาฟิลด์ตายตัว — client ฝั่ง quote-edit/product-search พึ่งพา shape นี้ ห้ามเปลี่ยน)
+export async function resolveOptionalProductsFor(product: any): Promise<any[]> {
+  try {
+    if (!product || !product.internal_reference) return [];
+
+    const links = await getOptionalLinks(product.internal_reference);
+    if (!links || links.length === 0) return [];
+
+    const result: any[] = [];
+    for (const link of links) {
+      const optProduct = await getProductByInternalRef(link.optional_product_id);
+      if (!optProduct) continue; // resolve ไม่ได้ → ข้าม
+
+      result.push({
+        product_id: optProduct.product_template_id,
+        model: optProduct.model,
+        name: optProduct.name,
+        price: optProduct.sales_price,
+        stock: optProduct.actual_quantity ?? 0,
+        internal_reference: optProduct.internal_reference,
+        brand: optProduct.brand,
+      });
+    }
+    return result;
+  } catch (err) {
+    console.error('Error in resolveOptionalProductsFor:', err);
+    return [];
+  }
+}
+
 export async function expandOptionalProducts(items: any[]): Promise<any[]> {
   if (!items || items.length === 0) return [];
 

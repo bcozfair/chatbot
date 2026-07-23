@@ -461,6 +461,7 @@ app.get('/api/products/search', async (req: any, res: any) => {
     });
 
     const { resolveQuoteCompany } = await import('./services/quotationService.js');
+    const { resolveOptionalProductsFor } = await import('./services/productService.js');
 
     // Map properties to match original output structure and enrich with stock block flags
     const mappedPromises = sorted.slice(0, limit).map(async (item: any) => {
@@ -474,6 +475,9 @@ app.get('/api/products/search', async (req: any, res: any) => {
         console.error("Error resolving company in product search API:", err);
         qCompany = item.production === 'Import(PM)' ? 'THT' : 'PM';
       }
+
+      // พ่วงสินค้าเสริม (optional pairing) ให้ client สร้าง line item ได้ — resolve แบบ parallel ใน Promise.all
+      const optionalProducts = await resolveOptionalProductsFor(item);
 
       return {
         code: item.code,
@@ -490,7 +494,8 @@ app.get('/api/products/search', async (req: any, res: any) => {
         no_stock_warn_msg: isBlocked ? 'สินค้าหมด' : null,
         quote_company: qCompany,
         internal_reference: item.internal_reference,
-        brand: item.brand
+        brand: item.brand,
+        optional_products: optionalProducts
       };
     });
 
