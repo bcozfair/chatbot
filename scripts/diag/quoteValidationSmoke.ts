@@ -29,6 +29,15 @@ import { pool } from '../../config/db.js';
   ok('validate: ECOM0010 สั่ง 2 → OUT_OF_STOCK', !!stockV);
   ok('validate: มี display_message พร้อมโชว์', !!stockV && stockV.display_message.includes('ECOM0010'));
 }
+{
+  // parity: display_message เท่ากันไม่ว่าเรียกจาก stage ไหน (draft/save/confirm ใช้ชุดกฎเดียวกัน)
+  const base = [{ product_id: 16543, product_template_id: 16543, model: 'ECOM0010', quantity: 2, price: 100 }];
+  const a = await validateQuotationItems(base, { stage: 'draft' });
+  const b = await validateQuotationItems(base, { stage: 'confirm' });
+  const msgA = a.violations.find(v => v.type === 'OUT_OF_STOCK')?.display_message;
+  const msgB = b.violations.find(v => v.type === 'OUT_OF_STOCK')?.display_message;
+  ok('parity: draft vs confirm ข้อความ OUT_OF_STOCK ตรงกัน', !!msgA && msgA === msgB);
+}
 await pool.end();
 
 console.log(failures === 0 ? '\n✅ ผ่านทั้งหมด' : `\n❌ FAIL ${failures}`);
