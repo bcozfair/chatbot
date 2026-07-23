@@ -1,5 +1,7 @@
+import pg from 'pg';
 import { pool } from '../config/db.js';
 import { GatewayUnreachableError } from '../scripts/sync/gatewayClient.js';
+import { clearCustomerSearchCache } from './customerService.js';
 
 // ============================================================
 // Registry ของ resource ที่ sync ได้
@@ -125,6 +127,63 @@ async function recordResult(id: ResourceId, status: RunStatus, errorMessage?: st
   }
 }
 
+/**
+ * นับ contact ที่มีใน sale_orders แต่ไม่มีใน customers (ลูกค้า/ผู้ติดต่อ "หาย") แล้ว log
+ * เป็น guard เตือนหลังจบรอบ sync ว่า customer sync ยังกวาดไม่ครบ
+ *
+ * ⚠️ ใช้ contact_id เป็นคีย์เท่านั้น — sale_orders.company_id เก็บบริษัทผู้ขาย (res.company)
+ *    ไม่ใช่ลูกค้า จึงเชื่อมกับ customers ไม่ได้ (ดู memory: sale-orders-company-id-trap)
+ * EXCEPT ใช้ hash/sort เร็ว (dedupe ในตัว) — เบากว่า NOT EXISTS ต่อแถว
+ * ห้าม throw — เป็นแค่ตัวรายงาน ไม่ควรไปล้มรอบ sync
+ */
+async function reconcileOrphanContacts() {
+  try {
+    const { rows } = await pool.query(`
+      SELECT COUNT(*)::int AS n FROM (
+        SELECT contact_id FROM sale_orders WHERE contact_id > 0
+        EXCEPT
+        SELECT contact_id FROM customers WHERE contact_id > 0
+      ) t`);
+    const n = rows[0]?.n ?? 0;
+    if (n > 0) {
+      console.warn(`[sync] ⚠️ contact มีใน sale_orders แต่ไม่มีใน customers: ${n} — customer sync อาจกวาดไม่ครบ (ดู npm run diag:orphan-contacts แล้ว sync:customers -- --full / backfill:contacts)`);
+    } else {
+      console.log('[sync] ✓ ไม่มี contact ตกค้าง (sale_orders ⊆ customers by contact_id)');
+    }
+  } catch (err: any) {
+    console.error('[sync] reconcile orphan contacts ล้มเหลว:', err?.message || err);
+  }
+}
+
+/**
+ * REFRESH materialized view customers_data_view หลัง sync (customers/sale_orders เปลี่ยนผ่าน sync เท่านั้น
+ * → refresh ท้าย sync = matview สดเสมอในทางปฏิบัติ) แล้วล้าง in-memory search cache
+ *
+ * ⚠️ ต้องใช้ pg.Client เฉพาะกิจ ไม่ใช่ pool — เพราะ pool ตั้ง statement_timeout/query_timeout=15s
+ *    แต่ REFRESH CONCURRENTLY ใช้ ~10s+ (จะถูกฆ่ากลางคัน). REFRESH CONCURRENTLY ต้องมี unique index
+ *    (idx_cdv_company_contact) และห้ามอยู่ใน transaction. ห้าม throw — เป็น guard ท้าย sync
+ */
+async function refreshCustomerDirectory() {
+  const client = new pg.Client({
+    host: process.env.PG_HOST,
+    port: process.env.PG_PORT ? parseInt(process.env.PG_PORT) : undefined,
+    database: process.env.PG_DATABASE,
+    user: process.env.PG_USER,
+    password: process.env.PG_PASSWORD,
+  });
+  try {
+    await client.connect();
+    const t0 = Date.now();
+    await client.query('REFRESH MATERIALIZED VIEW CONCURRENTLY public.customers_data_view');
+    console.log(`[sync] ♻️ refreshed customers_data_view ใน ${Date.now() - t0}ms`);
+    clearCustomerSearchCache();
+  } catch (err: any) {
+    console.error('[sync] refresh customers_data_view ล้มเหลว:', err?.message || err);
+  } finally {
+    try { await client.end(); } catch {}
+  }
+}
+
 /** เพิ่ม 4 คอลัมน์ผลรอบล่าสุด — เรียกตอน boot เพื่อให้ deploy แล้วใช้ได้เลยไม่ต้องรันมือ */
 async function ensureSyncStateColumns() {
   await pool.query(`
@@ -204,6 +263,10 @@ export function startSync(resources: ResourceId[], trigger: 'manual' | 'schedule
       runState.queue = [];
       runState.finishedAt = new Date().toISOString();
       console.log(runState.aborted ? '[sync] จบรอบ sync (ถูกยกเลิก)' : '[sync] จบรอบ sync ทั้งหมด');
+      // guard: เตือนถ้ายังมี contact ตกค้าง (อ่าน DB อย่างเดียว ไม่ throw)
+      await reconcileOrphanContacts();
+      // refresh matview customers_data_view ให้สะท้อนข้อมูลที่ sync มาใหม่ + ล้าง search cache
+      await refreshCustomerDirectory();
     }
   })();
 

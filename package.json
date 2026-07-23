@@ -21,6 +21,8 @@
     "diag:confirm-race": "tsx scripts/diag/confirmRaceDiag.ts",
     "diag:shipping-fee": "tsx scripts/diag/shippingFeeSmoke.ts",
     "diag:odoo-export": "tsx scripts/diag/odooExportSmoke.ts",
+    "diag:orphan-contacts": "tsx scripts/diag/orphanContactsDiag.ts",
+    "backfill:contacts": "tsx scripts/backfillContactsFromSaleOrders.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {

@@ -98,9 +98,12 @@ async function mineCases(): Promise<void> {
     if (!m) { skipped++; continue; }
     const expected = m[1].trim();
 
-    // validate เฉลยกับ customers_view — ต้อง resolve เป็น display_name จริง 1 รายการ
+    // validate เฉลยกับ customers_data_view — ต้อง resolve เป็นบริษัทจริง 1 รายการ (1 แถว/บริษัท via DISTINCT ON)
     const { rows: found } = await pool.query(
-      `SELECT display_name FROM customers_view WHERE display_name = $1 LIMIT 2`, [expected]);
+      `SELECT display_name FROM (
+         SELECT DISTINCT ON (company_id) customer_name AS display_name
+         FROM customers_data_view WHERE customer_name IS NOT NULL ORDER BY company_id, contact_id
+       ) v WHERE v.display_name = $1 LIMIT 2`, [expected]);
     if (found.length !== 1) { skipped++; continue; }
 
     const q = extractQueries(row.content);

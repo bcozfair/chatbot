@@ -1,6 +1,7 @@
 import { pathToFileURL } from 'url';
 import { pool } from '../../config/db.js';
 import { createGatewayGet, sleep } from './gatewayClient.js';
+import { decidePageTransition, MAX_STALL_RETRIES } from './syncPagination.js';
 
 const INITIAL_SINCE = '1970-01-01T00:00:00.000Z';
 const PAGE_LIMIT = 500;
@@ -249,7 +250,7 @@ function buildRecordsPath(cursorToken: string | null) {
 // ============================================================
 // Main Sync Function
 // ============================================================
-export async function syncSaleOrders() {
+export async function syncSaleOrders(opts?: { forceFull?: boolean }) {
   let dbClient: any;
   const startTime = Date.now();
   const syncedOrderIds = new Set();
@@ -261,6 +262,14 @@ export async function syncSaleOrders() {
 
     // 1. เตรียม sync_state
     await ensureSyncState(dbClient);
+
+    // force-full: reset cursor เพื่อกวาดใหม่ทั้งหมดจาก since=1970 (npm run sync:saleorders -- --full)
+    if (opts?.forceFull) {
+      await dbClient.query(
+        `UPDATE sync_state SET sync_cursor = NULL, sync_cursor_timestamp = NULL, sync_mode = 'full' WHERE resource = 'sale_order'`
+      );
+      console.log('♻️  force-full: reset cursor ของ sale_order แล้ว — จะกวาดใหม่ทั้งหมด');
+    }
 
     // 2. โหลด cursor จาก DB
     const localState = await loadSyncState(dbClient);
@@ -277,6 +286,7 @@ export async function syncSaleOrders() {
     console.log('📥 Starting to fetch updated records using v2 API...');
     let page = 0;
     let totalSynced = 0;
+    let stallRetries = 0; // นับ retry ตอน cursor ไม่ขยับ — reset เป็น 0 ทุกครั้งที่ cursor ขยับจริง
 
     while (true) {
       const path = buildRecordsPath(cursorToken);
@@ -327,41 +337,51 @@ export async function syncSaleOrders() {
           console.log(`📊 Progress -> ข้อมูลทั้งหมด: ${totalExpected || 'Unknown'} orders | ดึงไปแล้ว: ${syncedOrderIds.size} orders (${percent}) | เวลา: ${timeStr} | (รวม ${totalSynced} lines)`);
         }
 
-        // === Step 2: ตรวจสอบ has_more และบันทึก State ใน Transaction ===
-        if (!payload.has_more) {
-          if (payload.next_cursor) {
+        // === Step 2: ตัดสินใจหน้าถัดไป (logic รวม + unit test ที่ syncPagination.ts) ===
+        const previousCursor = cursorToken;
+        const nextCursor = payload.next_cursor;
+        const transition = decidePageTransition({
+          hasMore: !!payload.has_more,
+          nextCursor,
+          previousCursor,
+          stallRetries,
+          maxStallRetries: MAX_STALL_RETRIES,
+        });
+
+        // cursor ไม่ขยับทั้งที่ has_more=true / next_cursor หาย → throw (บันทึกเป็น failed
+        // ไม่ใช่ break เงียบ ๆ ที่ startSync เข้าใจผิดว่า success ทั้งที่กวาดไม่ครบ)
+        if (transition.action === 'error') {
+          throw new Error(transition.reason);
+        }
+
+        if (transition.action === 'retry-stall') {
+          stallRetries += 1;
+          await dbClient.query('ROLLBACK'); // ทิ้งหน้านี้ (upsert idempotent) แล้วดึง cursor เดิมซ้ำ
+          console.warn(`⚠️ next_cursor ไม่ขยับ (has_more=true) — retry ${stallRetries}/${MAX_STALL_RETRIES}`);
+          await sleep(2000);
+          continue;
+        }
+
+        if (transition.action === 'complete') {
+          // กวาดจบจริง (has_more=false) → flip เป็น incremental แล้วบันทึก cursor สุดท้าย
+          if (nextCursor) {
             const ts = payload.next_position?.updated_at || cursorTimestamp;
             await saveSyncState(dbClient, {
-              cursorToken: payload.next_cursor,
+              cursorToken: nextCursor,
               cursorTimestamp: ts,
               syncMode: 'incremental',
               pagesSynced: page,
               recordsSynced: totalSynced
             });
-            console.log(`💾 Saved final cursor: ${payload.next_cursor}`);
+            console.log(`💾 Saved final cursor: ${nextCursor}`);
           }
           await dbClient.query('COMMIT');
           console.log('\n🏁 No more pages to fetch. Sync completed successfully.');
           break;
         }
 
-        // === Step 3: ตรวจสอบ next_cursor ===
-        const previousCursor = cursorToken;
-        const nextCursor = payload.next_cursor;
-
-        if (!nextCursor || typeof nextCursor !== 'string') {
-          throw new Error('has_more=true but next_cursor is missing from response');
-        }
-
-        if (nextCursor === previousCursor) {
-          console.warn('⚠️ Warning: next_cursor did not advance (same as previous). Stopping to prevent infinite loop.');
-          console.warn(`   previousCursor: ${previousCursor}`);
-          console.warn(`   nextCursor:     ${nextCursor}`);
-          await dbClient.query('COMMIT');
-          break;
-        }
-
-        // === Step 4: บันทึก cursor ลง DB ใน Transaction ===
+        // transition.action === 'advance' — เลื่อน cursor ไปหน้าถัดไป
+        stallRetries = 0;
         const nextTimestamp = payload.next_position?.updated_at || cursorTimestamp;
         await saveSyncState(dbClient, {
           cursorToken: nextCursor,
@@ -371,11 +391,7 @@ export async function syncSaleOrders() {
           recordsSynced: totalSynced
         });
         console.log(`💾 Saved cursor: ${nextCursor} | Timestamp: ${nextTimestamp}`);
-
-        // === COMMIT TRANSACTION FOR THIS PAGE ===
         await dbClient.query('COMMIT');
-
-        // === Step 5: เลื่อน cursor ===
         cursorToken = nextCursor;
         cursorTimestamp = nextTimestamp;
 
@@ -406,7 +422,8 @@ export async function syncSaleOrders() {
 
 // รันเป็น CLI เฉพาะเมื่อถูกเรียกตรง ๆ (npm run sync:saleorders) — ไม่รันเมื่อถูก import จาก backend
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  syncSaleOrders().catch((error) => {
+  const forceFull = process.argv.includes('--full') || process.env.SYNC_FULL === '1';
+  syncSaleOrders({ forceFull }).catch((error) => {
     console.error('[sale-order-sync] failed', error);
     process.exit(1);
   });

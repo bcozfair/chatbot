@@ -16,6 +16,37 @@ function logErr(fn: string, err: any): void {
 
 // ═══════════════════════════ customers ═══════════════════════════
 
+// Phase 3: customers_view/contacts_view ถูกปลดแล้ว — ทุก query ลูกค้า/ผู้ติดต่ออ่านจาก customers_data_view
+// (matview รวม customers+sale_orders → เห็น orphan company/contact ที่มีเฉพาะใน sale_orders ด้วย)
+//
+// CDV_COMPANY_SUBQ = 1 แถว/บริษัท (DISTINCT ON company_id, contact แรก) map ชื่อคอลัมน์ให้ตรง customers_view เดิมเป๊ะ
+//   (id/display_name/reference/tax_id/phone/email/branch/salesperson/customer_type/customer_payment_terms)
+//   → wrapper เดิมที่ทำ `... branch AS branch_code` ใช้ต่อได้ไม่ต้องแก้
+// CDV_CONTACT_SUBQ = 1 แถว/ผู้ติดต่อ map ตรง contacts_view เดิม (id/name/mobile/phone/email/invoice_*/customer_id)
+//   phone=COALESCE(contact_phone,phone) email=COALESCE(contact_email,email); contact_id>0 กัน row บริษัทไม่มีชื่อ
+const CDV_COMPANY_SUBQ =
+  `SELECT DISTINCT ON (company_id)
+     company_id             AS id,
+     customer_name          AS display_name,
+     customer_reference     AS reference,
+     customer_tax_id        AS tax_id,
+     phone,
+     email,
+     customer_sale_area     AS branch,
+     salesperson,
+     customer_type,
+     customer_payment_terms
+   FROM customers_data_view
+   WHERE customer_name IS NOT NULL
+   ORDER BY company_id, contact_id`;
+
+const CDV_CONTACT_SUBQ =
+  `SELECT contact_id AS id, contact_name AS name, contact_mobile AS mobile,
+     COALESCE(contact_phone, phone) AS phone, COALESCE(contact_email, email) AS email,
+     invoice_street, invoice_district, invoice_sub_district, invoice_state, invoice_zip,
+     company_id AS customer_id
+   FROM customers_data_view WHERE contact_id > 0`;
+
 const CUSTOMER_VIEW_COLS =
   'id, display_name, reference, tax_id, phone, email, branch AS branch_code, salesperson, customer_type, customer_payment_terms';
 
@@ -26,7 +57,7 @@ export async function searchCustomersByReferencePatterns(refs: string[], limit =
     const patterns = refs.map(r => `%${r}%`);
     const { rows } = await pool.query(
       `SELECT id, display_name, reference, branch AS branch_code, salesperson
-       FROM customers_view WHERE reference ILIKE ANY($1::text[]) LIMIT $2`,
+       FROM (${CDV_COMPANY_SUBQ}) v WHERE v.reference ILIKE ANY($1::text[]) LIMIT $2`,
       [patterns, limit]);
     return rows;
   } catch (err) { logErr('searchCustomersByReferencePatterns', err); return []; }
@@ -39,7 +70,7 @@ export async function searchCustomersByNamePatterns(terms: string[], limit: numb
     const patterns = terms.map(t => `%${t}%`);
     const { rows } = await pool.query(
       `SELECT id, display_name, reference, branch AS branch_code, salesperson
-       FROM customers_view WHERE display_name ILIKE ANY($1::text[]) LIMIT $2`,
+       FROM (${CDV_COMPANY_SUBQ}) v WHERE v.display_name ILIKE ANY($1::text[]) LIMIT $2`,
       [patterns, limit]);
     return rows;
   } catch (err) { logErr('searchCustomersByNamePatterns', err); return []; }
@@ -49,7 +80,7 @@ export async function searchCustomersByNamePatterns(terms: string[], limit: numb
 export async function getCustomerById(id: number | string): Promise<any | null> {
   try {
     const { rows } = await pool.query(
-      `SELECT ${CUSTOMER_VIEW_COLS} FROM customers_view WHERE id = $1 LIMIT 1`, [id]);
+      `SELECT ${CUSTOMER_VIEW_COLS} FROM (${CDV_COMPANY_SUBQ}) v WHERE id = $1 LIMIT 1`, [id]);
     return rows[0] || null;
   } catch (err) { logErr('getCustomerById', err); return null; }
 }
@@ -58,7 +89,7 @@ export async function getCustomerById(id: number | string): Promise<any | null> 
 export async function getCustomerByDisplayName(displayName: string): Promise<any | null> {
   try {
     const { rows } = await pool.query(
-      `SELECT ${CUSTOMER_VIEW_COLS} FROM customers_view WHERE display_name = $1 LIMIT 1`, [displayName]);
+      `SELECT ${CUSTOMER_VIEW_COLS} FROM (${CDV_COMPANY_SUBQ}) v WHERE display_name = $1 LIMIT 1`, [displayName]);
     return rows[0] || null;
   } catch (err) { logErr('getCustomerByDisplayName', err); return null; }
 }
@@ -73,7 +104,7 @@ export async function getFirstContact(customerId: number | string, contactName?:
       nameFilter = 'AND name = $2';
     }
     const { rows } = await pool.query(
-      `SELECT * FROM contacts_view WHERE customer_id = $1 ${nameFilter} LIMIT 1`, params);
+      `SELECT * FROM (${CDV_CONTACT_SUBQ}) c WHERE c.customer_id = $1 ${nameFilter} LIMIT 1`, params);
     return rows[0] || null;
   } catch (err) { logErr('getFirstContact', err); return null; }
 }
@@ -90,14 +121,23 @@ export async function getCompanyAddressRows(companyId: number | string): Promise
 
 // ═══════════════════════════ contacts ═══════════════════════════
 
+// contacts อ่านจาก customers_data_view (matview รวม customers+sale_orders) แทน contacts_view
+// เพื่อให้ orphan contact ที่มีเฉพาะใน sale_orders (~5,906 คน เช่น คุณหนิง/คุณต๊อบ ของ ควอเซอร์) โผล่ใน picker ด้วย
+// alias คอลัมน์ให้ตรง output เดิมของ contacts_view เป๊ะ: id/name/mobile/phone/email + invoice_* (blend แล้วใน view)
+//   phone = COALESCE(contact_phone, phone) , email = COALESCE(contact_email, email) เหมือน contacts_view เดิม
+//   contact_id>0 = ตัด row บริษัทไม่มีผู้ติดต่อ (contact_id=0 ไม่มีชื่อ → ไม่ให้โผล่เป็นผู้ติดต่อผี)
 const CONTACT_VIEW_COLS =
-  'id, name, mobile, phone, email, invoice_street, invoice_district, invoice_sub_district, invoice_state, invoice_zip';
+  `contact_id AS id, contact_name AS name, contact_mobile AS mobile,
+   COALESCE(contact_phone, phone) AS phone, COALESCE(contact_email, email) AS email,
+   invoice_street, invoice_district, invoice_sub_district, invoice_state, invoice_zip`;
 
 /** ผู้ติดต่อทั้งหมดของบริษัท */
 export async function getContactsByCustomerId(customerId: number | string): Promise<any[]> {
   try {
     const { rows } = await pool.query(
-      `SELECT ${CONTACT_VIEW_COLS} FROM contacts_view WHERE customer_id = $1`, [customerId]);
+      `SELECT ${CONTACT_VIEW_COLS} FROM customers_data_view
+       WHERE company_id = $1 AND contact_id > 0
+       ORDER BY contact_id`, [customerId]);
     return rows;
   } catch (err) { logErr('getContactsByCustomerId', err); return []; }
 }
@@ -106,7 +146,8 @@ export async function getContactsByCustomerId(customerId: number | string): Prom
 export async function getContactById(contactId: number | string): Promise<any | null> {
   try {
     const { rows } = await pool.query(
-      `SELECT ${CONTACT_VIEW_COLS}, customer_id FROM contacts_view WHERE id = $1 LIMIT 1`, [contactId]);
+      `SELECT ${CONTACT_VIEW_COLS}, company_id AS customer_id FROM customers_data_view
+       WHERE contact_id = $1 LIMIT 1`, [contactId]);
     return rows[0] || null;
   } catch (err) { logErr('getContactById', err); return null; }
 }
@@ -116,14 +157,15 @@ export async function getContactNamesByCustomerIds(customerIds: any[]): Promise<
   if (!customerIds.length) return [];
   try {
     const { rows } = await pool.query(
-      `SELECT customer_id, name FROM contacts_view WHERE customer_id = ANY($1) AND name IS NOT NULL`,
+      `SELECT company_id AS customer_id, contact_name AS name FROM customers_data_view
+       WHERE company_id = ANY($1) AND contact_id > 0 AND contact_name IS NOT NULL`,
       [customerIds]);
     return rows;
   } catch (err) { logErr('getContactNamesByCustomerIds', err); return []; }
 }
 
 /**
- * reverse lookup: หาบริษัทจากชื่อผู้ติดต่อ (JOIN contacts_view ↔ customers_view)
+ * reverse lookup: หาบริษัทจากชื่อผู้ติดต่อ (JOIN ผู้ติดต่อ ↔ บริษัท จาก customers_data_view)
  * คืนรูป { name, customer_id, customers: { id, display_name, salesperson, branch_code } } ตาม shape เดิม
  */
 export async function findContactsWithCustomerByName(
@@ -140,8 +182,8 @@ export async function findContactsWithCustomerByName(
     const { rows } = await pool.query(
       `SELECT c.name, c.customer_id,
               cust.id AS cust_id, cust.display_name, cust.salesperson, cust.branch AS branch_code
-       FROM contacts_view c
-       INNER JOIN customers_view cust ON c.customer_id = cust.id
+       FROM (${CDV_CONTACT_SUBQ}) c
+       INNER JOIN (${CDV_COMPANY_SUBQ}) cust ON c.customer_id = cust.id
        WHERE c.name ILIKE $1 ${branchFilter}
        LIMIT $${params.length}`,
       params);
@@ -362,6 +404,22 @@ export async function getBranches(): Promise<any[]> {
 
 // ═══════════════════════════ admin (index.ts) ═══════════════════════════
 
+// ค้นจาก customers_data_view (matview รวม customers+sale_orders) แทน customers_view
+// เพื่อให้ orphan company ที่มีเฉพาะใน sale_orders (~1,112 บริษัท synthetic company_id) ค้นเจอในหน้า LIFF ด้วย
+// cdv grain = 1 แถว/ผู้ติดต่อ → DISTINCT ON(company_id) ORDER BY contact_id ให้เหลือ 1 แถว/บริษัท เหมือน customers_view เดิม
+// map ชื่อคอลัมน์กลับ shape เดิมเป๊ะ: id/display_name/reference/branch_code/salesperson/payment_terms
+const ADMIN_COMPANY_SUBQ =
+  `SELECT DISTINCT ON (company_id)
+     company_id             AS id,
+     customer_name          AS display_name,
+     customer_reference     AS reference,
+     customer_sale_area     AS branch_code,
+     salesperson,
+     customer_payment_terms AS payment_terms
+   FROM customers_data_view
+   WHERE customer_name IS NOT NULL
+   ORDER BY company_id, contact_id`;
+
 /** ค้นหาลูกค้าหน้าแอดมิน/LIFF (ชื่อหรือรหัส) */
 export async function searchCustomersAdmin(q: string, limit = 30): Promise<any[]> {
   try {
@@ -369,16 +427,13 @@ export async function searchCustomersAdmin(q: string, limit = 30): Promise<any[]
     // (ค่าตอนโหลดครั้งแรกมาจาก enrichQuotationData แต่ตอนเลือกบริษัทใหม่มีแค่ผลค้นหานี้)
     if (q.trim()) {
       const { rows } = await pool.query(
-        `SELECT id, display_name, reference, branch AS branch_code, salesperson,
-                customer_payment_terms AS payment_terms
-         FROM customers_view WHERE display_name ILIKE $1 OR reference ILIKE $1 LIMIT $2`,
+        `SELECT * FROM (${ADMIN_COMPANY_SUBQ}) v
+         WHERE v.display_name ILIKE $1 OR v.reference ILIKE $1 LIMIT $2`,
         [`%${q}%`, limit]);
       return rows;
     }
     const { rows } = await pool.query(
-      `SELECT id, display_name, reference, branch AS branch_code, salesperson,
-              customer_payment_terms AS payment_terms
-       FROM customers_view LIMIT $1`, [limit]);
+      `SELECT * FROM (${ADMIN_COMPANY_SUBQ}) v LIMIT $1`, [limit]);
     return rows;
   } catch (err) { logErr('searchCustomersAdmin', err); return []; }
 }
@@ -387,7 +442,7 @@ export async function searchCustomersAdmin(q: string, limit = 30): Promise<any[]
 export async function getCustomerBranchesBySalesperson(name: string): Promise<any[]> {
   try {
     const { rows } = await pool.query(
-      `SELECT branch AS branch_code, salesperson FROM customers_view WHERE salesperson ILIKE $1`,
+      `SELECT branch AS branch_code, salesperson FROM (${CDV_COMPANY_SUBQ}) v WHERE v.salesperson ILIKE $1`,
       [`%${name}%`]);
     return rows;
   } catch (err) { logErr('getCustomerBranchesBySalesperson', err); return []; }

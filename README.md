@@ -116,8 +116,15 @@ user_id, message_id, type, content, reply_token, reply_content, created_at
 
 **`sale_orders`** — ประวัติใบสั่งซื้อ PK: `(order_reference, model_code, model)`
 - ฟิลด์สำคัญ: salesperson, salesperson_id, salesperson_phone, employee_quotations, employee_quotations_phone, customer_sale_area, sales_team
+- ⚠️ **`sale_orders.company_id` = บริษัทผู้ขาย (Odoo `res.company`, มีแค่ค่า 1/2) ไม่ใช่ลูกค้า** — ห้ามใช้ join/reconcile กับ `customers.company_id` (คนละ id space). คีย์ที่เชื่อมลูกค้าได้จริงคือ **`contact_id`** (res_partner id เดียวกับ `customers.contact_id`) + `customer_tax_id` เป็น fallback
 
 **`sync_state`** — เก็บ cursor ของการ sync แต่ละ resource
+
+**การ sync ให้ครบ / กู้ contact ที่หาย:**
+- `npm run diag:orphan-contacts` — นับ contact ที่มีใน sale_orders แต่ไม่มีใน customers (วัดด้วย contact_id) + แยกสาเหตุ; รันเป็น guard หลัง sync
+- `npm run sync:customers -- --full` (หรือ `SYNC_FULL=1`) — reset cursor แล้วกวาด res_partner ใหม่ทั้งหมด (กรณี incremental sync ตกหล่นจนลูกค้าหาย)
+- `npm run backfill:contacts` (dry-run) / `-- --apply` — เติม contact ที่ feed ไม่ส่งออกมา (บุคคลธรรมดา ฯลฯ) จาก sale_orders, resolve company_id ผ่าน tax_id, mark `source_name='saleorder_backfill'`
+- silent-truncation guard: ถ้า cursor ไม่ขยับกลางคัน sync จะ throw (บันทึก `sync_state.last_status='failed'`) แทนที่จะจบเงียบแบบ success ปลอม (logic + test ที่ `scripts/sync/syncPagination.ts`)
 
 ---
 

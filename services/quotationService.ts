@@ -482,10 +482,12 @@ export async function insertDraftQuotations(
     try {
       let custData = null;
 
-      // 2.1 ใช้ ID ดึงตรงจาก Odoo (Option 2)
+      // 2.1 ใช้ ID ดึงตรงจาก customers_data_view (ครอบคลุม orphan จาก sale_orders + enrich payment/type)
+      // เฉพาะ path ที่มี company_id (ID-based) → ใช้ view; path ค้นด้วยชื่อ (ด้านล่าง) คง customers เพราะเร็วกว่า
+      // และ orphan มี customerId+contactId เสมอจึงเข้า path นี้ (view lookup by (company_id,contact_id) = ~3ms)
       if (customerId && contactId) {
         const custRes = await pool.query(
-          'SELECT * FROM customers WHERE company_id = $1 AND contact_id = $2 LIMIT 1',
+          'SELECT * FROM customers_data_view WHERE company_id = $1 AND contact_id = $2 LIMIT 1',
           [customerId, contactId]
         );
         custData = custRes.rows[0];
@@ -493,14 +495,14 @@ export async function insertDraftQuotations(
       if (customerId && !custData) {
         if (contactNameQuery) {
           const custRes = await pool.query(
-            'SELECT * FROM customers WHERE company_id = $1 AND TRIM(contact_name) = TRIM($2) LIMIT 1',
+            'SELECT * FROM customers_data_view WHERE company_id = $1 AND TRIM(contact_name) = TRIM($2) LIMIT 1',
             [customerId, contactNameQuery]
           );
           custData = custRes.rows[0];
         }
         if (!custData) {
           const custRes = await pool.query(
-            'SELECT * FROM customers WHERE company_id = $1 LIMIT 1',
+            'SELECT * FROM customers_data_view WHERE company_id = $1 LIMIT 1',
             [customerId]
           );
           custData = custRes.rows[0];
@@ -551,7 +553,7 @@ export async function insertDraftQuotations(
         const uniqueEmails = Array.from(new Set(emails));
         contactEmail = uniqueEmails.length > 0 ? uniqueEmails.join(', ') : '';
 
-        // ที่อยู่ใช้ contacts_view เป็นหลัก เพราะ view เติมอำเภอ/ตำบลที่ขาดจาก sale_orders ล่าสุดให้
+        // ที่อยู่ดึงจาก customers_data_view (ผ่าน getContactById) เพราะ view blend อำเภอ/ตำบลที่ขาดจาก sale_orders ล่าสุดให้
         let addrSrc: any = custData;
         if (custData.contact_id) {
           const viewContact = await getContactById(custData.contact_id);
@@ -855,7 +857,8 @@ export async function checkMinSalesPrice(
   if (companyName) {
     try {
       const custRes = await pool.query(
-        'SELECT customer_type, reference FROM customers_view WHERE display_name = $1 LIMIT 1',
+        `SELECT DISTINCT ON (company_id) customer_type, customer_reference AS reference
+         FROM customers_data_view WHERE customer_name = $1 ORDER BY company_id, contact_id LIMIT 1`,
         [companyName]
       );
       if (custRes.rows.length > 0) {
@@ -1155,7 +1158,8 @@ export async function resolveContactFlow(
     
     try {
       const compRes = await pool.query(
-        `SELECT reference, tax_id, customer_payment_terms as payment_terms FROM customers_view WHERE TRIM(display_name) = TRIM($1) LIMIT 1`,
+        `SELECT DISTINCT ON (company_id) customer_reference AS reference, customer_tax_id AS tax_id, customer_payment_terms AS payment_terms
+         FROM customers_data_view WHERE TRIM(customer_name) = TRIM($1) ORDER BY company_id, contact_id LIMIT 1`,
         [companyName]
       );
       if (compRes.rows.length > 0) {
@@ -1268,24 +1272,25 @@ export async function updateQuotationCustomerSnapshot(
   try {
     let custRes = null;
 
-    // 1. ถ้ามี ID ส่งมา ให้ดึงข้อมูลตรงจาก ID ผ่าน customers_view และ contacts_view (Option 2)
+    // 1. ถ้ามี ID ส่งมา ให้ดึงข้อมูลตรงจาก ID ผ่าน customers_data_view (บริษัท+ผู้ติดต่ออยู่แถวเดียวกัน ไม่ต้อง JOIN)
     if (customerId) {
       if (contactId) {
         custRes = await pool.query(
-          `SELECT c.reference, c.tax_id, c.customer_payment_terms as payment_terms,
-                  co.phone as contact_phone, co.email as contact_email, co.invoice_street as contact_address,
-                  co.invoice_district, co.invoice_sub_district, co.invoice_state, co.invoice_zip
-           FROM customers_view c
-           LEFT JOIN contacts_view co ON co.customer_id = c.id
-           WHERE c.id = $1 AND co.id = $2 LIMIT 1`,
+          `SELECT customer_reference AS reference, customer_tax_id AS tax_id, customer_payment_terms AS payment_terms,
+                  COALESCE(contact_phone, phone) AS contact_phone, COALESCE(contact_email, email) AS contact_email,
+                  invoice_street AS contact_address,
+                  invoice_district, invoice_sub_district, invoice_state, invoice_zip
+           FROM customers_data_view
+           WHERE company_id = $1 AND contact_id = $2 LIMIT 1`,
           [customerId, contactId]
         );
       }
       if (!custRes || custRes.rows.length === 0) {
         custRes = await pool.query(
-          `SELECT reference, tax_id, customer_payment_terms as payment_terms
-           FROM customers_view
-           WHERE id = $1 LIMIT 1`,
+          `SELECT DISTINCT ON (company_id) customer_reference AS reference, customer_tax_id AS tax_id,
+                  customer_payment_terms AS payment_terms
+           FROM customers_data_view
+           WHERE company_id = $1 ORDER BY company_id, contact_id LIMIT 1`,
           [customerId]
         );
       }
@@ -1294,18 +1299,20 @@ export async function updateQuotationCustomerSnapshot(
     // 2. Fallback: ค้นหาด้วยชื่อแบบ TRIM เพื่อป้องกันสะกดสลับแถวหรือมีช่องว่างต่อท้าย
     if (!custRes || custRes.rows.length === 0) {
       custRes = await pool.query(
-        `SELECT c.reference, c.tax_id, c.customer_payment_terms as payment_terms,
-                co.phone as contact_phone, co.email as contact_email, co.invoice_street as contact_address,
-                co.invoice_district, co.invoice_sub_district, co.invoice_state, co.invoice_zip
-         FROM customers_view c
-         LEFT JOIN contacts_view co ON co.customer_id = c.id
-         WHERE TRIM(c.display_name) = TRIM($1) AND TRIM(co.name) = TRIM($2) LIMIT 1`,
+        `SELECT customer_reference AS reference, customer_tax_id AS tax_id, customer_payment_terms AS payment_terms,
+                COALESCE(contact_phone, phone) AS contact_phone, COALESCE(contact_email, email) AS contact_email,
+                invoice_street AS contact_address,
+                invoice_district, invoice_sub_district, invoice_state, invoice_zip
+         FROM customers_data_view
+         WHERE TRIM(customer_name) = TRIM($1) AND TRIM(contact_name) = TRIM($2) LIMIT 1`,
         [companyName, contactName]
       );
     }
     if (!custRes || custRes.rows.length === 0) {
       custRes = await pool.query(
-        `SELECT reference, tax_id, customer_payment_terms as payment_terms FROM customers_view WHERE TRIM(display_name) = TRIM($1) LIMIT 1`,
+        `SELECT DISTINCT ON (company_id) customer_reference AS reference, customer_tax_id AS tax_id,
+                customer_payment_terms AS payment_terms
+         FROM customers_data_view WHERE TRIM(customer_name) = TRIM($1) ORDER BY company_id, contact_id LIMIT 1`,
         [companyName]
       );
     }
@@ -1430,7 +1437,8 @@ export async function enrichQuotationData(quoteDb: any): Promise<any> {
     if (!customerId && companyName) {
       try {
         const custRes = await pool.query(
-          "SELECT id FROM customers_view WHERE display_name = $1 LIMIT 1",
+          `SELECT DISTINCT ON (company_id) company_id AS id
+           FROM customers_data_view WHERE customer_name = $1 ORDER BY company_id, contact_id LIMIT 1`,
           [companyName]
         );
         if (custRes.rows.length > 0) {

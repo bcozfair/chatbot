@@ -859,10 +859,11 @@ app.put('/api/quotation/:id', express.json(), async (req: any, res: any) => {
         try {
           let custData = null;
           
-          // 2.1 ใช้ ID ดึงตรงจาก Odoo (Option 2)
+          // 2.1 ใช้ ID ดึงตรงจาก customers_data_view (ครอบคลุม orphan จาก sale_orders + enrich)
+          // เฉพาะ path ที่มี company_id (ID-based) → ใช้ view; path ค้นด้วยชื่อ (2.2) คง customers เพราะเร็วกว่า
           if (resolvedCustomerId && resolvedContactId) {
             const custRes = await pool.query(
-              'SELECT * FROM customers WHERE company_id = $1 AND contact_id = $2 LIMIT 1',
+              'SELECT * FROM customers_data_view WHERE company_id = $1 AND contact_id = $2 LIMIT 1',
               [resolvedCustomerId, resolvedContactId]
             );
             custData = custRes.rows[0];
@@ -870,14 +871,14 @@ app.put('/api/quotation/:id', express.json(), async (req: any, res: any) => {
           if (resolvedCustomerId && !custData) {
             if (contactNameQuery) {
               const custRes = await pool.query(
-                'SELECT * FROM customers WHERE company_id = $1 AND TRIM(contact_name) = TRIM($2) LIMIT 1',
+                'SELECT * FROM customers_data_view WHERE company_id = $1 AND TRIM(contact_name) = TRIM($2) LIMIT 1',
                 [resolvedCustomerId, contactNameQuery]
               );
               custData = custRes.rows[0];
             }
             if (!custData) {
               const custRes = await pool.query(
-                'SELECT * FROM customers WHERE company_id = $1 LIMIT 1',
+                'SELECT * FROM customers_data_view WHERE company_id = $1 LIMIT 1',
                 [resolvedCustomerId]
               );
               custData = custRes.rows[0];
@@ -950,7 +951,7 @@ app.put('/api/quotation/:id', express.json(), async (req: any, res: any) => {
               return filtered.join(' ');
             };
 
-            // ที่อยู่ใช้ contacts_view เป็นหลัก เพราะ view เติมอำเภอ/ตำบลที่ขาดจาก sale_orders ล่าสุดให้
+            // ที่อยู่ดึงจาก customers_data_view (ผ่าน getContactById) เพราะ view blend อำเภอ/ตำบลที่ขาดจาก sale_orders ล่าสุดให้
             let addrSrc: any = custData;
             if (custData.contact_id) {
               const viewContact = await getContactById(custData.contact_id);

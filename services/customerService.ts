@@ -196,6 +196,9 @@ async function loadCustomerSearchCache(): Promise<any[]> {
 
   customerCacheLoading = (async () => {
     const t0 = Date.now();
+    // อ่านจาก customers_data_view (ไม่ใช่ customers ตรง ๆ) เพื่อให้ company search ครอบคลุม
+    // บริษัท/ผู้ติดต่อจาก sale_orders ที่ gateway ไม่ส่ง (~1,100 บริษัทเพิ่ม) ด้วย — view เป็น superset
+    // ครบทุกบริษัทของ customers + normalize ('null'->NULL) แล้ว. DISTINCT ON(company_id) คง grain เดิม
     const { rows } = await pool.query(`
       SELECT DISTINCT ON (company_id)
         company_id AS id,
@@ -203,7 +206,7 @@ async function loadCustomerSearchCache(): Promise<any[]> {
         TRIM(customer_reference) AS reference,
         TRIM(customer_sale_area) AS branch_code,
         TRIM(salesperson) AS salesperson
-      FROM customers
+      FROM customers_data_view
       ORDER BY company_id, contact_id`);
     const cached = rows.map((r: any) => {
       const norm_name = normalizeCompanyNameTS(r.display_name);

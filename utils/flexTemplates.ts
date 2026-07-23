@@ -728,7 +728,8 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
   if (meta.company) {
     try {
       const custRes = await pool.query(
-        'SELECT customer_type, reference FROM customers_view WHERE display_name = $1 LIMIT 1',
+        `SELECT DISTINCT ON (company_id) customer_type, customer_reference AS reference
+         FROM customers_data_view WHERE customer_name = $1 ORDER BY company_id, contact_id LIMIT 1`,
         [meta.company]
       );
       if (custRes.rows.length > 0) {

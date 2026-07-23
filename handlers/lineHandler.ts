@@ -657,7 +657,9 @@ export async function handleEvent(event: any): Promise<any> {
         let customer: any = null;
         try {
           const compRes = await pool.query(
-            "SELECT id, display_name FROM customers_view WHERE id = $1 LIMIT 1",
+            // customers_data_view: 1 แถว/ผู้ติดต่อ → DISTINCT ON ให้เหลือ 1 แถว/บริษัท
+            `SELECT DISTINCT ON (company_id) company_id AS id, customer_name AS display_name
+             FROM customers_data_view WHERE company_id = $1 ORDER BY company_id, contact_id LIMIT 1`,
             [custId]
           );
           if (compRes.rows.length > 0) {
@@ -747,7 +749,8 @@ export async function handleEvent(event: any): Promise<any> {
         let dbContact: any = null;
         try {
           const contactRes = await pool.query(
-            "SELECT name, customer_id FROM contacts_view WHERE id = $1 LIMIT 1",
+            `SELECT contact_name AS name, company_id AS customer_id
+             FROM customers_data_view WHERE contact_id = $1 LIMIT 1`,
             [contactId]
           );
           if (contactRes.rows.length > 0) {
@@ -2004,7 +2007,8 @@ export async function handleEvent(event: any): Promise<any> {
               let customer: any = null;
               try {
                 const compRes = await pool.query(
-                  "SELECT id FROM customers_view WHERE display_name = $1 LIMIT 1",
+                  `SELECT DISTINCT ON (company_id) company_id AS id
+                   FROM customers_data_view WHERE customer_name = $1 ORDER BY company_id, contact_id LIMIT 1`,
                   [companyName]
                 );
                 if (compRes.rows.length > 0) {
