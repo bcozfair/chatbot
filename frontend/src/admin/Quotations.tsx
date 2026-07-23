@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { DateInput } from './DateInput';
 import {
   FileText,
   Search,
@@ -381,23 +382,23 @@ export const Quotations: React.FC = () => {
 
           {/* Date From */}
           <div className="relative">
-            <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-            <input
-              type="date"
+            <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 z-10 pointer-events-none" />
+            <DateInput
               value={dateFrom}
-              onChange={(e) => { setDateFrom(e.target.value); setCurrentPage(1); }}
-              className="w-full bg-white border border-slate-200 focus:border-[#009032] focus:ring-2 focus:ring-[#009032]/10 focus:outline-none rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-800 transition-all"
+              onChange={(v) => { setDateFrom(v); setCurrentPage(1); }}
+              aria-label="กรองตั้งแต่วันที่"
+              className="w-full bg-white border border-slate-200 focus-within:border-[#009032] focus-within:ring-2 focus-within:ring-[#009032]/10 focus:border-[#009032] focus:ring-2 focus:ring-[#009032]/10 focus:outline-none rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-800 transition-all"
             />
           </div>
 
           {/* Date To */}
           <div className="relative">
-            <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-            <input
-              type="date"
+            <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 z-10 pointer-events-none" />
+            <DateInput
               value={dateTo}
-              onChange={(e) => { setDateTo(e.target.value); setCurrentPage(1); }}
-              className="w-full bg-white border border-slate-200 focus:border-[#009032] focus:ring-2 focus:ring-[#009032]/10 focus:outline-none rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-800 transition-all"
+              onChange={(v) => { setDateTo(v); setCurrentPage(1); }}
+              aria-label="กรองถึงวันที่"
+              className="w-full bg-white border border-slate-200 focus-within:border-[#009032] focus-within:ring-2 focus-within:ring-[#009032]/10 focus:border-[#009032] focus:ring-2 focus:ring-[#009032]/10 focus:outline-none rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-800 transition-all"
             />
           </div>
         </div>

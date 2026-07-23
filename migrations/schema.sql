@@ -319,6 +319,16 @@ CREATE INDEX IF NOT EXISTS idx_cdv_company ON public.customers_data_view (compan
 
 
 --
+-- Name: customers_data; Type: VIEW; Schema: public; Owner: -
+-- plain view ครอบ matview customers_data_view — มีไว้เปิดดูใน DB tool (TablePlus ไม่โชว์ matview)
+-- ห้ามใช้ใน app code; app ต้อง query customers_data_view (matview) โดยตรง
+--
+
+CREATE OR REPLACE VIEW public.customers_data AS
+  SELECT * FROM public.customers_data_view;
+
+
+--
 -- Name: messages; Type: TABLE; Schema: public; Owner: -
 --
 

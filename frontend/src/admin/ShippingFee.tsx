@@ -7,6 +7,7 @@ import {
   Truck,
   Save,
   RotateCcw,
+  ChevronRight,
 } from 'lucide-react';
 
 const BRAND = '#009032';
@@ -170,34 +171,25 @@ export const ShippingFee: React.FC = () => {
   );
 
   return (
-    <div className="max-w-3xl space-y-4">
-      {/* อธิบายกฎให้แอดมินเข้าใจก่อนแก้ตัวเลข */}
-      <div className="rounded-xl border border-slate-200 bg-white p-4">
-        <div className="flex items-start gap-3">
-          <div
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
-            style={{ backgroundColor: 'rgba(0, 144, 50, 0.10)' }}
-          >
-            <Truck className="h-5 w-5" style={{ color: BRAND }} />
-          </div>
-          <div className="text-sm text-slate-600 leading-relaxed">
-            <div className="font-bold text-slate-900">ค่าขนส่งอัตโนมัติ</div>
-            <p className="mt-1">
-              ระบบจะเพิ่มรายการค่าขนส่งให้เองเมื่อ <b>ลูกค้าไม่มีเครดิต</b> (เครดิตเทอมไม่ได้เป็นรูปแบบ
-              “<span className="font-mono">xx Days</span>” เช่น Cash / เช็คล่วงหน้า / ไม่ระบุ) และ
-              <b> ยอดสินค้าก่อน VAT หลังหักส่วนลด รวมทุกใบ</b> ต่ำกว่าเกณฑ์ด้านล่าง
-              — และจะเอารายการออกให้เองเมื่อยอดถึงเกณฑ์
-            </p>
-            <p className="mt-1">
-              พนักงานขายแก้ได้เฉพาะ <b>ชื่อรายการ</b> กับ <b>ราคา</b> ในหน้าแก้ไขใบเสนอราคา
-              ส่วนจำนวนถูกล็อกและลบเองไม่ได้
-            </p>
-          </div>
+    <div className="max-w-3xl space-y-3">
+      {/* อธิบายกฎให้แอดมินเข้าใจก่อนแก้ตัวเลข — ย่อสั้นเก็บใจความหลัก */}
+      <div className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-3.5">
+        <div
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg"
+          style={{ backgroundColor: 'rgba(0, 144, 50, 0.10)' }}
+        >
+          <Truck className="h-4 w-4" style={{ color: BRAND }} />
+        </div>
+        <div className="text-[13px] leading-relaxed text-slate-600">
+          <span className="font-bold text-slate-900">ค่าขนส่งอัตโนมัติ</span> — เพิ่มรายการให้เองเมื่อ
+          <b> ลูกค้าไม่มีเครดิต</b> (เทอมไม่ใช่ “<span className="font-mono">xx Days</span>” เช่น Cash /
+          เช็คล่วงหน้า / ไม่ระบุ) และ <b>ยอดก่อน VAT หลังส่วนลด รวมทุกใบ</b> ต่ำกว่าเกณฑ์ และถอดออกเองเมื่อถึงเกณฑ์
+          · เซลล์แก้ได้แค่ <b>ชื่อรายการ</b> กับ <b>ราคา</b> จำนวนถูกล็อก
         </div>
       </div>
 
       {/* ฟอร์มค่าคงที่ */}
-      <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-4">
+      <div className="rounded-xl border border-slate-200 bg-white p-3.5 space-y-3.5">
         <label className="flex items-center gap-2.5 cursor-pointer">
           <input
             type="checkbox"
@@ -241,21 +233,23 @@ export const ShippingFee: React.FC = () => {
         </div>
       </div>
 
-      {/* ข้อมูล Odoo — อ่านอย่างเดียว แก้ผ่านตาราง products/migration เท่านั้น */}
-      <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-        <div className="text-xs font-bold text-slate-600 mb-2">
-          ข้อมูลที่ใช้ map กลับ Odoo (แก้ที่นี่ไม่ได้)
+      {/* ข้อมูล Odoo — อ่านอย่างเดียว แก้ผ่านตาราง products/migration เท่านั้น
+          กรณี map ไม่เจอ = คำเตือนสำคัญ โชว์เต็มเสมอ; ปกติยุบเป็น disclosure ประหยัดที่ */}
+      {config.product_template_id === null ? (
+        <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-3.5 text-sm text-red-700">
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+          <span>
+            ไม่พบสินค้าที่ <span className="font-mono">{config.product_internal_reference}</span> ในตาราง
+            products — กฎจะไม่ทำงานจนกว่าจะรัน migration
+          </span>
         </div>
-        {config.product_template_id === null ? (
-          <div className="flex items-start gap-2 text-sm text-red-700">
-            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-            <span>
-              ไม่พบสินค้าที่ <span className="font-mono">{config.product_internal_reference}</span> ในตาราง
-              products — กฎจะไม่ทำงานจนกว่าจะรัน migration
-            </span>
-          </div>
-        ) : (
-          <dl className="grid gap-x-6 gap-y-1.5 text-xs sm:grid-cols-2">
+      ) : (
+        <details className="group rounded-xl border border-slate-200 bg-slate-50 [&_summary::-webkit-details-marker]:hidden">
+          <summary className="flex cursor-pointer items-center gap-1.5 px-3.5 py-2.5 text-xs font-bold text-slate-600 select-none">
+            <ChevronRight className="w-3.5 h-3.5 shrink-0 transition-transform group-open:rotate-90" />
+            ข้อมูลที่ใช้ map กลับ Odoo (แก้ที่นี่ไม่ได้)
+          </summary>
+          <dl className="grid gap-x-6 gap-y-1.5 px-3.5 pb-3 text-xs sm:grid-cols-2">
             {[
               ['Internal Reference', config.product_internal_reference],
               ['Name (Odoo)', config.product_name],
@@ -270,8 +264,8 @@ export const ShippingFee: React.FC = () => {
               </div>
             ))}
           </dl>
-        )}
-      </div>
+        </details>
+      )}
 
       {error && (
         <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">

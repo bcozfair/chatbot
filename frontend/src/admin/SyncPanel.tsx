@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { useAuth } from '../context/AuthContext';
 import {
   RefreshCw,
@@ -9,6 +10,7 @@ import {
   Database,
   Save,
   Info,
+  ChevronRight,
 } from 'lucide-react';
 
 const BRAND = '#009032';
@@ -130,6 +132,99 @@ function formatThaiDateTime(iso: string | null): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+/** จำสถานะ ย่อ/ขยาย ของแต่ละแถบไว้ใน localStorage — refresh แล้วยังจำได้ (default = ยุบ) */
+function useCollapsed(storageKey: string): [boolean, () => void] {
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    try {
+      // ค่าอื่นนอกจาก 'false' = ยุบ (รวม null ตอนยังไม่เคยตั้ง จึงยุบเป็น default)
+      return localStorage.getItem(storageKey) !== 'false';
+    } catch {
+      return true;
+    }
+  });
+  const toggle = useCallback(() => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(storageKey, String(next));
+      } catch {
+        /* localStorage ใช้ไม่ได้ (private mode ฯลฯ) — ยังทำงานได้แค่ไม่จำข้ามรอบ */
+      }
+      return next;
+    });
+  }, [storageKey]);
+  return [collapsed, toggle];
+}
+
+/** โทนสีของแถบ — คุมพื้นหลัง/เส้นขอบ/ตัวอักษร/สีจาง ให้แดงกับเหลืองใช้โครงเดียวกัน */
+const BAND_TONES = {
+  red: {
+    wrap: 'bg-red-50 border-red-100 text-red-800',
+    hover: 'hover:bg-red-100/60',
+    muted: 'text-red-600',
+  },
+  amber: {
+    wrap: 'bg-amber-50 border-amber-100 text-amber-800',
+    hover: 'hover:bg-amber-100/60',
+    muted: 'text-amber-600',
+  },
+} as const;
+
+type BandTone = keyof typeof BAND_TONES;
+
+/**
+ * แถบแจ้งเตือนที่ย่อ/ขยายได้ — ยุบเหลือสรุปบรรทัดเดียว + จำนวน, คลิกทั้งหัวแถบเพื่อกาง
+ * ถ้ามีรายการเดียวก็โชว์เต็มไปเลย (ยุบ 1 บรรทัดเหลือ 1 บรรทัดไม่มีประโยชน์)
+ */
+function CollapsibleAlertBand<T>({
+  tone,
+  icon,
+  items,
+  summary,
+  renderItem,
+  storageKey,
+}: {
+  tone: BandTone;
+  icon: ReactNode;
+  items: T[];
+  /** สรุปบรรทัดเดียวตอนยุบ — รับจำนวนไปประกอบข้อความ */
+  summary: (count: number) => ReactNode;
+  renderItem: (item: T) => ReactNode;
+  storageKey: string;
+}) {
+  const [collapsed, toggle] = useCollapsed(storageKey);
+  const t = BAND_TONES[tone];
+  const collapsible = items.length > 1;
+  const showList = !collapsible || !collapsed;
+
+  return (
+    <div className={`border-b ${t.wrap} text-[11px]`}>
+      {collapsible && (
+        <button
+          type="button"
+          onClick={toggle}
+          aria-expanded={!collapsed}
+          className={`w-full flex items-center gap-2 px-4 sm:px-5 py-2 text-left transition-colors ${t.hover}`}
+        >
+          <ChevronRight
+            className={`w-3.5 h-3.5 shrink-0 transition-transform ${collapsed ? '' : 'rotate-90'}`}
+          />
+          <span className="shrink-0">{icon}</span>
+          <span className="min-w-0 font-bold truncate">{summary(items.length)}</span>
+          <span className={`ml-auto shrink-0 font-semibold ${t.muted}`}>
+            {collapsed ? 'แสดง' : 'ซ่อน'}
+          </span>
+        </button>
+      )}
+      {showList && (
+        <div className={`px-4 sm:px-5 pb-2 space-y-0.5 ${collapsible ? '' : 'pt-2'}`}>
+          {items.map((item) => renderItem(item))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function SyncPanel() {
@@ -372,8 +467,13 @@ export function SyncPanel() {
 
       {/* แถบแดงค้าง — รอบล่าสุดยังพังอยู่ ต่างจาก toast ตรงที่ไม่หายไปใน 4 วิ */}
       {!running && failing.length > 0 && (
-        <div className="px-4 sm:px-5 py-2 bg-red-50 border-b border-red-100 text-red-800 text-[11px] space-y-0.5">
-          {failing.map((r) => (
+        <CollapsibleAlertBand
+          tone="red"
+          storageKey="syncPanel.failing.collapsed"
+          items={failing}
+          icon={<AlertTriangle className="w-3.5 h-3.5" />}
+          summary={(n) => `${n} รายการ sync ล้มเหลว`}
+          renderItem={(r) => (
             <div key={r.id} className="flex items-start gap-2">
               <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />
               <span className="min-w-0">
@@ -383,15 +483,20 @@ export function SyncPanel() {
                 {formatThaiDateTime(r.last_run_at)} — {r.last_error}
               </span>
             </div>
-          ))}
-        </div>
+          )}
+        />
       )}
 
       {/* แถบเหลือง — ตอนนี้ปกติแล้ว แต่เคยพังภายใน 7 วัน (error ไม่ถูกล้างตอน sync สำเร็จ
           เพราะ auto sync แบบ interval จะทับ error กลางดึกทิ้งก่อนมีคนเห็น) */}
       {!running && failing.length === 0 && recovered.length > 0 && (
-        <div className="px-4 sm:px-5 py-2 bg-amber-50 border-b border-amber-100 text-amber-800 text-[11px] space-y-0.5">
-          {recovered.map((r) => (
+        <CollapsibleAlertBand
+          tone="amber"
+          storageKey="syncPanel.recovered.collapsed"
+          items={recovered}
+          icon={<Info className="w-3.5 h-3.5" />}
+          summary={(n) => `${n} รายการเคยผิดพลาด (ตอนนี้ปกติแล้ว)`}
+          renderItem={(r) => (
             <div key={r.id} className="flex items-start gap-2">
               <Info className="w-3.5 h-3.5 shrink-0 mt-px" />
               <span className="min-w-0">
@@ -400,8 +505,8 @@ export function SyncPanel() {
                 <span className="text-amber-600">(ตอนนี้ปกติแล้ว)</span>
               </span>
             </div>
-          ))}
-        </div>
+          )}
+        />
       )}
 
       {/* Per-resource rows */}
@@ -446,7 +551,7 @@ export function SyncPanel() {
 
       {/* Auto schedule section */}
       {form && (
-        <div className="border-t border-slate-100 bg-slate-50/50 px-4 sm:px-5 py-3 space-y-3">
+        <div className="border-t border-slate-100 bg-slate-50/50 px-4 sm:px-5 py-2.5 space-y-2.5">
           {/* Enable toggle */}
           <label className="flex items-center justify-between gap-3 cursor-pointer">
             <span className="text-xs font-bold text-slate-700">Sync อัตโนมัติตามเวลา</span>
@@ -471,13 +576,13 @@ export function SyncPanel() {
           </label>
 
           {form.auto_enabled && (
-            <div className="space-y-2.5 animate-fade-in">
-              {/* วัน */}
-              <div className="flex flex-wrap items-center gap-2 text-xs">
+            <div className="space-y-2 animate-fade-in">
+              {/* วัน — nowrap เพื่อให้ปุ่มลัด (ทุกวัน/จ.-ศ.) อยู่แถวเดียวกับชิปวันเสมอ ไม่ตกบรรทัด */}
+              <div className="flex flex-nowrap items-center gap-2 text-xs">
                 <span className="text-[11px] font-semibold text-slate-400 w-12 shrink-0">วัน</span>
 
-                {/* segmented control — 7 วันเป็นก้อนเดียว ไม่ใช่ปุ่มลอย 7 ตัว */}
-                <div className="flex rounded-lg border border-slate-200 overflow-hidden divide-x divide-slate-200">
+                {/* segmented control — 7 วันเป็นก้อนเดียว, ชิปยืดแบ่งพื้นที่ (flex-1) เพื่อไม่ล้นขอบการ์ด */}
+                <div className="flex flex-1 min-w-0 rounded-lg border border-slate-200 overflow-hidden divide-x divide-slate-200">
                   {DAY_CHIPS.map((d) => {
                     // days ว่าง = ทุกวัน จึงโชว์เป็นเลือกครบ
                     const active = form.days.length === 0 || form.days.includes(d.value);
@@ -487,7 +592,7 @@ export function SyncPanel() {
                         type="button"
                         onClick={() => toggleDay(d.value)}
                         aria-pressed={active}
-                        className={`w-8 py-1 text-[11px] font-bold transition-colors ${
+                        className={`flex-1 min-w-0 py-1 text-[11px] font-bold transition-colors ${
                           active ? 'text-white' : 'bg-slate-50 text-slate-400 hover:bg-white'
                         }`}
                         style={active ? { backgroundColor: BRAND } : undefined}
@@ -498,8 +603,8 @@ export function SyncPanel() {
                   })}
                 </div>
 
-                {/* ชิดขวาตามแพตเทิร์นของการ์ดนี้ (ป้ายซ้าย–ปุ่มขวา) ให้อ่านว่าคนละหน้าที่กับชิปวัน */}
-                <div className="flex items-center gap-1 ml-auto">
+                {/* ปุ่มลัด — ป้ายซ้าย–ปุ่มขวา, shrink-0 กันโดนบีบ (ชิปวันยืดแทน) */}
+                <div className="flex shrink-0 items-center gap-1">
                   {DAY_PRESETS.map((p) => {
                     const active = p.isActive(form.days);
                     return (
@@ -519,50 +624,45 @@ export function SyncPanel() {
                 </div>
               </div>
 
-              {/* ช่วงเวลา */}
-              <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                <span className="text-[11px] font-semibold text-slate-400 w-12 shrink-0">เวลา</span>
-                <input
-                  type="time"
-                  value={form.window_start}
-                  onChange={(e) => setForm({ ...form, window_start: e.target.value })}
-                  className="px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#009032]/20 focus:border-[#009032]"
-                />
-                <span className="text-slate-500">ถึง</span>
-                <input
-                  type="time"
-                  value={form.window_end}
-                  onChange={(e) => setForm({ ...form, window_end: e.target.value })}
-                  className="px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#009032]/20 focus:border-[#009032]"
-                />
-                <span className="text-slate-400">น.</span>
-              </div>
+              {/* ช่วงเวลา + interval รวมแถวเดียว — สองกลุ่มสั้น อยู่บรรทัดเดียวกันได้ ลดความสูง */}
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] font-semibold text-slate-400 w-12 shrink-0">เวลา</span>
+                  <input
+                    type="time"
+                    value={form.window_start}
+                    onChange={(e) => setForm({ ...form, window_start: e.target.value })}
+                    className="px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#009032]/20 focus:border-[#009032]"
+                  />
+                  <span className="text-slate-500">ถึง</span>
+                  <input
+                    type="time"
+                    value={form.window_end}
+                    onChange={(e) => setForm({ ...form, window_end: e.target.value })}
+                    className="px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#009032]/20 focus:border-[#009032]"
+                  />
+                  <span className="text-slate-400">น.</span>
+                </div>
 
-              {/* interval */}
-              <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                <span className="text-[11px] font-semibold text-slate-400 w-12 shrink-0">ทุก ๆ</span>
-                <input
-                  type="number"
-                  min={1}
-                  value={intervalInput}
-                  onChange={(e) => applyInterval(e.target.value, intervalUnit)}
-                  className="w-20 px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#009032]/20 focus:border-[#009032]"
-                />
-                <select
-                  value={intervalUnit}
-                  onChange={(e) => applyInterval(intervalInput, e.target.value as IntervalUnit)}
-                  className="px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#009032]/20 focus:border-[#009032]"
-                >
-                  <option value="sec">วินาที</option>
-                  <option value="min">นาที</option>
-                </select>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] font-semibold text-slate-400 shrink-0">ทุก ๆ</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={intervalInput}
+                    onChange={(e) => applyInterval(e.target.value, intervalUnit)}
+                    className="w-16 px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#009032]/20 focus:border-[#009032]"
+                  />
+                  <select
+                    value={intervalUnit}
+                    onChange={(e) => applyInterval(intervalInput, e.target.value as IntervalUnit)}
+                    className="px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#009032]/20 focus:border-[#009032]"
+                  >
+                    <option value="sec">วินาที</option>
+                    <option value="min">นาที</option>
+                  </select>
+                </div>
               </div>
-
-              {/* สรุปเป็นประโยค — config มี 3 มิติแล้ว อ่านจากฟอร์มเปล่า ๆ ตีความยาก */}
-              <p className="flex items-center gap-1 text-[11px] font-semibold" style={{ color: BRAND }}>
-                <Clock className="w-3 h-3 shrink-0" />
-                {describeSchedule(form)}
-              </p>
 
               {form.window_start === form.window_end && (
                 <p className="flex items-start gap-1 text-[11px] text-slate-400">
@@ -618,11 +718,18 @@ export function SyncPanel() {
             </div>
           )}
 
-          {/* Save */}
+          {/* Save — สรุปตารางเวลาอยู่ซ้ายปุ่ม แทนที่แถวสรุปเดี่ยว ๆ (ลดไป 1 แถว) */}
           <div className="flex items-center justify-between gap-3">
-            <p className="text-[10px] text-slate-400 truncate">
-              {form.updated_at ? `ตั้งค่าล่าสุด: ${formatThaiDateTime(form.updated_at)}` : 'ยังไม่เคยตั้งค่า'}
-            </p>
+            {form.auto_enabled ? (
+              <p className="flex items-center gap-1 text-[11px] font-semibold min-w-0" style={{ color: BRAND }}>
+                <Clock className="w-3 h-3 shrink-0" />
+                <span className="truncate">{describeSchedule(form)}</span>
+              </p>
+            ) : (
+              <p className="text-[10px] text-slate-400 truncate">
+                {form.updated_at ? `ตั้งค่าล่าสุด: ${formatThaiDateTime(form.updated_at)}` : 'ยังไม่เคยตั้งค่า'}
+              </p>
+            )}
             <button
               onClick={saveSettings}
               disabled={isSaving}

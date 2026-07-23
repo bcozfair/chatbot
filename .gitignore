@@ -12,6 +12,9 @@ node_modules
 # Local dev tooling binaries
 ngrok.exe
 
+# Build output — tsx รัน .ts ตรงๆ ไม่ต้องใช้ dist/
+dist/
+
 # Database dumps — มี PII ลูกค้าและ password hash ห้าม commit
 backup/
 *.dump

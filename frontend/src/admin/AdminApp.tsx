@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { AuthProvider, useAuth } from '../context/AuthContext';
 import { Login } from './Login';
 import { Promotions } from './Promotions';
@@ -76,6 +77,10 @@ function AdminContent() {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [settingsExpanded, setSettingsExpanded] = useState(true);
+  // ตอน sidebar ย่อ: กดไอคอนตั้งค่า → เปิด flyout เลือก sub-tab (nav มี overflow-y-auto จึงต้องลอยแบบ fixed)
+  const [settingsFlyoutTop, setSettingsFlyoutTop] = useState<number | null>(null);
+  const settingsBtnRef = useRef<HTMLButtonElement>(null);
+  const settingsFlyoutRef = useRef<HTMLDivElement>(null);
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
   const [statsError, setStatsError] = useState<string | null>(null);
@@ -105,6 +110,28 @@ function AdminContent() {
     };
   }, [activeTab, token]);
 
+  const closeSettingsFlyout = useCallback(() => setSettingsFlyoutTop(null), []);
+
+  // ปิด flyout เลือก sub-tab เมื่อคลิกนอกพื้นที่ / กด Esc
+  useEffect(() => {
+    if (settingsFlyoutTop === null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeSettingsFlyout();
+    };
+    const onPointer = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (settingsFlyoutRef.current?.contains(t) || settingsBtnRef.current?.contains(t)) return;
+      closeSettingsFlyout();
+    };
+    window.addEventListener('keydown', onKey);
+    // capture=true จับก่อน handler ปุ่มอื่น กันเคสคลิกปุ่มแล้ว flyout ยังค้าง
+    window.addEventListener('mousedown', onPointer, true);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('mousedown', onPointer, true);
+    };
+  }, [settingsFlyoutTop, closeSettingsFlyout]);
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col items-center justify-center gap-3">
@@ -121,6 +148,7 @@ function AdminContent() {
   const goTo = (tab: MainTab) => {
     setActiveTab(tab);
     setMobileOpen(false);
+    closeSettingsFlyout();
     if (tab === 'settings') setSettingsExpanded(true);
   };
 
@@ -128,6 +156,25 @@ function AdminContent() {
     setActiveTab('settings');
     setSubTab(tab);
     setMobileOpen(false);
+    closeSettingsFlyout();
+  };
+
+  // ปุ่มตั้งค่า: ย่ออยู่ → toggle flyout (คำนวณ top จากปุ่ม), ขยายอยู่ → accordion แบบเดิม
+  const onSettingsClick = () => {
+    if (!collapsed) {
+      setSettingsExpanded((v) => !v);
+      return;
+    }
+    setSettingsFlyoutTop((cur) => {
+      if (cur !== null) return null;
+      return settingsBtnRef.current?.getBoundingClientRect().top ?? null;
+    });
+  };
+
+  // ย่อ/ขยาย sidebar — ปิด flyout ทุกครั้งไม่ให้ค้างลอยตอนความกว้างเปลี่ยน
+  const toggleCollapsed = () => {
+    closeSettingsFlyout();
+    setCollapsed((v) => !v);
   };
 
   const SUMMARY_CARDS: {
@@ -198,14 +245,11 @@ function AdminContent() {
 
         {/* Settings group */}
         <button
-          onClick={() => {
-            if (collapsed) {
-              goTo('settings');
-            } else {
-              setSettingsExpanded((v) => !v);
-            }
-          }}
+          ref={settingsBtnRef}
+          onClick={onSettingsClick}
           title={collapsed ? 'ตั้งค่าเงื่อนไข & กฎ' : undefined}
+          aria-haspopup={collapsed ? 'menu' : undefined}
+          aria-expanded={collapsed ? settingsFlyoutTop !== null : settingsExpanded}
           className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${
             collapsed ? 'justify-center' : ''
           } ${activeTab === 'settings' ? '' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'}`}
@@ -290,13 +334,45 @@ function AdminContent() {
       >
         {SidebarContent}
         <button
-          onClick={() => setCollapsed((v) => !v)}
+          onClick={toggleCollapsed}
           className="absolute z-10 flex items-center justify-center w-8 h-8 rounded-full bg-white shadow-md hover:shadow-lg transition-all active:scale-90"
           style={{ top: 18, right: -12, border: `1.5px solid rgba(0, 144, 50, 0.45)`, color: BRAND }}
           aria-label={collapsed ? 'ขยาย sidebar' : 'ย่อ sidebar'}
         >
           {collapsed ? <ChevronsRight className="w-3.5 h-3.5" /> : <ChevronsLeft className="w-3.5 h-3.5" />}
         </button>
+
+        {/* Flyout เลือก sub-tab ตอน sidebar ย่อ — portal ไป body เพื่อหนี stacking context ของ
+            <aside sticky> (ไม่งั้น input ในเนื้อหาลอยทับ flyout); fixed เพราะ nav มี overflow-y-auto ที่ clip */}
+        {collapsed && settingsFlyoutTop !== null && createPortal(
+          <div
+            ref={settingsFlyoutRef}
+            role="menu"
+            className="fixed z-[60] w-56 py-1.5 bg-white border border-slate-200 rounded-xl shadow-xl animate-fade-in"
+            style={{ top: settingsFlyoutTop, left: sidebarWidth + 6 }}
+          >
+            <p className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+              ตั้งค่าเงื่อนไข & กฎ
+            </p>
+            {SETTINGS_SUBITEMS.map(({ key, label }) => {
+              const active = activeTab === 'settings' && subTab === key;
+              return (
+                <button
+                  key={key}
+                  role="menuitem"
+                  onClick={() => goToSubTab(key)}
+                  className={`w-full text-left px-3 py-2 text-xs font-medium transition-colors ${
+                    active ? '' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                  }`}
+                  style={active ? { backgroundColor: BRAND_SOFT, color: BRAND } : undefined}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>,
+          document.body
+        )}
       </aside>
 
       {/* Mobile drawer */}
@@ -332,38 +408,36 @@ function AdminContent() {
           ) : activeTab === 'dashboard' ? (
             <div className="grid grid-cols-1 gap-6">
               {/* Welcome Card */}
-              <div className="relative bg-gradient-to-br from-[#009032]/5 via-white to-white border border-slate-200 rounded-3xl p-8 overflow-hidden shadow-md">
-                <div className="absolute top-0 right-0 w-80 h-80 bg-[#009032]/5 rounded-full blur-[80px] pointer-events-none"></div>
+              <div className="relative bg-gradient-to-br from-[#009032]/5 via-white to-white border border-slate-200 rounded-2xl p-4 sm:p-5 overflow-hidden shadow-sm">
+                <div className="absolute top-0 right-0 w-56 h-56 bg-[#009032]/5 rounded-full blur-[70px] pointer-events-none"></div>
 
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 relative z-10">
-                  <div className="space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 relative z-10">
+                  <div className="flex items-center gap-3 min-w-0">
                     <div
-                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold"
+                      className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
                       style={{ backgroundColor: BRAND_SOFT, color: BRAND, borderColor: BRAND_BORDER, borderWidth: 1 }}
                     >
-                      <LayoutDashboard className="w-3.5 h-3.5" />
-                      ยินดีต้อนรับกลับสู่ระบบ
+                      <LayoutDashboard className="w-5 h-5" />
                     </div>
-                    <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-900">
-                      สวัสดี, คุณ {user?.name || 'แอดมิน'} 👋
-                    </h2>
-                    <p className="text-slate-600 text-sm max-w-xl">
-                      ยินดีต้อนรับเข้าสู่ระบบจัดการข้อมูล Chatbot ออกใบเสนอราคา บริษัท Primus Co., Ltd.
-                      คุณสามารถเลือกจัดการ โปรโมชัน ลายเซ็นพนักงานขาย และ Export ข้อมูลใบเสนอราคา ได้ที่นี่...
-                    </p>
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-semibold" style={{ color: BRAND }}>
+                        ยินดีต้อนรับกลับสู่ระบบ
+                      </p>
+                      <h2 className="text-lg sm:text-xl font-extrabold text-slate-900 leading-tight truncate">
+                        สวัสดี, คุณ {user?.name || 'แอดมิน'} 👋
+                      </h2>
+                    </div>
                   </div>
 
-                  <div className="bg-slate-50 border border-slate-200 p-6 rounded-2xl md:min-w-[200px] text-center shadow-sm">
-                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">
-                      สถานะการทำงาน
-                    </p>
-                    <div className="text-lg font-bold text-slate-800 mb-2 flex items-center justify-center gap-2">
-                      <span className="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-pulse"></span>
+                  <div className="flex items-center gap-2 shrink-0 text-xs">
+                    <span className="flex items-center gap-1.5 font-semibold text-slate-700">
+                      <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
                       ระบบเปิดใช้งานปกติ
-                    </div>
-                    <p className="text-xs text-slate-500">
-                      สิทธิ์ผู้ใช้งาน: <span className="font-semibold" style={{ color: BRAND }}>{user?.role}</span>
-                    </p>
+                    </span>
+                    <span className="text-slate-300">·</span>
+                    <span className="text-slate-500">
+                      สิทธิ์: <span className="font-semibold" style={{ color: BRAND }}>{user?.role}</span>
+                    </span>
                   </div>
                 </div>
               </div>
