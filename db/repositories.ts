@@ -270,6 +270,30 @@ export async function deletePendingQuotations(userId: string): Promise<void> {
   } catch (err) { logErr('deletePendingQuotations', err); }
 }
 
+// ═══════════════════════════ products ═══════════════════════════
+
+/**
+ * หน่วยนับของสินค้าตาม product_template_id — คืน map { [templateId]: unit_of_measure }
+ *
+ * snapshot ใน quotations.item_details ไม่ได้เก็บหน่วยไว้ ตอน export ไป Odoo จึงต้องดึงสด
+ * ดึงทีเดียวทั้งชุดแทนการยิงรายบรรทัด เพราะ export ครั้งหนึ่งมีได้หลายร้อยรายการ
+ */
+export async function getProductUomByTemplateIds(ids: number[]): Promise<Record<number, string>> {
+  const uniq = Array.from(new Set((ids || []).filter(id => Number.isFinite(id))));
+  if (!uniq.length) return {};
+  try {
+    const { rows } = await pool.query(
+      `SELECT product_template_id, unit_of_measure FROM products WHERE product_template_id = ANY($1)`,
+      [uniq]);
+    const map: Record<number, string> = {};
+    rows.forEach((r: any) => {
+      const uom = String(r.unit_of_measure ?? '').trim();
+      if (uom) map[Number(r.product_template_id)] = uom;
+    });
+    return map;
+  } catch (err) { logErr('getProductUomByTemplateIds', err); return {}; }
+}
+
 // ═══════════════════════════ branch (รายการสาขาคงที่) ═══════════════════════════
 
 const STATIC_BRANCHES = [

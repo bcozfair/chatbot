@@ -12,6 +12,7 @@ import {
   CheckCircle2,
   FileSpreadsheet,
   Calendar,
+  ChevronDown,
   X,
   ArrowUpDown,
   ArrowUp,
@@ -79,6 +80,9 @@ interface QuotationListResponse {
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 
+/** รูปแบบไฟล์นำเข้า Sale Order ของ Odoo — ตรงกับ query param `format` ของ endpoint export */
+type ExportFormat = 'xlsx' | 'csv';
+
 // Status color mapping
 const STATUS_STYLES: Record<string, { bg: string; text: string; label: string }> = {
   draft: { bg: 'bg-amber-50 border-amber-200', text: 'text-amber-700', label: 'ร่าง' },
@@ -129,6 +133,11 @@ export const Quotations: React.FC = () => {
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+
+  // Export state (เมนูเลือกรูปแบบไฟล์นำเข้า Odoo)
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const exportMenuRef = React.useRef<HTMLDivElement>(null);
 
   const handleSort = (field: string) => {
     if (sortBy === field) {
@@ -195,7 +204,23 @@ export const Quotations: React.FC = () => {
     return () => clearTimeout(timer);
   }, [fetchQuotations]);
 
-  const handleExportCSV = async () => {
+  // ปิดเมนูส่งออกเมื่อคลิกนอกกล่อง
+  useEffect(() => {
+    if (!exportMenuOpen) return;
+    const onClickOutside = (e: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
+        setExportMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onClickOutside);
+    return () => document.removeEventListener('mousedown', onClickOutside);
+  }, [exportMenuOpen]);
+
+  // ส่งออกไฟล์นำเข้า Sale Order ของ Odoo — backend ใช้สถานะ confirmed เป็นค่าตั้งต้น
+  // เมื่อไม่ได้ส่ง status มา (ตัวกรองสถานะบนหน้าจอเป็นตัว override)
+  const handleExportOdoo = async (format: ExportFormat) => {
+    setExportMenuOpen(false);
+    setIsExporting(true);
     try {
       const params = new URLSearchParams();
       if (searchQuery.trim()) params.set('search', searchQuery.trim());
@@ -204,6 +229,7 @@ export const Quotations: React.FC = () => {
       if (dateTo) params.set('dateTo', dateTo);
       params.set('sortBy', sortBy);
       params.set('sortOrder', sortOrder);
+      params.set('format', format);
 
       const response = await fetch(`/api/admin/quotations/export?${params.toString()}`, {
         headers: { 'Authorization': `Bearer ${token}` }
@@ -215,16 +241,18 @@ export const Quotations: React.FC = () => {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `quotations_export_${new Date().toISOString().split('T')[0]}.csv`;
+      a.download = `sale_order_odoo_${new Date().toISOString().split('T')[0]}.${format}`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       window.URL.revokeObjectURL(url);
 
-      showToast('ส่งออกข้อมูล CSV สำเร็จเรียบร้อย');
+      showToast(`ส่งออกไฟล์ ${format === 'xlsx' ? 'Excel' : 'CSV'} สำหรับนำเข้า Odoo สำเร็จ`);
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการส่งออกข้อมูล';
       setError(errorMessage);
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -280,13 +308,41 @@ export const Quotations: React.FC = () => {
           <div className="flex-1" />
 
           <div className="flex items-center gap-2 w-full sm:w-auto">
-            <button
-              onClick={handleExportCSV}
-              className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[#009032] hover:bg-[#007b2b] text-white text-sm font-bold rounded-xl shadow-sm transition-all active:scale-95 flex-shrink-0"
-            >
-              <FileSpreadsheet className="w-4 h-4" />
-              <span className="hidden sm:inline">ส่งออก CSV</span>
-            </button>
+            <div className="relative w-full sm:w-auto" ref={exportMenuRef}>
+              <button
+                onClick={() => setExportMenuOpen(open => !open)}
+                disabled={isExporting}
+                className="w-full flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[#009032] hover:bg-[#007b2b] disabled:opacity-60 disabled:cursor-not-allowed text-white text-sm font-bold rounded-xl shadow-sm transition-all active:scale-95 flex-shrink-0"
+              >
+                {isExporting
+                  ? <Loader2 className="w-4 h-4 animate-spin" />
+                  : <FileSpreadsheet className="w-4 h-4" />}
+                <span className="hidden sm:inline">ส่งออก Odoo</span>
+                <ChevronDown className="w-3.5 h-3.5" />
+              </button>
+
+              {exportMenuOpen && (
+                <div className="absolute right-0 top-full mt-2 z-30 w-72 bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden">
+                  <button
+                    onClick={() => handleExportOdoo('xlsx')}
+                    className="w-full flex items-center gap-2 px-3.5 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50 transition-colors"
+                  >
+                    <FileSpreadsheet className="w-4 h-4 text-[#009032]" />
+                    Excel (.xlsx)
+                  </button>
+                  <button
+                    onClick={() => handleExportOdoo('csv')}
+                    className="w-full flex items-center gap-2 px-3.5 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50 transition-colors border-t border-slate-100"
+                  >
+                    <FileText className="w-4 h-4 text-slate-400" />
+                    CSV
+                  </button>
+                  <p className="px-3.5 py-2.5 text-[11px] leading-snug text-slate-500 border-t border-slate-100 bg-slate-50">
+                    ค่าตั้งต้นส่งออกเฉพาะใบที่ยืนยันแล้ว — เปลี่ยนได้ที่ตัวกรองสถานะ
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 

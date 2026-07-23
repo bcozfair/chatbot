@@ -19,8 +19,17 @@ import {
   updateSalespersonByUserId,
   getBranchesByCodes,
   getBranches,
+  getProductUomByTemplateIds,
 } from './db/repositories.js';
 import { confirmQuotationAtomic, enrichQuotationData, buildItemSnapshots, checkMinSalesPrice } from './services/quotationService.js';
+import {
+  buildOdooSaleOrderRows,
+  collectProductTemplateIds,
+  loadOdooExportConfig,
+  serializeOdooRowsToCsv,
+  serializeOdooRowsToXlsx,
+  type OdooExportFormat,
+} from './services/odooSaleOrderExport.js';
 import {
   loadQuotationRules,
   findBlockingRule,
@@ -2448,13 +2457,19 @@ app.get('/api/admin/quotations', adminAuthMiddleware, async (req: any, res: any)
   }
 });
 
-// --- API Endpoint: Admin Quotations Export CSV ---
+// --- API Endpoint: Admin Quotations Export (format นำเข้า Sale Order ของ Odoo) ---
+//
+// 1 แถว = 1 รายการสินค้า ตาม template "24.Sale order.xlsx" — ดูรายละเอียดการ map
+// ที่ services/odooSaleOrderExport.ts (จุดเดียวที่รู้เรื่อง format นี้)
 app.get('/api/admin/quotations/export', adminAuthMiddleware, async (req: any, res: any) => {
   try {
     const search = req.query.search || '';
-    const status = req.query.status || '';
+    // ใบที่ยังไม่ยืนยันไม่ควรกลายเป็นใบสั่งขายใน Odoo — ค่าตั้งต้นจึงเป็น confirmed
+    // แอดมินเปลี่ยนได้ด้วยตัวกรองสถานะบนหน้าจอ (ส่ง status มาตรง ๆ)
+    const status = req.query.status || 'confirmed';
     const dateFrom = req.query.dateFrom || '';
     const dateTo = req.query.dateTo || '';
+    const format: OdooExportFormat = req.query.format === 'csv' ? 'csv' : 'xlsx';
 
     // Validate sort fields and direction to prevent SQL injection
     const allowedSortFields: Record<string, string> = {
@@ -2499,37 +2514,34 @@ app.get('/api/admin/quotations/export', adminAuthMiddleware, async (req: any, re
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-    const result = await pool.query(`SELECT q.*, s.name AS salesperson_name FROM quotations q LEFT JOIN salesperson s ON q.user_id = s.user_id ${whereClause} ORDER BY ${sortBy} ${sortOrderParam}`, params);
-
-    // Enrich data
-    const enrichedData = await Promise.all(
-      (result.rows || []).map((q: any) => enrichQuotationData(q))
+    const result = await pool.query(
+      `SELECT q.created_at, q.customer_details, q.item_details, q.employee_details,
+              s.name AS salesperson_name, s.branch AS salesperson_branch
+         FROM quotations q
+         LEFT JOIN salesperson s ON q.user_id = s.user_id
+         ${whereClause}
+        ORDER BY ${sortBy} ${sortOrderParam}`,
+      params
     );
 
-    // Transform to flat CSV rows
-    const csvRows = enrichedData.map((q: any) => ({
-      quotation_no: q.quotation_no || '',
-      status: q.status || '',
-      customer_name: q.customer_name || '',
-      customer_code: q.customer_code || '',
-      customer_tax_id: q.customer_tax_id || '',
-      contact_name: q.contact_name || '',
-      contact_phone: q.contact_phone || '',
-      contact_email: q.contact_email || '',
-      salesperson_name: q.salesperson_name || '',
-      total_sum: q.total_sum || 0,
-      created_at: q.created_at || '',
-      updated_at: q.updated_at || '',
-    }));
+    // ไม่เรียก enrichQuotationData() ที่นี่ — format นี้ไม่ใช้สต๊อกสด/วันจัดส่ง/กฎโปรโมชัน
+    // และ enrich ยิง query หลายครั้งต่อใบ ทำให้ export หลายร้อยใบช้าโดยไม่จำเป็น
+    const quotes = result.rows || [];
+    const uomMap = await getProductUomByTemplateIds(collectProductTemplateIds(quotes));
+    const rows = buildOdooSaleOrderRows(quotes, uomMap, loadOdooExportConfig());
 
-    const json2csvParser = new Parser();
-    const csv = json2csvParser.parse(csvRows);
+    const stamp = new Date().toISOString().split('T')[0];
+    if (format === 'csv') {
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="sale_order_odoo_${stamp}.csv"`);
+      res.send(serializeOdooRowsToCsv(rows));
+      return;
+    }
 
-    // Add UTF-8 BOM for Thai characters
-    const bom = '\uFEFF';
-    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition', `attachment; filename="quotations_export_${new Date().toISOString().split('T')[0]}.csv"`);
-    res.send(bom + csv);
+    const xlsx = await serializeOdooRowsToXlsx(rows);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="sale_order_odoo_${stamp}.xlsx"`);
+    res.send(xlsx);
   } catch (err: any) {
     console.error("GET /api/admin/quotations/export error:", err);
     res.status(500).json({ error: 'Internal Server Error' });

@@ -20,12 +20,14 @@
     "sync:saleorders": "tsx scripts/sync/syncSaleorders.ts",
     "diag:confirm-race": "tsx scripts/diag/confirmRaceDiag.ts",
     "diag:shipping-fee": "tsx scripts/diag/shippingFeeSmoke.ts",
+    "diag:odoo-export": "tsx scripts/diag/odooExportSmoke.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
     "@line/bot-sdk": "^11.0.0",
     "bcryptjs": "^3.0.3",
     "dotenv": "^17.4.2",
+    "exceljs": "^4.4.0",
     "express": "^5.2.1",
     "fuse.js": "^6.6.2",
     "json2csv": "^6.0.0-alpha.2",
