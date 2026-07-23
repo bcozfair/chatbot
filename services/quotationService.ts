@@ -990,6 +990,64 @@ export async function validateAndPrepareItems(items: any[] | null): Promise<{
   return { items: expanded, errors };
 }
 
+/**
+ * ด่านตรวจกฎเดียวของทั้งระบบ — ทุกเส้นทาง draft/save/confirm/revision เรียกตัวนี้
+ * ลำดับ: expand optional → blocked → stock → MOQ → min-price เหนือ "ทุกบรรทัด"
+ * fail-closed: check ใด throw → คืน SYSTEM_ERROR violation ให้ผู้เรียก reject เสมอ
+ * stage เป็น metadata สำหรับ log เท่านั้น (ชุดกฎเท่ากันทุก stage)
+ */
+export async function validateQuotationItems(
+  items: any[] | null,
+  opts: { customerName?: string | null; stage: ValidationStage }
+): Promise<{ items: any[]; violations: Violation[] }> {
+  if (!items || items.length === 0) return { items: [], violations: [] };
+  const violations: Violation[] = [];
+  let expanded: any[] = items;
+  try {
+    expanded = await expandOptionalProducts(items);
+
+    // blocked (is_locked)
+    const blockedMsg = await getBlockedProductError(expanded);
+    if (blockedMsg) {
+      const v: Omit<Violation, 'display_message'> = { type: 'BLOCKED', model: '-', warn_msg: blockedMsg };
+      violations.push({ ...v, display_message: buildViolationDisplay(v) });
+    }
+
+    // stock
+    const stockErrors = await checkStockRules(expanded);
+    for (const e of stockErrors) {
+      const v: Omit<Violation, 'display_message'> = {
+        type: 'OUT_OF_STOCK', model: e.model, warn_msg: e.warn_msg,
+        is_optional: e.is_optional, linked_to_model: e.linked_to_model, actual_quantity: e.actual_quantity
+      };
+      violations.push({ ...v, display_message: buildViolationDisplay(v) });
+    }
+
+    // MOQ
+    const moqErrors = await checkMinOrderQty(expanded);
+    for (const e of moqErrors) {
+      const v: Omit<Violation, 'display_message'> = {
+        type: 'MOQ_VIOLATION', model: e.model, warn_msg: e.warn_msg, min_order_qty: e.min_order_qty, qty: e.qty
+      };
+      violations.push({ ...v, display_message: buildViolationDisplay(v) });
+    }
+
+    // min-price
+    const priceErrors = await checkMinSalesPrice(expanded, opts.customerName ?? null);
+    for (const e of priceErrors) {
+      const v: Omit<Violation, 'display_message'> = {
+        type: 'MIN_PRICE_VIOLATION', model: e.model, warn_msg: e.warn_msg, price: e.price, min_price: e.min_price
+      };
+      violations.push({ ...v, display_message: buildViolationDisplay(v) });
+    }
+  } catch (err) {
+    console.error(`[validateQuotationItems] stage=${opts.stage} check failed (fail-closed):`, err);
+    const v: Omit<Violation, 'display_message'> = { type: 'SYSTEM_ERROR', model: '-' };
+    return { items: expanded, violations: [{ ...v, display_message: buildViolationDisplay(v) }] };
+  }
+  return { items: expanded, violations };
+}
+
 export async function processQuotationRequest(userId: string, rawCustomerQuery: string, rawContactQuery: string, itemsForDb: any[] | null, salesperson: any): Promise<any> {
   const blockedError = await getBlockedProductError(itemsForDb);
   if (blockedError) {

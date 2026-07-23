@@ -17,5 +17,19 @@ ok('SYSTEM_ERROR', buildViolationDisplay({ type: 'SYSTEM_ERROR', model: '-' }).i
 ok('buildViolationText ว่าง = ""', buildViolationText([]) === '');
 ok('buildViolationText รวมหลายรายการ', buildViolationText([{ type: 'OUT_OF_STOCK', model: 'A', display_message: 'msgA' }, { type: 'MOQ_VIOLATION', model: 'B', display_message: 'msgB' }]).includes('msgA') );
 
+// ── integration (แตะ DB): ECOM0010 ของว่าง 1 สั่ง 2 ต้องได้ OUT_OF_STOCK พร้อม display_message ──
+import { validateQuotationItems } from '../../services/quotationService.js';
+import { pool } from '../../config/db.js';
+{
+  const r = await validateQuotationItems(
+    [{ product_id: 16543, product_template_id: 16543, model: 'ECOM0010', quantity: 2, price: 100 }],
+    { stage: 'save' }
+  );
+  const stockV = r.violations.find(v => v.type === 'OUT_OF_STOCK');
+  ok('validate: ECOM0010 สั่ง 2 → OUT_OF_STOCK', !!stockV);
+  ok('validate: มี display_message พร้อมโชว์', !!stockV && stockV.display_message.includes('ECOM0010'));
+}
+await pool.end();
+
 console.log(failures === 0 ? '\n✅ ผ่านทั้งหมด' : `\n❌ FAIL ${failures}`);
 process.exit(failures === 0 ? 0 : 1);
