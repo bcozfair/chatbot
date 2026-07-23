@@ -94,6 +94,16 @@ export async function handleQuotationEditRequest(params: {
     return { messages: [{ type: 'text', text: t }], replyText: t };
   }
 
+  // ตรวจกฎก่อนสร้างร่าง revision (เดิมข้ามการตรวจ — สินค้าที่ติดกฎหลุดเข้าร่างได้)
+  // ตรวจ "ก่อน" ยกเลิกใบร่างเดิม — ถ้าติดกฎจะได้ไม่เผลอทิ้งร่างที่ค้างอยู่ (ให้ตรงกับเส้น revise ใน lineHandler)
+  const { validateQuotationItems } = await import('./quotationService.js');
+  const { violations: revViolations } = await validateQuotationItems(activeQuote.items, { stage: 'draft' });
+  if (revViolations.length > 0) {
+    const { buildViolationText } = await import('./quotationService.js');
+    const t = buildViolationText(revViolations);
+    return { messages: [{ type: 'text', text: t }], replyText: t };
+  }
+
   // ยกเลิกใบร่างที่ค้างอยู่ของเซลส์คนนี้ก่อน (เหมือน flow revise เดิม)
   try {
     await pool.query(
@@ -105,15 +115,6 @@ export async function handleQuotationEditRequest(params: {
   }
 
   const revisedCustomerName = appendReviseFrom(activeQuote.customer_name, activeQuote.quotation_no);
-
-  // ตรวจกฎก่อนสร้างร่าง revision (เดิมข้ามการตรวจ — สินค้าที่ติดกฎหลุดเข้าร่างได้)
-  const { validateQuotationItems } = await import('./quotationService.js');
-  const { violations: revViolations } = await validateQuotationItems(activeQuote.items, { stage: 'draft' });
-  if (revViolations.length > 0) {
-    const { buildViolationText } = await import('./quotationService.js');
-    const t = buildViolationText(revViolations);
-    return { messages: [{ type: 'text', text: t }], replyText: t };
-  }
 
   let newQuote: any = null;
   try {
