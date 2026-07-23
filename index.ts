@@ -349,7 +349,7 @@ app.get('/api/products/search', async (req: any, res: any) => {
         p.name,
         p.sales_price AS price,
         p.production,
-        p.actual_quantity AS stock,
+        p.quantity_on_hand_unreserved AS stock,
         p.product_category AS category,
         p.model,
         p.sales_description,
@@ -454,8 +454,8 @@ app.get('/api/products/search', async (req: any, res: any) => {
 
     // Map properties to match original output structure and enrich with stock block flags
     const mappedPromises = sorted.slice(0, limit).map(async (item: any) => {
-      const actualQty = Number(item.actual_quantity) || 0;
-      const isBlocked = (actualQty <= 0 && item.stock_rule_active);
+      const availableQty = Number(item.stock) || 0;
+      const isBlocked = (availableQty <= 0 && item.stock_rule_active);
 
       let qCompany: 'PM' | 'THT' = 'PM';
       try {
