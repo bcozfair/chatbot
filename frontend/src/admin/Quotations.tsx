@@ -217,8 +217,8 @@ export const Quotations: React.FC = () => {
     return () => document.removeEventListener('mousedown', onClickOutside);
   }, [exportMenuOpen]);
 
-  // ส่งออกไฟล์นำเข้า Sale Order ของ Odoo — backend ใช้สถานะ confirmed เป็นค่าตั้งต้น
-  // เมื่อไม่ได้ส่ง status มา (ตัวกรองสถานะบนหน้าจอเป็นตัว override)
+  // ส่งออกไฟล์นำเข้า Sale Order ของ Odoo — เมื่อไม่ได้ส่ง status มา backend จะส่งออก
+  // ทุกใบที่มีเลขที่ใบเสนอราคาแล้ว (ตัวกรองสถานะบนหน้าจอเป็นตัว override)
   const handleExportOdoo = async (format: ExportFormat) => {
     setExportMenuOpen(false);
     setIsExporting(true);
@@ -339,7 +339,7 @@ export const Quotations: React.FC = () => {
                     CSV
                   </button>
                   <p className="px-3.5 py-2.5 text-[11px] leading-snug text-slate-500 border-t border-slate-100 bg-slate-50">
-                    ค่าตั้งต้นส่งออกเฉพาะใบที่ยืนยันแล้ว — เปลี่ยนได้ที่ตัวกรองสถานะ
+                    ค่าตั้งต้นส่งออกทุกใบที่มีเลขที่ใบเสนอราคา — จำกัดสถานะได้ที่ตัวกรอง
                   </p>
                 </div>
               )}

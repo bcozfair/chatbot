@@ -2414,14 +2414,15 @@ app.get('/api/admin/quotations', adminAuthMiddleware, async (req: any, res: any)
       paramIndex++;
     }
 
+    // ตัวกรองวันที่ตีความตามเวลาไทยและรวมทั้งวันของ dateTo (ใช้เกณฑ์เดียวกับ endpoint export)
     if (dateFrom.trim()) {
-      conditions.push(`q.created_at >= $${paramIndex}`);
+      conditions.push(`q.created_at >= ($${paramIndex}::date AT TIME ZONE 'Asia/Bangkok')`);
       params.push(dateFrom.trim());
       paramIndex++;
     }
 
     if (dateTo.trim()) {
-      conditions.push(`q.created_at <= $${paramIndex}`);
+      conditions.push(`q.created_at < (($${paramIndex}::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Bangkok')`);
       params.push(dateTo.trim());
       paramIndex++;
     }
@@ -2465,9 +2466,10 @@ app.get('/api/admin/quotations', adminAuthMiddleware, async (req: any, res: any)
 app.get('/api/admin/quotations/export', adminAuthMiddleware, async (req: any, res: any) => {
   try {
     const search = req.query.search || '';
-    // ใบที่ยังไม่ยืนยันไม่ควรกลายเป็นใบสั่งขายใน Odoo — ค่าตั้งต้นจึงเป็น confirmed
-    // แอดมินเปลี่ยนได้ด้วยตัวกรองสถานะบนหน้าจอ (ส่ง status มาตรง ๆ)
-    const status = req.query.status || 'confirmed';
+    // ค่าตั้งต้น: ส่งออกทุกใบที่มีเลขที่ใบเสนอราคาแล้ว (ไม่จำกัดเฉพาะ confirmed)
+    // ใบร่างที่ยังไม่มีเลข (draft/pending) ยังไม่ใช่เอกสารจริง จึงคัดออกด้วยเงื่อนไข quotation_no
+    // แอดมินเจาะจงสถานะเดียวได้ด้วยตัวกรองสถานะบนหน้าจอ (ส่ง status มาตรง ๆ)
+    const status = req.query.status || '';
     const dateFrom = req.query.dateFrom || '';
     const dateTo = req.query.dateTo || '';
     const format: OdooExportFormat = req.query.format === 'csv' ? 'csv' : 'xlsx';
@@ -2500,16 +2502,23 @@ app.get('/api/admin/quotations/export', adminAuthMiddleware, async (req: any, re
       conditions.push(`q.status = $${paramIndex}`);
       params.push(status.trim());
       paramIndex++;
+    } else {
+      // ไม่ได้เจาะจงสถานะ = ส่งออกทุกใบที่ "มีเลขที่ใบเสนอราคาแล้ว" (ออกเอกสารจริงแล้ว)
+      // ตัดใบร่าง/รอเลือกบริษัท-ผู้ติดต่อที่ quotation_no ยังว่างออก
+      conditions.push(`q.quotation_no IS NOT NULL AND TRIM(q.quotation_no) <> ''`);
     }
 
+    // ตัวกรองวันที่ตีความตามเวลาไทย (created_at เป็น timestamptz) และรวมทั้งวันของ dateTo:
+    //   from = 00:00 ของ dateFrom ตามโซนไทย
+    //   to   = 00:00 ของวันถัดจาก dateTo → ใช้ '<' เพื่อครอบทั้งวัน (กัน bug ตัดใบหลังเที่ยงคืนทิ้ง)
     if (dateFrom.trim()) {
-      conditions.push(`q.created_at >= $${paramIndex}`);
+      conditions.push(`q.created_at >= ($${paramIndex}::date AT TIME ZONE 'Asia/Bangkok')`);
       params.push(dateFrom.trim());
       paramIndex++;
     }
 
     if (dateTo.trim()) {
-      conditions.push(`q.created_at <= $${paramIndex}`);
+      conditions.push(`q.created_at < (($${paramIndex}::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Bangkok')`);
       params.push(dateTo.trim());
       paramIndex++;
     }

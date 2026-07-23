@@ -33,7 +33,9 @@ function argValue(name: string, fallback: string): string {
 }
 
 const limit = Math.max(1, Number(argValue('limit', '20')) || 20);
-const status = argValue('status', 'confirmed');
+// ค่าตั้งต้นว่าง = เดินเส้นทางเดียวกับ endpoint (ทุกใบที่มีเลขที่ใบเสนอราคา)
+// ใส่ --status <ค่า> เพื่อเจาะจงสถานะเดียว
+const status = argValue('status', '');
 
 /** หัวคอลัมน์ที่คัดลอกจากชีต "Import " ของ template ต้นฉบับ — ตัวเทียบอิสระจากโค้ด */
 const TEMPLATE_HEADERS = [
@@ -49,17 +51,23 @@ ok('หัวคอลัมน์ตรงกับ template ทั้งชื
   JSON.stringify([...ODOO_SO_HEADERS]) === JSON.stringify(TEMPLATE_HEADERS));
 
 // ── 2. ดึงใบจริงมา build ────────────────────────────────────────────────
+// สะท้อนเงื่อนไขของ endpoint: เจาะจงสถานะถ้าส่ง --status มา ไม่งั้นเอาทุกใบที่มีเลขที่ใบ
+const filterSql = status
+  ? 'q.status = $1'
+  : "q.quotation_no IS NOT NULL AND TRIM(q.quotation_no) <> ''";
+const filterParams = status ? [status, limit] : [limit];
+const limitParam = status ? '$2' : '$1';
 const { rows: quotes } = await pool.query<OdooExportQuotationRow & { quotation_no: string; total_sum: string }>(
   `SELECT q.quotation_no, q.total_sum, q.created_at, q.customer_details, q.item_details, q.employee_details,
           s.name AS salesperson_name, s.branch AS salesperson_branch
      FROM quotations q
      LEFT JOIN salesperson s ON q.user_id = s.user_id
-    WHERE q.status = $1
+    WHERE ${filterSql}
     ORDER BY q.created_at DESC
-    LIMIT $2`,
-  [status, limit]
+    LIMIT ${limitParam}`,
+  filterParams
 );
-console.log(`   สถานะ="${status}" ดึงมา ${quotes.length} ใบ`);
+console.log(`   ตัวกรอง=${status ? `สถานะ "${status}"` : 'ทุกใบที่มีเลขที่ใบเสนอราคา'} ดึงมา ${quotes.length} ใบ`);
 if (quotes.length === 0) {
   console.log('⚠️  ไม่มีใบเสนอราคาให้ตรวจ — ลองเปลี่ยน --status หรือใส่ข้อมูลทดสอบก่อน');
   await pool.end();
