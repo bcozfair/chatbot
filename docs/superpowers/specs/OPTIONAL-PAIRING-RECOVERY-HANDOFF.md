@@ -21,7 +21,16 @@
 
 ## หมายเหตุการ merge ในอนาคต
 
-งาน unified-quotation-validation (branch `unified-quotation-validation`) แตะ `index.ts` (search + confirm + PUT + draft), `handlers/lineHandler.ts`, `services/quotationService.ts`, และ 2 หน้า LIFF ด้วย — **จะชนกับงานนี้เมื่อ merge** ต้องประสาน 2 ทีม โดยเฉพาะ:
-- `/api/products/search`: validation-gate เปลี่ยน `stock` เป็น unreserved; optional-pairing เพิ่ม `optional_products` → รวมได้ ไม่ขัดกัน
-- `/api/quotation/:id/confirm`: validation-gate เพิ่ม `validateQuotationItems` fail-closed; optional-pairing เพิ่ม `expandOptionalProducts` ก่อน validate → ต้องวางลำดับ expand ก่อน validate
-- 2 หน้า LIFF: validation-gate ทำ block จริง+display_message; optional-pairing เพิ่ม UI สินค้าพ่วง → คนละส่วน รวมได้
+**สถานะ (2026-07-24):** `optional-product-pairing` push ขึ้น remote แล้ว (origin). `unified-quotation-validation` **ยังทำไม่เสร็จ + ยังไม่ push** → ตัดสินใจ **ยังไม่ merge** จนกว่า unified จะเสร็จ.
+
+**ผล dry-run `git merge-tree` (merge-base = `bbd69db` ทั้งคู่แตกจากจุดเดียวกัน):**
+ไฟล์ทับซ้อน 8 ไฟล์ แต่ **conflict จริงมีแค่ 2**:
+1. **`handlers/lineHandler.ts`** — conflict ที่ **import block** (บรรทัด ~26-46) เท่านั้น: unified ลบ `checkMinSalesPrice`/`checkStockRules`/`MinPriceViolation`/`StockViolation` (เปลี่ยนไปใช้ `validateQuotationItems`), ส่วนงานนี้เพิ่ม `validateAndPrepareItems`. **แก้: รวม import list** — เก็บ `validateAndPrepareItems` + เอา 4 ตัวที่ unified ลบออก. revise logic (ของเรา ~1409) กับ confirm logic (ของ unified ~541) อยู่คนละที่ ไม่ชนกันจริง.
+2. **`package.json`** — conflict ที่ diag block: unified เพิ่ม `diag:quote-validation` (quoteValidationSmoke.ts), เราเพิ่ม `diag:optional-pair`. **แก้: เก็บทั้งสองบรรทัด.**
+
+**auto-merge ได้หมด (ไม่ conflict):** `index.ts` (search+confirm คนละ hunk), `services/quotationService.ts` (unified แก้ gate, เราเพิ่ม linked_to_product_id ใน buildItemSnapshots — คนละบรรทัด), `services/quotationAgent.ts`, `utils/flexTemplates.ts`, `ruleEngineSmoke.ts`, และ 2 LIFF (คนละส่วน UI).
+
+**หลัง merge ต้องตรวจ logic (auto-merge ผ่านไม่ได้แปลว่าถูก semantically):**
+- `/api/quotation/:id/confirm`: unified เพิ่ม `validateQuotationItems` fail-closed; เราเพิ่ม `expandOptionalProducts` ก่อน validate → **ต้องวางลำดับ expand ก่อน validate** (ไม่งั้นสินค้าเสริมไม่ถูก stock-check).
+- chat confirm ใน lineHandler (~541): unified ย้ายไป `validateQuotationItems` — ถ้า gate นั้นยัง expand optional ครบ ก็ OK; ถ้าไม่ ต้องเพิ่ม expand.
+- รัน gate ทั้งหมดหลัง merge: `diag:optional-pair`, `diag:quote-validation`, `diag:stock-rule*`, `ruleEngineSmoke` (assertion linked_to_product_id), `diag:confirm-race`, + tsc + node --check 2 LIFF.
