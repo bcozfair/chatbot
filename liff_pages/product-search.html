@@ -756,9 +756,17 @@
       };
 
       successClose.onclick = () => {
-        try { liff.closeWindow(); } catch (e) {}
         successOverlay.classList.remove('show');
         setTimeout(() => successOverlay.style.display = 'none', 200);
+        // ปิดหน้าให้อัตโนมัติ (mirror ของ closeEditor() ใน quote-edit.html)
+        // ในแอป LINE → liff.closeWindow() ปิดได้; บน LINE PC หน้านี้เปิดในเบราว์เซอร์ภายนอก
+        // closeWindow() จะเงียบ จึงตกไปใช้ window.open('','_self')+window.close()
+        // (การ "รับช่วง" หน้าต่างด้วย _self ช่วยให้ Chrome ยอมให้ window.close() ทำงาน)
+        try {
+          if (liff.isInClient()) { liff.closeWindow(); return; }
+        } catch (e) {}
+        window.open('', '_self', '');
+        window.close();
       };
 
       successOverlay.style.display = 'flex';

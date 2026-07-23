@@ -1114,6 +1114,23 @@ app.post('/api/quotation/:id/confirm', express.json(), async (req: any, res: any
       });
     }
 
+    // ระงับเมื่อของว่างขายได้ไม่พอกับจำนวนที่สั่ง (กฎเดียวกับตอนบันทึก) — กันเหนียวก่อนออกเลข
+    // เผื่อสต็อกลดลงหลังร่างไว้ ตอน confirm เดิมไม่ตรวจ ทำให้ออกใบสินค้าที่หมดสต็อกได้
+    let stockViolationsOnConfirm;
+    try {
+      const { checkStockRules } = await import('./services/productService.js');
+      stockViolationsOnConfirm = await checkStockRules(quote.items);
+    } catch (stockErr) {
+      console.error("Error checking stock rules for confirmation:", stockErr);
+      return res.status(500).json({ error: 'ไม่สามารถตรวจสอบสต็อกสินค้าได้' });
+    }
+    if (stockViolationsOnConfirm.length > 0) {
+      const lines = stockViolationsOnConfirm.map(v => ` - [${v.model}]: ${v.warn_msg}`);
+      return res.status(400).json({
+        error: `❌ ไม่สามารถยืนยันได้ สินค้าถูกระงับเมื่อสต็อกไม่พอ:\n${lines.join('\n')}\nกรุณาแก้ไขจำนวน หรือติดต่อแอดมิน`
+      });
+    }
+
     const protocol = req.headers['x-forwarded-proto'] || req.protocol;
     const reqUrl = process.env.APP_URL || `${protocol}://${req.get('host')}`;
     if (!process.env.APP_URL) {

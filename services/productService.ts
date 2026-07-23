@@ -785,49 +785,99 @@ export interface StockViolation {
   type: 'OUT_OF_STOCK';
   model: string;
   name: string;
-  actual_quantity: number;
+  actual_quantity: number;        // ของว่างขายได้จริง (unreserved) ณ ตอนตรวจ — ชื่อ field คงไว้เพื่อความเข้ากันได้
   warn_msg: string;
   is_optional?: boolean;          // true = หมดเพราะ optional แนบมา
   linked_to_model?: string;       // ชื่อ trigger product
+}
+
+/** สต็อกของสินค้าที่ติดกฎ — ใช้ตัดสินว่าของ "พอส่ง" ตามจำนวนที่สั่งหรือไม่ */
+export interface RuleStock {
+  model: string;
+  name: string;
+  available: number;              // quantity_on_hand_unreserved = ของว่างขายได้จริง (หักที่ถูกจองแล้ว)
+}
+
+/**
+ * ตัดสินว่าบรรทัดนี้ต้องถูกระงับหรือไม่ — ตรรกะ pure ไม่แตะ DB (เทสได้ตรง ๆ)
+ *
+ * เดิมเช็คแบบ "มี/ไม่มี" (actual_quantity <= 0) ทำให้ของมี 1 ชิ้นแต่สั่ง 2 ชิ้นหลุดกฎ
+ * ตอนนี้เทียบ "ของว่างขายได้จริง (unreserved)" กับ "จำนวนที่สั่ง" → ของไม่พอส่งเมื่อไหร่ก็บล็อก
+ * (ยืนยันกับฝ่ายขายแล้วว่านิยาม "หมด" คือ unreserved ไม่พอกับจำนวนที่สั่ง)
+ */
+export function evaluateStockViolation(
+  item: any,
+  stock: RuleStock
+): StockViolation | null {
+  const requested = Number(item?.qty ?? item?.quantity ?? 1) || 1;
+  const available = Number(stock.available) || 0;
+  if (available >= requested) return null;
+
+  return {
+    type: 'OUT_OF_STOCK' as const,
+    model: stock.model,
+    name: stock.name,
+    actual_quantity: available,
+    warn_msg: available <= 0
+      ? 'สินค้าหมดสต็อก'
+      : `ของว่างขายได้ ${available} ชิ้น ไม่พอกับจำนวนที่สั่ง ${requested} ชิ้น`,
+  };
 }
 
 export async function checkStockRules(
   items: any[]
 ): Promise<StockViolation[]> {
   if (!items || items.length === 0) return [];
-  const productIds = items.map(i => i.product_id).filter(Boolean);
+  const productIds = items
+    .map(i => i.product_template_id ?? i.product_id)
+    .filter(Boolean);
   if (productIds.length === 0) return [];
 
+  // ดึงของว่างขายได้ของ "ทุกสินค้าที่ติดกฎ" (ไม่กรองจำนวนใน SQL) แล้วมาตัดสินฝั่ง JS
+  // เทียบกับจำนวนที่สั่งของแต่ละบรรทัด — SQL กรอง <= 0 ไม่ได้เพราะไม่รู้ว่าสั่งกี่ชิ้น
   const { rows } = await pool.query(`
-    SELECT 
+    SELECT
       p.product_template_id,
       p.model,
       p.name,
-      p.actual_quantity
+      p.quantity_on_hand_unreserved
     FROM product_stock_rules psr
-    JOIN products p 
+    JOIN products p
       ON p.internal_reference = psr.internal_reference
     WHERE p.product_template_id = ANY($1)
       AND psr.is_active = true
-      AND p.actual_quantity <= 0
   `, [productIds]);
 
-  return rows.map(row => {
-    const item = items.find(i => i.product_id === row.product_template_id);
-    const isOptional = item ? (item.is_optional ?? false) : false;
-    const linkedToProductId = item ? item.linked_to_product_id : undefined;
-    const linkedItem = linkedToProductId ? items.find(i => i.product_id === linkedToProductId) : undefined;
+  const stockByPid = new Map<number, RuleStock>(
+    rows.map((r: any) => [r.product_template_id, {
+      model: r.model,
+      name: r.name,
+      available: Number(r.quantity_on_hand_unreserved) || 0,
+    }])
+  );
 
-    return {
-      type: 'OUT_OF_STOCK' as const,
-      model: row.model,
-      name: row.name,
-      actual_quantity: row.actual_quantity,
-      warn_msg: 'สินค้าหมดสต็อก',
-      is_optional: isOptional,
+  const violations: StockViolation[] = [];
+  for (const item of items) {
+    const pid = item.product_template_id ?? item.product_id;
+    const stock = stockByPid.get(pid);
+    if (!stock) continue;
+
+    const violation = evaluateStockViolation(item, stock);
+    if (!violation) continue;
+
+    const linkedToProductId = item.linked_to_product_id;
+    const linkedItem = linkedToProductId
+      ? items.find(i => (i.product_template_id ?? i.product_id) === linkedToProductId)
+      : undefined;
+
+    violations.push({
+      ...violation,
+      is_optional: item.is_optional ?? false,
       linked_to_model: linkedItem ? linkedItem.model : undefined,
-    };
-  });
+    });
+  }
+
+  return violations;
 }
 
 export async function getOptionalLinks(triggerInternalRef: string): Promise<any[]> {

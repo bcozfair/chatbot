@@ -26,7 +26,7 @@ import {
   createRevisionFlex,
   isCustomerInfoIncomplete
 } from '../utils/flexTemplates.js';
-import { findProduct } from '../services/productService.js';
+import { findProduct, checkStockRules, type StockViolation } from '../services/productService.js';
 import { 
   findCustomerCandidates,
   findContactCandidates,
@@ -553,6 +553,22 @@ export async function handleEvent(event: any): Promise<any> {
             replyMessages.push({
               type: 'text',
               text: `❌ ไม่สามารถยืนยันใบเสนอราคาได้\nราคาหลังหักส่วนลดต่ำกว่าราคาขั้นต่ำที่กำหนด และไม่เข้าเงื่อนไขโปรโมชัน:\n${lines.join('\n')}\n\nกรุณาแก้ไขส่วนลดหรือราคาแล้วลองใหม่อีกครั้ง`
+            });
+            continue;
+          }
+
+          // ระงับเมื่อของว่างขายได้ไม่พอกับจำนวนที่สั่ง (กฎเดียวกับตอนบันทึกจาก LIFF) — กันเหนียวก่อนออกเลข
+          let stockViolations: StockViolation[] = [];
+          try {
+            stockViolations = await checkStockRules(currentQuote.items);
+          } catch (stockErr) {
+            console.error("Error checking stock rules in chatbot confirm:", stockErr);
+          }
+          if (stockViolations.length > 0) {
+            const lines = stockViolations.map(v => ` - [${v.model}]: ${v.warn_msg}`);
+            replyMessages.push({
+              type: 'text',
+              text: `❌ ไม่สามารถยืนยันใบเสนอราคาได้\nสินค้าถูกระงับเมื่อสต็อกไม่พอ:\n${lines.join('\n')}\n\nกรุณาแก้ไขจำนวน หรือติดต่อแอดมิน`
             });
             continue;
           }
