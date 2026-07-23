@@ -705,12 +705,7 @@ app.put('/api/quotation/:id', express.json(), async (req: any, res: any) => {
       return res.status(400).json({ error: err.message });
     }
 
-    // ตรวจสอบสินค้าที่บล็อก
-    const { getBlockedProductError: getBlockedProductErrorPut, validateAndPrepareItems } = await import('./services/quotationService.js');
-    const blockedError = await getBlockedProductErrorPut(items);
-    if (blockedError) {
-      return res.status(400).json({ error: blockedError });
-    }
+    const { validateAndPrepareItems, validateQuotationItems } = await import('./services/quotationService.js');
 
     // Fetch current quotation status and items using pool.query
     const quoteRes = await pool.query(
@@ -747,10 +742,9 @@ app.put('/api/quotation/:id', express.json(), async (req: any, res: any) => {
 
     // เรียกใช้ Validation Pipeline (expand optional + MOQ) เฉพาะสินค้าใหม่
     // — expand optional/MOQ ผูกกับ "สินค้าที่พึ่งเพิ่ม" จึงตรวจเฉพาะ newItems
-    const { items: expandedNew, errors } = await validateAndPrepareItems(newItems);
-    if (errors.length > 0) {
-      return res.status(422).json({ error: 'VALIDATION_ERROR', violations: errors });
-    }
+    // ใช้ validateAndPrepareItems เฉพาะเพื่อ expand optional ของสินค้าใหม่ (ผลไป push ใน resultItems)
+    // การตัดสินกฎจริงทำที่ด่านกลางเหนือ resultItems ทั้งหมดด้านล่าง
+    const { items: expandedNew } = await validateAndPrepareItems(newItems);
 
     // ประยุกต์ใช้กฎ Qty Sync และลบสินค้าเสริม สำหรับสินค้าเดิมที่ผู้ใช้ส่งกลับมา
     const resultItems: any[] = [];
@@ -777,22 +771,12 @@ app.put('/api/quotation/:id', express.json(), async (req: any, res: any) => {
     // ผนวกรายการสินค้าใหม่ที่ผ่านการตรวจสอบแล้ว
     resultItems.push(...expandedNew);
 
-    // ระงับเมื่อสต็อกไม่พอ — ตรวจ "ทุกบรรทัด" ไม่ใช่แค่สินค้าที่เพิ่งเพิ่ม
-    // เพราะเคสหลักคือผู้ใช้เพิ่มจำนวนของรายการเดิม (เช่น ECOM0010 ที่มีของ 1 → สั่ง 2)
-    // ซึ่งรายการเดิมอยู่ใน existingItemIds จึงหลุด validateAndPrepareItems(newItems) ข้างบน
-    // (กฎเดียวกับ min-price ด้านล่าง และเดียวกับตอนยืนยัน)
-    const { checkStockRules: checkStockRulesOnPut } = await import('./services/productService.js');
-    const stockViolations = await checkStockRulesOnPut(resultItems);
-    if (stockViolations.length > 0) {
-      return res.status(422).json({ error: 'VALIDATION_ERROR', violations: stockViolations });
-    }
-
-    // ราคาหลังหักส่วนลดต้องไม่ต่ำกว่าขั้นต่ำ — ตรวจ "ทุกบรรทัด" ไม่ใช่แค่สินค้าที่เพิ่งเพิ่ม
-    // เพราะเคสหลักคือผู้ใช้ไปลดราคา/เพิ่มส่วนลดของรายการเดิมในหน้า LIFF
-    // (กฎเดียวกับตอนยืนยัน — ดักตั้งแต่ตอนบันทึก จะได้ไม่มีร่างที่ยืนยันไม่ได้ค้างอยู่)
-    const minPriceViolations = await checkMinSalesPrice(resultItems, customer_name ?? quote.customer_name);
-    if (minPriceViolations.length > 0) {
-      return res.status(422).json({ error: 'VALIDATION_ERROR', violations: minPriceViolations });
+    // ด่านตรวจกฎรวม — blocked/stock/MOQ/min-price เหนือทุกบรรทัด (fail-closed)
+    const { violations: putViolations } = await validateQuotationItems(resultItems, {
+      customerName: customer_name ?? quote.customer_name, stage: 'save'
+    });
+    if (putViolations.length > 0) {
+      return res.status(422).json({ error: 'VALIDATION_ERROR', violations: putViolations });
     }
 
     // คำนวณราคายอดรวมสุทธิของใบเสนอราคาใหม่
