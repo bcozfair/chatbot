@@ -1104,6 +1104,18 @@ app.post('/api/quotation/:id/confirm', express.json(), async (req: any, res: any
       return res.status(400).json({ error: 'ไม่สามารถยืนยันใบเสนอราคาที่ไม่มีสินค้าได้' });
     }
 
+    // พ่วงสินค้าเสริม (optional) ก่อน validate — กันเคสร่างที่ยังไม่เคยผ่าน expand (เช่น chat revise เก่า)
+    // expandOptionalProducts มี de-dupe อยู่แล้ว จึงรันซ้ำกับใบที่พ่วงมาแล้วได้ ไม่เพิ่มซ้ำ
+    // ใช้ผลนี้กับทั้ง check ราคาขั้นต่ำ/สต็อก และ allocateQuotationNo (items[0]=หลัก คงเดิม พ่วงต่อท้าย)
+    // หมายเหตุ: confirmQuotationAtomic ไม่เขียน items ลง DB (แค่ออกเลข+เปลี่ยน status) จึงเป็น validation-only
+    try {
+      const { expandOptionalProducts } = await import('./services/productService.js');
+      quote.items = await expandOptionalProducts(quote.items);
+    } catch (expandErr) {
+      console.error('Error expanding optional products on confirm:', expandErr);
+      // ล้มเหลว → ใช้ items เดิมต่อ ไม่ปิดกั้นการยืนยัน (ยังตรวจกฎด้วยรายการที่มี)
+    }
+
     // กันการยืนยันใบที่ยังไม่ได้ผูกลูกค้า — เลขที่เอกสารเดินหน้าแล้วย้อนคืนไม่ได้
     // (ใบที่ยืนยันไปแล้วต้องปล่อยผ่านเพื่อคง idempotency ของ endpoint นี้)
     if (quote.status !== 'confirmed' && isCustomerInfoIncomplete(quote)) {
