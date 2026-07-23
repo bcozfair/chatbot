@@ -913,8 +913,11 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
       // (ของที่ไม่มีใน products จะไม่มีใน stockMap → นับเป็น 0 = ไม่พอ ตามเดิม)
       // ยกเว้นค่าขนส่ง: เป็นค่าบริการ ไม่มีสต๊อก จึงโชว์ชื่อรายการแทนรหัสสินค้าและไม่มีแถบสต๊อก
       const isShippingFeeLine = !!item.is_shipping_fee;
+      // สินค้าพ่วง (optional) — พ่วงมากับสินค้าหลักอัตโนมัติ; แยกจากค่าขนส่งที่ is_optional:false
+      const isOptionalLine = !isShippingFeeLine && item.is_optional === true && item.linked_to_product_id != null;
       const itemKey = item.model || item.product_code;
-      const itemLabel = isShippingFeeLine ? `${item.name || 'ค่าขนส่ง'}` : itemKey;
+      const baseLabel = isShippingFeeLine ? `${item.name || 'ค่าขนส่ง'}` : itemKey;
+      const itemLabel = isOptionalLine ? `${baseLabel} 🔗 (สินค้าพ่วง)` : baseLabel;
       const stock = stockMap[itemKey] !== undefined ? stockMap[itemKey] : 0;
       const isOut = qty > stock;
       const stockText = isOut
@@ -943,6 +946,28 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
           wrap: true
         }
       ];
+
+      // ไฮไลท์สินค้าพ่วง: แถบน้ำเงินบอกว่าเป็นสินค้าเสริมที่พ่วงมากับสินค้าหลักอัตโนมัติ
+      if (isOptionalLine) {
+        itemBoxContents.push({
+          type: "box",
+          layout: "vertical",
+          margin: "xs",
+          paddingAll: "xs",
+          cornerRadius: "md",
+          backgroundColor: "#EFF6FF",
+          contents: [
+            {
+              type: "text",
+              text: "🔗 สินค้าพ่วง — เสนอขายอัตโนมัติเมื่อมีสินค้าหลัก",
+              size: "xs",
+              color: "#1D4ED8",
+              weight: "bold",
+              wrap: true
+            }
+          ]
+        });
+      }
 
       // ไฮไลท์สถานะสต๊อก: ไม่พอ = แดง / พร้อมส่ง = เขียว (ค่าขนส่งไม่มีสต๊อก จึงไม่มีแถบนี้)
       if (!isShippingFeeLine) {
