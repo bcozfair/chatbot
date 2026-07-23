@@ -477,9 +477,28 @@
     @keyframes spin { to { transform: rotate(360deg); } }
 
     .loader-text {
-      font-size: 14px;
+      font-size: 15px;
       color: var(--text-muted);
       font-weight: 600;
+    }
+
+    /* สถานะ error บนหน้าโหลด — ตัวหนังสือใหญ่ชัด อ่านง่ายบนมือถือ; ซ่อนสปินเนอร์ที่หมุนค้าง */
+    .loader-screen.is-error .loader { display: none; }
+    .loader-title {
+      font-size: 19px;
+      font-weight: 700;
+      line-height: 1.35;
+      text-align: center;
+    }
+    .loader-title.error { color: var(--danger); }
+    .loader-detail {
+      margin-top: 8px;
+      font-size: 14px;
+      font-weight: 400;
+      line-height: 1.55;
+      color: var(--text-muted);
+      text-align: center;
+      max-width: 320px;
     }
 
     /* ─── COPY MODAL (ตาข่ายรองตอนส่ง trigger เข้าแชทไม่ได้) ───
@@ -689,6 +708,27 @@
 
     const loaderScreen = document.getElementById('loaderScreen');
     const loaderText = document.getElementById('loaderText');
+
+    /** แสดง error เต็มหน้าโหลดแบบตัวใหญ่ชัด — หัวข้อ + รายละเอียด, ซ่อนสปินเนอร์
+        detail รับเป็น textContent (กัน HTML จาก err.message) */
+    function showLoaderError(title, detail) {
+      loaderScreen.classList.add('is-error');
+      loaderScreen.style.opacity = '1';
+      loaderScreen.style.pointerEvents = 'auto';
+      loaderScreen.style.display = 'flex';
+      loaderText.innerHTML = '';
+      const t = document.createElement('div');
+      t.className = 'loader-title error';
+      t.textContent = '⚠️ ' + title;
+      loaderText.appendChild(t);
+      if (detail) {
+        const d = document.createElement('div');
+        d.className = 'loader-detail';
+        d.textContent = detail;
+        loaderText.appendChild(d);
+      }
+    }
+
     const btnSave = document.getElementById('btnSave');
     const inputName = document.getElementById('inputName');
     const inputPhone = document.getElementById('inputPhone');
@@ -1160,7 +1200,7 @@
 
       } catch (err) {
         console.error('LIFF initialization error:', err);
-        loaderText.innerHTML = `<span style="color:var(--danger)">⚠️ โหลดระบบผิดพลาด</span><br><small style="font-size:11px;font-weight:normal">${err.message}</small>`;
+        showLoaderError('โหลดระบบผิดพลาด', err.message);
       }
     }
 

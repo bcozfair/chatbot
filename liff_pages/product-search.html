@@ -293,7 +293,26 @@
       margin-bottom: 12px;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
-    .loader-text { font-size: 14px; color: var(--text-muted); }
+    .loader-text { font-size: 15px; color: var(--text-muted); }
+
+    /* สถานะ error บนหน้าโหลด — ตัวหนังสือใหญ่ชัด อ่านง่ายบนมือถือ; ซ่อนสปินเนอร์ที่หมุนค้าง */
+    .loader-screen.is-error .loader-spinner { display: none; }
+    .loader-title {
+      font-size: 19px;
+      font-weight: 700;
+      line-height: 1.35;
+      text-align: center;
+    }
+    .loader-title.error { color: var(--danger); }
+    .loader-detail {
+      margin-top: 8px;
+      font-size: 14px;
+      font-weight: 400;
+      line-height: 1.55;
+      color: var(--text-muted);
+      text-align: center;
+      max-width: 320px;
+    }
 
     /* ─── CART BAR ─── */
     .cart-bar {
@@ -632,6 +651,27 @@
 
     const loader       = document.getElementById('loaderScreen');
     const loaderText   = document.getElementById('loaderText');
+
+    /** แสดง error เต็มหน้าโหลดแบบตัวใหญ่ชัด — หัวข้อ + รายละเอียด, ซ่อนสปินเนอร์
+        detail รับเป็น textContent (กัน HTML จาก err.message) */
+    function showLoaderError(title, detail) {
+      loader.classList.add('is-error');
+      loader.style.opacity = '1';
+      loader.style.pointerEvents = 'auto';
+      loader.style.display = 'flex';
+      loaderText.innerHTML = '';
+      const t = document.createElement('div');
+      t.className = 'loader-title error';
+      t.textContent = '⚠️ ' + title;
+      loaderText.appendChild(t);
+      if (detail) {
+        const d = document.createElement('div');
+        d.className = 'loader-detail';
+        d.textContent = detail;
+        loaderText.appendChild(d);
+      }
+    }
+
     const searchInput  = document.getElementById('searchInput');
     const clearBtn     = document.getElementById('clearBtn');
     const resultMeta   = document.getElementById('resultMeta');
@@ -1107,7 +1147,7 @@
         const q = urlParams.get('q');
         if (q) { searchInput.value = q; doSearch(q); }
       } catch(err) {
-        loaderText.innerHTML = `<span style="color:var(--danger)">⚠️ ${err.message}</span>`;
+        showLoaderError('โหลดระบบผิดพลาด', err.message);
       }
     }
     window.addEventListener('load', initLIFF);

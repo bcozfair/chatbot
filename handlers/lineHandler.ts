@@ -648,13 +648,12 @@ export async function handleEvent(event: any): Promise<any> {
           });
         }
 
-        // Fetch pending quotations for this user
-        const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+        // Fetch pending quotations for this user (ค้างได้ไม่จำกัดจนกว่าจะยืนยัน/ยกเลิก/ถูกทับ)
         let pendingQuotes: any[] = [];
         try {
           const selectRes = await pool.query(
-            "SELECT * FROM quotations WHERE user_id = $1 AND status = 'pending_company' AND created_at >= $2 ORDER BY created_at DESC",
-            [userId, tenMinutesAgo]
+            "SELECT * FROM quotations WHERE user_id = $1 AND status = 'pending_company' ORDER BY created_at DESC",
+            [userId]
           );
           const enrichPromises = selectRes.rows.map(q => enrichQuotationData(q));
           pendingQuotes = await Promise.all(enrichPromises);
@@ -734,13 +733,12 @@ export async function handleEvent(event: any): Promise<any> {
       if (action === 'select_contact') {
         const contactId = params.get('contactId');
 
-        // Fetch pending quotations for this user
-        const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+        // Fetch pending quotations for this user (ค้างได้ไม่จำกัดจนกว่าจะยืนยัน/ยกเลิก/ถูกทับ)
         let pendingQuotes: any[] = [];
         try {
           const selectRes = await pool.query(
-            "SELECT * FROM quotations WHERE user_id = $1 AND status = 'pending_contact' AND created_at >= $2 ORDER BY created_at DESC",
-            [userId, tenMinutesAgo]
+            "SELECT * FROM quotations WHERE user_id = $1 AND status = 'pending_contact' ORDER BY created_at DESC",
+            [userId]
           );
           const enrichPromises = selectRes.rows.map(q => enrichQuotationData(q));
           pendingQuotes = await Promise.all(enrichPromises);
@@ -1872,13 +1870,12 @@ export async function handleEvent(event: any): Promise<any> {
         }
         customMessages = messages;
       } else {
-        // UNCLEAR or other intent
-        const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+        // UNCLEAR or other intent (pending ค้างได้ไม่จำกัดจนกว่าจะยืนยัน/ยกเลิก/ถูกทับ)
         let pendingQuotes: any[] = [];
         try {
           const selectRes = await pool.query(
-            "SELECT * FROM quotations WHERE user_id = $1 AND status = ANY($2) AND created_at >= $3 ORDER BY created_at DESC",
-            [userId, ['pending_company', 'pending_contact'], tenMinutesAgo]
+            "SELECT * FROM quotations WHERE user_id = $1 AND status = ANY($2) ORDER BY created_at DESC",
+            [userId, ['pending_company', 'pending_contact']]
           );
           const enrichPromises = selectRes.rows.map(q => enrichQuotationData(q));
           pendingQuotes = await Promise.all(enrichPromises);
