@@ -25,6 +25,59 @@ import {
   normalizeProductScope
 } from './rules/index.js';
 
+export type ValidationStage = 'draft' | 'save' | 'confirm';
+
+export interface Violation {
+  type: 'BLOCKED' | 'OUT_OF_STOCK' | 'MOQ_VIOLATION' | 'MIN_PRICE_VIOLATION' | 'SYSTEM_ERROR';
+  model: string;
+  display_message: string;
+  warn_msg?: string;
+  is_optional?: boolean;
+  linked_to_model?: string;
+  // เฉพาะชนิด (คงไว้เผื่อผู้ใช้)
+  price?: number;
+  min_price?: number;
+  min_order_qty?: number;
+  qty?: number;
+  actual_quantity?: number;
+}
+
+/** สร้างข้อความพร้อมโชว์จาก violation — ถ้อยคำเดียวของทั้งระบบ (server เป็น source of truth) */
+export function buildViolationDisplay(v: Omit<Violation, 'display_message'>): string {
+  const model = v.model || '-';
+  const optionalNote = v.is_optional && v.linked_to_model ? ` (สินค้าเสริมของ ${v.linked_to_model})` : '';
+  switch (v.type) {
+    case 'BLOCKED':
+      return v.warn_msg || `❌ ระงับการเสนอราคาสินค้า ${model} กรุณาติดต่อแอดมิน`;
+    case 'OUT_OF_STOCK': {
+      const detail = v.warn_msg ? `: ${v.warn_msg}` : '';
+      return `📦 ระงับเมื่อสต็อกไม่พอ รายการ ${model}${optionalNote}${detail}`;
+    }
+    case 'MOQ_VIOLATION': {
+      const detail = v.warn_msg
+        ? `: ${v.warn_msg}`
+        : ` (สั่งขั้นต่ำ ${v.min_order_qty ?? '-'} ชิ้น, ใส่มา ${v.qty ?? '-'} ชิ้น)`;
+      return `⬇️ จำนวนไม่ถึงขั้นต่ำ รายการ ${model}${detail}`;
+    }
+    case 'MIN_PRICE_VIOLATION': {
+      const price = Number(v.price ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const minPrice = Number(v.min_price ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      return `💰 ห้ามขายต่ำกว่าราคาขั้นต่ำ รายการ ${model} (ราคาหลังลด ฿${price} < ขั้นต่ำ ฿${minPrice})`;
+    }
+    case 'SYSTEM_ERROR':
+      return '⚠️ ตรวจสอบกฎไม่สำเร็จ กรุณาลองใหม่หรือติดต่อแอดมิน';
+    default:
+      return v.warn_msg || '';
+  }
+}
+
+/** ประกอบหลาย violation เป็นข้อความเดียวสำหรับ LINE (หัวข้อ + รายการ) */
+export function buildViolationText(violations: Violation[]): string {
+  if (!violations || violations.length === 0) return '';
+  const lines = violations.map(v => ` - ${v.display_message}`).join('\n');
+  return `❌ ระงับการเสนอราคา ตามเงื่อนไขด้านล่าง\nกรุณาแก้ไข หรือติดต่อแอดมิน\n\n${lines}`;
+}
+
 const cleanState = (s: any) => String(s || '').replace(/\s*\(.*/, '').split(/\s+/)[0].trim();
 
 const cleanAddressField = (fieldVal: any, rawState: any, zip: any) => {
