@@ -238,22 +238,12 @@ app.post('/api/quotations', express.json(), async (req: any, res: any) => {
       return res.status(400).json({ error: 'Missing userId' });
     }
 
-    const { insertDraftQuotations, getBlockedProductError, validateAndPrepareItems } =
+    const { insertDraftQuotations, validateQuotationItems } =
       await import('./services/quotationService.js');
-
-    // ด่านตรวจกฎสินค้า — ชุดเดียวกับ /api/quotation/draft-cart และ PUT /api/quotation/:id
-    //
-    // endpoint นี้ไม่ได้ถูกเรียกแค่ตอนสร้างใบใหม่ธรรมดา แต่หน้า LIFF ใช้ตอน "แยกใบใหม่"
-    // ด้วย (เพิ่มสินค้าคนละบริษัทกับใบที่เปิดอยู่ → addProductToQuote ยิงมาที่นี่)
-    // เดิมเส้นทางนี้ไม่มีการตรวจเลย สินค้าที่ติดกฎห้ามเสนอราคา/ระงับเมื่อหมดสต็อก
-    // จึงหลุดเข้าใบได้ทั้งที่เส้นทางอื่นดักไว้หมดแล้ว
-    const blockedErrorOnCreate = await getBlockedProductError(items);
-    if (blockedErrorOnCreate) {
-      return res.status(400).json({ error: blockedErrorOnCreate });
-    }
-    const { items: expandedOnCreate, errors: createErrors } = await validateAndPrepareItems(items);
-    if (createErrors.length > 0) {
-      return res.status(422).json({ error: 'VALIDATION_ERROR', violations: createErrors });
+    const { items: expandedOnCreate, violations: createViolations } =
+      await validateQuotationItems(items, { customerName, stage: 'draft' });
+    if (createViolations.length > 0) {
+      return res.status(422).json({ error: 'VALIDATION_ERROR', violations: createViolations });
     }
 
     // ยังไม่ได้ระบุบริษัท = ร่างที่ยืนยันไม่ได้ ต้องคาสถานะ pending_company ไว้เสมอ
@@ -677,16 +667,10 @@ app.post('/api/quotation/draft-cart', express.json(), async (req: any, res: any)
     }
 
     // ตรวจสอบสินค้าที่บล็อก
-    const { insertDraftQuotations, getBlockedProductError, validateAndPrepareItems } = await import('./services/quotationService.js');
-    const blockedError = await getBlockedProductError(itemsForDb);
-    if (blockedError) {
-      return res.status(400).json({ error: blockedError });
-    }
-
-    // เรียกใช้ Validation Pipeline (F2, F3, F4)
-    const { items: expanded, errors } = await validateAndPrepareItems(itemsForDb);
-    if (errors.length > 0) {
-      return res.status(422).json({ error: 'VALIDATION_ERROR', violations: errors });
+    const { insertDraftQuotations, validateQuotationItems } = await import('./services/quotationService.js');
+    const { items: expanded, violations } = await validateQuotationItems(itemsForDb, { stage: 'draft' });
+    if (violations.length > 0) {
+      return res.status(422).json({ error: 'VALIDATION_ERROR', violations });
     }
 
     // 3. บันทึกลงฐานข้อมูลเป็นใบเสนอราคาฉบับร่าง (ใช้ expanded ที่รวมสินค้าเสริมแล้ว)
