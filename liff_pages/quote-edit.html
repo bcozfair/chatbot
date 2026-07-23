@@ -2758,13 +2758,12 @@
         if (field === "quantity") {
           val = Math.max(1, Math.round(val));
           const item = quotesData[qIdx].items[iIdx];
-          if (
-            item.quantity <= (Number(item.stock) || 0) &&
-            val > (Number(item.stock) || 0)
-          ) {
+          if (val > (Number(item.stock) || 0)) {
             showCustomAlert(
-              `สินค้าไม่เพียงพอ (พร้อมส่ง ${item.stock} ชิ้น)`,
+              `สินค้าไม่เพียงพอ (พร้อมส่ง ${item.stock} ชิ้น) — เพิ่มจำนวนไม่ได้`,
             );
+            e.target.value = item.quantity; // คืนค่าเดิมในช่อง
+            return;
           }
           item.quantity = val;
         } else if (field === "price") {
@@ -2865,42 +2864,6 @@
         });
       }
 
-      // แปลง violation จาก /api/quotation/:id (422 VALIDATION_ERROR) เป็นข้อความที่บอกได้ว่า
-      // "ติดกฎอะไร ที่รายการไหน" — warn_msg ดิบเป็นแค่ท่อนสั้น ๆ ("สินค้าหมดสต็อก") ไม่มีรุ่นสินค้า
-      // ใช้ถ้อยคำชุดเดียวกับที่ flow ใน LINE ใช้ (processQuotationRequest ใน quotationService.ts)
-      function formatViolation(v) {
-        if (!v) return "";
-        const model = v.model || v.product_code || "-";
-        if (v.type === "OUT_OF_STOCK") {
-          const optionalNote =
-            v.is_optional && v.linked_to_model
-              ? ` (สินค้าเสริมของ ${v.linked_to_model})`
-              : "";
-          // warn_msg จาก server ระบุจำนวนที่ขายได้/ที่สั่ง ("ของว่างขายได้ 1 ชิ้น ไม่พอกับจำนวนที่สั่ง 2 ชิ้น")
-          const detail = v.warn_msg ? `: ${v.warn_msg}` : "";
-          return `📦 ระงับเมื่อสต็อกไม่พอ รายการ ${model}${optionalNote}${detail}`;
-        }
-        if (v.type === "MIN_PRICE_VIOLATION") {
-          const price = Number(v.price ?? 0).toLocaleString("en-US", {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2,
-          });
-          const minPrice = Number(v.min_price ?? 0).toLocaleString("en-US", {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2,
-          });
-          return `💰 ห้ามขายต่ำกว่าราคาขั้นต่ำ รายการ ${model} (ราคาหลังลด ฿${price} < ขั้นต่ำ ฿${minPrice})`;
-        }
-        if (v.type === "MOQ_VIOLATION") {
-          // warn_msg ของ MOQ เป็นข้อความที่แอดมินตั้งเองในตาราง product_moq_rules — ใช้ของแอดมินก่อน
-          const detail = v.warn_msg
-            ? `: ${v.warn_msg}`
-            : ` (สั่งขั้นต่ำ ${v.min_order_qty ?? "-"} ชิ้น, ใส่มา ${v.qty ?? "-"} ชิ้น)`;
-          return `⬇️ จำนวนไม่ถึงขั้นต่ำ รายการ ${model}${detail}`;
-        }
-        return v.warn_msg || v.message || "";
-      }
-
       // บันทึกทุกใบขึ้น server — เรียกจากปุ่ม "บันทึก" เท่านั้น (ไม่มี auto-save แล้ว)
       async function saveChangesToServer() {
         try {
@@ -2948,7 +2911,7 @@
               // ดึงสาเหตุจริงจาก backend มาแสดง (เช่น 422 = ผิดกฎ MOQ/สต๊อก, 400 = สินค้าถูกบล็อก)
               const errBody = await resp.json().catch(() => ({}));
               const violations = Array.isArray(errBody.violations)
-                ? errBody.violations.map(formatViolation).filter(Boolean)
+                ? errBody.violations.map(v => v.display_message || v.warn_msg || '').filter(Boolean)
                 : [];
               throw new Error(
                 violations.length
@@ -3453,10 +3416,12 @@
           product_sub_category: prod.category || "",
           sales_description: prod.sales_description || "",
         };
-        if (1 > stock)
+        if (1 > stock) {
           showCustomAlert(
-            `สินค้าไม่เพียงพอ (พร้อมส่ง ${stock} ชิ้น)`,
+            `สินค้าไม่เพียงพอ (พร้อมส่ง ${stock} ชิ้น) — เพิ่มลงใบเสนอราคาไม่ได้`,
           );
+          return;
+        }
 
         // ── ไม่มีใบของบริษัทสินค้านี้ → แยกใบใหม่ (สร้างพร้อมสินค้าเลย + ห้ามลบ draft เดิม) ──
         if (targetQIdx === -1) {
@@ -3495,7 +3460,7 @@
               // แบบเดียวกับ saveChangesToServer — ไม่งั้นเซลล์เห็นแค่ error กลาง ๆ แล้วงงว่าทำไมเพิ่มไม่ได้
               const errBody = await resp.json().catch(() => ({}));
               const violations = Array.isArray(errBody.violations)
-                ? errBody.violations.map(formatViolation).filter(Boolean)
+                ? errBody.violations.map(v => v.display_message || v.warn_msg || '').filter(Boolean)
                 : [];
               throw new Error(
                 violations.length
