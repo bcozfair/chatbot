@@ -947,7 +947,7 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
         }
       ];
 
-      // ไฮไลท์สินค้าพ่วง: แถบสีฟ้าบอกว่าเป็นสินค้าเสริมที่พ่วงมากับสินค้าหลักอัตโนมัติ
+      // ไฮไลท์สินค้าพ่วง: แถบสีม่วงบอกว่าเป็นสินค้าเสริมที่พ่วงมากับสินค้าหลักอัตโนมัติ
       if (isOptionalLine) {
         itemBoxContents.push({
           type: "box",
@@ -955,13 +955,13 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
           margin: "xs",
           paddingAll: "xs",
           cornerRadius: "md",
-          backgroundColor: "#E0F2FE",
+          backgroundColor: "#F3E8FF",
           contents: [
             {
               type: "text",
               text: "🔗 สินค้าพ่วง — เสนอขายอัตโนมัติเมื่อมีสินค้าหลัก",
               size: "xs",
-              color: "#0284C7",
+              color: "#7E22CE",
               weight: "bold",
               wrap: true
             }
