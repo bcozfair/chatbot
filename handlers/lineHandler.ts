@@ -1376,15 +1376,17 @@ export async function handleEvent(event: any): Promise<any> {
           }
 
           // ตรวจกฎก่อนสร้างร่าง revision (เดิมข้ามการตรวจ) — reply แบบเดียวกับ error อื่นใน handler นี้
+          let revExpandedItems = quote.items;
           {
             const { validateQuotationItems, buildViolationText } = await import('../services/quotationService.js');
-            const { violations: revV } = await validateQuotationItems(quote.items, { stage: 'draft' });
+            const { items: revExpanded, violations: revV } = await validateQuotationItems(quote.items, { stage: 'draft' });
             if (revV.length > 0) {
               return lineClient.replyMessage({
                 replyToken: replyToken,
                 messages: [{ type: 'text', text: buildViolationText(revV) }]
               });
             }
+            revExpandedItems = revExpanded;
           }
 
           const revisedCustomerName = appendReviseFrom(quote.customer_name, quote.quotation_no);
@@ -1400,7 +1402,7 @@ export async function handleEvent(event: any): Promise<any> {
 
           let newQuote: any = null;
           try {
-            const insertedQuotes = await insertDraftQuotations(userId, revisedCustomerName, quote.items, 'draft', quote.customer_id, quote.contact_id);
+            const insertedQuotes = await insertDraftQuotations(userId, revisedCustomerName, revExpandedItems, 'draft', quote.customer_id, quote.contact_id);
             if (insertedQuotes && insertedQuotes.length > 0) {
               newQuote = insertedQuotes[0];
             }

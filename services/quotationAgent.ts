@@ -97,7 +97,7 @@ export async function handleQuotationEditRequest(params: {
   // ตรวจกฎก่อนสร้างร่าง revision (เดิมข้ามการตรวจ — สินค้าที่ติดกฎหลุดเข้าร่างได้)
   // ตรวจ "ก่อน" ยกเลิกใบร่างเดิม — ถ้าติดกฎจะได้ไม่เผลอทิ้งร่างที่ค้างอยู่ (ให้ตรงกับเส้น revise ใน lineHandler)
   const { validateQuotationItems } = await import('./quotationService.js');
-  const { violations: revViolations } = await validateQuotationItems(activeQuote.items, { stage: 'draft' });
+  const { items: revExpanded, violations: revViolations } = await validateQuotationItems(activeQuote.items, { stage: 'draft' });
   if (revViolations.length > 0) {
     const { buildViolationText } = await import('./quotationService.js');
     const t = buildViolationText(revViolations);
@@ -121,7 +121,7 @@ export async function handleQuotationEditRequest(params: {
     const insertedQuotes = await insertDraftQuotations(
       userId,
       revisedCustomerName,
-      activeQuote.items,
+      revExpanded,
       'draft',
       activeQuote.customer_id,
       activeQuote.contact_id
