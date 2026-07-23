@@ -922,8 +922,9 @@
       }
 
       const stock = Number(prod.stock) || 0;
-      if (stock <= 0) {
-        showAlert(`สินค้าไม่เพียงพอ (พร้อมส่ง ${stock} ชิ้น)`);
+      if (1 > stock) {
+        showAlert(`สินค้าไม่เพียงพอ (พร้อมส่ง ${stock} ชิ้น) — เพิ่มลงตะกร้าไม่ได้`);
+        return;
       }
       cart.push({ product_code: code, model: code, name: prod.name, price: Number(prod.price)||0, quantity: 1, stock });
       renderProducts();
@@ -936,8 +937,9 @@
       const item = cart[idx];
       const newQty = item.quantity + delta;
       if (newQty <= 0) { cart.splice(idx, 1); renderProducts(); updateCartBar(); return; }
-      if (item.quantity <= item.stock && newQty > item.stock) {
-        showAlert(`สินค้าไม่เพียงพอ (พร้อมส่ง ${item.stock} ชิ้น)`);
+      if (newQty > item.stock) {
+        showAlert(`สินค้าไม่เพียงพอ (พร้อมส่ง ${item.stock} ชิ้น) — เพิ่มจำนวนไม่ได้`);
+        return;
       }
       item.quantity = newQty;
       renderProducts();
@@ -950,8 +952,9 @@
       if (idx < 0) return;
       const item = cart[idx];
       const newQty = Math.max(1, val);
-      if (item.quantity <= item.stock && newQty > item.stock) {
-        showAlert(`สินค้าไม่เพียงพอ (พร้อมส่ง ${item.stock} ชิ้น)`);
+      if (newQty > item.stock) {
+        showAlert(`สินค้าไม่เพียงพอ (พร้อมส่ง ${item.stock} ชิ้น) — เพิ่มจำนวนไม่ได้`);
+        return;
       }
       item.quantity = newQty;
       renderProducts();
@@ -1045,25 +1048,6 @@
       sheetTotal.textContent = '฿' + totalVal.toLocaleString('th-TH', {minimumFractionDigits:2, maximumFractionDigits:2});
     }
 
-    // แปลง violation จาก /api/quotation/draft-cart (422 VALIDATION_ERROR) เป็นข้อความที่อ่านรู้เรื่อง
-    // ไม่งั้นผู้ใช้จะเห็นแค่คำว่า "VALIDATION_ERROR" ไม่รู้ว่าติดกฎอะไรที่รายการไหน
-    // ⚠️ mirror ของ formatViolation() ใน quote-edit.html — แก้ที่นั่นแล้วต้องมา sync ที่นี่ด้วยมือ
-    function formatViolation(v) {
-      if (!v) return '';
-      const model = v.model || v.product_code || '-';
-      if (v.type === 'OUT_OF_STOCK') {
-        const optionalNote = v.is_optional && v.linked_to_model ? ` (สินค้าเสริมของ ${v.linked_to_model})` : '';
-        return `📦 ห้ามเสนอราคาเมื่อไม่มีสินค้า รายการ ${model}${optionalNote}`;
-      }
-      if (v.type === 'MOQ_VIOLATION') {
-        const detail = v.warn_msg
-          ? `: ${v.warn_msg}`
-          : ` (สั่งขั้นต่ำ ${v.min_order_qty ?? '-'} ชิ้น, ใส่มา ${v.qty ?? '-'} ชิ้น)`;
-        return `⬇️ จำนวนไม่ถึงขั้นต่ำ รายการ ${model}${detail}`;
-      }
-      return v.warn_msg || v.message || '';
-    }
-
     async function submitCart() {
       if (!cart.length || !userId) return;
       btnDraft.disabled = true;
@@ -1099,7 +1083,7 @@
           showDraftSuccessModal(triggerMessage, sent.reason);
         } else {
           const violations = Array.isArray(result.violations)
-            ? result.violations.map(formatViolation).filter(Boolean)
+            ? result.violations.map(v => v.display_message || v.warn_msg || '').filter(Boolean)
             : [];
           showAlert(
             violations.length
