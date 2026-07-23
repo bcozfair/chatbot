@@ -376,9 +376,10 @@ export async function handleEvent(event: any): Promise<any> {
           );
 
           if (quoteRes.rows.length === 0) {
+            // แถวหายจาก DB = ร่างเดิมถูกลบทับตอนขึ้นร่างใหม่ (ระบบร่างได้ครั้งละ 1 ใบ)
             replyMessages.push({
               type: 'text',
-              text: `❌ ไม่พบข้อมูลใบเสนอราคา ID: ${qId}`
+              text: `❌ ใบเสนอราคาฉบับนี้ถูกแทนที่แล้ว\nด้วยฉบับล่าสุด (ร่างได้ครั้งละ 1 ใบ)\n👉 กรุณาเริ่มรายการใหม่ครับ`
             });
             continue;
           }
@@ -486,9 +487,10 @@ export async function handleEvent(event: any): Promise<any> {
             console.error("Fetch quote error:", err);
           }
           if (!currentQuote) {
+            // แถวหายจาก DB = ร่างเดิมถูกลบทับตอนขึ้นร่างใหม่ (ระบบร่างได้ครั้งละ 1 ใบ)
             replyMessages.push({
               type: 'text',
-              text: `❌ ไม่พบข้อมูลใบเสนอราคา ID: ${qId}`
+              text: `❌ ใบเสนอราคาฉบับนี้ถูกแทนที่แล้ว\nด้วยฉบับล่าสุด (ร่างได้ครั้งละ 1 ใบ)\n👉 กรุณาเริ่มรายการใหม่ครับ`
             });
             continue;
           }
@@ -588,7 +590,8 @@ export async function handleEvent(event: any): Promise<any> {
           }
 
           if (confirmResult.outcome === 'not_found') {
-            replyMessages.push({ type: 'text', text: `❌ ไม่พบข้อมูลใบเสนอราคา ID: ${qId}` });
+            // แถวหายจาก DB = ร่างเดิมถูกลบทับตอนขึ้นร่างใหม่ (ระบบร่างได้ครั้งละ 1 ใบ)
+            replyMessages.push({ type: 'text', text: `❌ ใบเสนอราคาฉบับนี้ถูกแทนที่แล้ว\nด้วยฉบับล่าสุด (ร่างได้ครั้งละ 1 ใบ)\n👉 กรุณาเริ่มรายการใหม่ครับ` });
             continue;
           }
           if (confirmResult.outcome === 'cancelled') {
