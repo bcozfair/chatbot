@@ -423,8 +423,12 @@ export async function syncSaleOrders(opts?: { forceFull?: boolean }) {
 // รันเป็น CLI เฉพาะเมื่อถูกเรียกตรง ๆ (npm run sync:saleorders) — ไม่รันเมื่อถูก import จาก backend
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const forceFull = process.argv.includes('--full') || process.env.SYNC_FULL === '1';
-  syncSaleOrders({ forceFull }).catch((error) => {
-    console.error('[sale-order-sync] failed', error);
-    process.exit(1);
-  });
+  syncSaleOrders({ forceFull })
+    .then(async () => {
+      await pool.end(); // ปิด pool → event loop ว่าง → Node ออกเอง (อย่าเรียก process.exit(0) จะชน libuv teardown บน Windows)
+    })
+    .catch((error) => {
+      console.error('[sale-order-sync] failed', error);
+      process.exit(1);
+    });
 }
