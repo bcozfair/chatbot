@@ -26,7 +26,7 @@ import {
   createRevisionFlex,
   isCustomerInfoIncomplete
 } from '../utils/flexTemplates.js';
-import { findProduct, checkStockRules, type StockViolation } from '../services/productService.js';
+import { findProduct } from '../services/productService.js';
 import { 
   findCustomerCandidates,
   findContactCandidates,
@@ -40,10 +40,7 @@ import {
   resolveContactFlow,
   updateQuotationCustomerSnapshot,
   insertDraftQuotations,
-  validateAndPrepareItems,
-  enrichQuotationData,
-  checkMinSalesPrice,
-  type MinPriceViolation
+  enrichQuotationData
 } from '../services/quotationService.js';
 import { applyShippingFeeToQuoteGroup } from '../services/shippingFee.js';
 import { detectQuotationEditIntent, handleQuotationEditRequest } from '../services/quotationAgent.js';
@@ -542,37 +539,21 @@ export async function handleEvent(event: any): Promise<any> {
             continue;
           }
 
-          // ราคาหลังหักส่วนลดต้อง >= minimum_sales_price หรือเข้าเงื่อนไขโปรโมชัน (กฎเดียวกับตอนบันทึกจาก LIFF)
-          let minPriceViolations: MinPriceViolation[] = [];
+          // ด่านตรวจกฎรวมก่อนออกเลข (fail-closed — throw ในด่านกลางกลายเป็น SYSTEM_ERROR violation)
+          let confirmViolations: import('../services/quotationService.js').Violation[];
           try {
-            minPriceViolations = await checkMinSalesPrice(currentQuote.items, currentQuote.customer_name);
-          } catch (minPriceErr) {
-            console.error("Error checking minimum_sales_price in chatbot confirm:", minPriceErr);
-          }
-          if (minPriceViolations.length > 0) {
-            const lines = minPriceViolations.map(
-              v => `• ${v.model}: ราคาหลังลด ฿${v.price.toFixed(2)} < ขั้นต่ำ ฿${v.min_price.toFixed(2)} (ไม่เข้าเงื่อนไขโปรโมชัน)`
-            );
-            replyMessages.push({
-              type: 'text',
-              text: `❌ ไม่สามารถยืนยันใบเสนอราคาได้\nราคาหลังหักส่วนลดต่ำกว่าราคาขั้นต่ำที่กำหนด และไม่เข้าเงื่อนไขโปรโมชัน:\n${lines.join('\n')}\n\nกรุณาแก้ไขส่วนลดหรือราคาแล้วลองใหม่อีกครั้ง`
+            const { validateQuotationItems } = await import('../services/quotationService.js');
+            const r = await validateQuotationItems(currentQuote.items, {
+              customerName: currentQuote.customer_name, stage: 'confirm'
             });
-            continue;
+            confirmViolations = r.violations;
+          } catch (valErr) {
+            console.error('validateQuotationItems on confirm error:', valErr);
+            confirmViolations = [{ type: 'SYSTEM_ERROR', model: '-', display_message: '⚠️ ตรวจสอบกฎไม่สำเร็จ กรุณาลองใหม่หรือติดต่อแอดมิน' }];
           }
-
-          // ระงับเมื่อของว่างขายได้ไม่พอกับจำนวนที่สั่ง (กฎเดียวกับตอนบันทึกจาก LIFF) — กันเหนียวก่อนออกเลข
-          let stockViolations: StockViolation[] = [];
-          try {
-            stockViolations = await checkStockRules(currentQuote.items);
-          } catch (stockErr) {
-            console.error("Error checking stock rules in chatbot confirm:", stockErr);
-          }
-          if (stockViolations.length > 0) {
-            const lines = stockViolations.map(v => ` - [${v.model}]: ${v.warn_msg}`);
-            replyMessages.push({
-              type: 'text',
-              text: `❌ ไม่สามารถยืนยันใบเสนอราคาได้\nสินค้าถูกระงับเมื่อสต็อกไม่พอ:\n${lines.join('\n')}\n\nกรุณาแก้ไขจำนวน หรือติดต่อแอดมิน`
-            });
+          if (confirmViolations.length > 0) {
+            const { buildViolationText } = await import('../services/quotationService.js');
+            replyMessages.push({ type: 'text', text: buildViolationText(confirmViolations) });
             continue;
           }
 
@@ -1394,6 +1375,20 @@ export async function handleEvent(event: any): Promise<any> {
             });
           }
 
+          // ตรวจกฎก่อนสร้างร่าง revision (เดิมข้ามการตรวจ) — reply แบบเดียวกับ error อื่นใน handler นี้
+          let revExpandedItems = quote.items;
+          {
+            const { validateQuotationItems, buildViolationText } = await import('../services/quotationService.js');
+            const { items: revExpanded, violations: revV } = await validateQuotationItems(quote.items, { stage: 'draft' });
+            if (revV.length > 0) {
+              return lineClient.replyMessage({
+                replyToken: replyToken,
+                messages: [{ type: 'text', text: buildViolationText(revV) }]
+              });
+            }
+            revExpandedItems = revExpanded;
+          }
+
           const revisedCustomerName = appendReviseFrom(quote.customer_name, quote.quotation_no);
 
           try {
@@ -1405,27 +1400,11 @@ export async function handleEvent(event: any): Promise<any> {
             console.error("Error cancelling pending quotations:", err);
           }
 
-          // เดินรายการใบเดิมผ่าน validateAndPrepareItems ก่อน insert เพื่อ re-expand สินค้าเสริม
+          // insert ด้วย revExpandedItems จาก validateQuotationItems ด้านบน — gate นั้น expand สินค้าพ่วงให้แล้ว
           // (ใบเก่าอาจไม่เคยผ่าน expand — กฎคู่สินค้าหลัก-เสริม ต้องพ่วงให้ครบตอนคัดลอกมาแก้)
-          let itemsForRevise = quote.items;
-          try {
-            const prepared = await validateAndPrepareItems(quote.items);
-            if (prepared.errors && prepared.errors.length > 0) {
-              const lines = prepared.errors.map((v: any) => ` - [${v.model}]: ${v.warn_msg}`);
-              return lineClient.replyMessage({
-                replyToken: replyToken,
-                messages: [{ type: 'text', text: `❌ ไม่สามารถคัดลอกใบเสนอราคาเพื่อแก้ไขได้\n${lines.join('\n')}` }]
-              });
-            }
-            itemsForRevise = prepared.items;
-          } catch (prepError) {
-            console.error("validateAndPrepareItems (chat revise) error:", prepError);
-            // ล้มเหลว → ใช้ items เดิมต่อ ไม่ปิดกั้นการแก้ไข
-          }
-
           let newQuote: any = null;
           try {
-            const insertedQuotes = await insertDraftQuotations(userId, revisedCustomerName, itemsForRevise, 'draft', quote.customer_id, quote.contact_id);
+            const insertedQuotes = await insertDraftQuotations(userId, revisedCustomerName, revExpandedItems, 'draft', quote.customer_id, quote.contact_id);
             if (insertedQuotes && insertedQuotes.length > 0) {
               newQuote = insertedQuotes[0];
             }

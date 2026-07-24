@@ -23,6 +23,7 @@
     "diag:stock-rule": "tsx scripts/diag/stockRuleSmoke.ts",
     "diag:stock-rule-put": "tsx scripts/diag/stockRulePutSmoke.ts",
     "diag:optional-pair": "tsx scripts/diag/optionalPairSmoke.ts",
+    "diag:quote-validation": "tsx scripts/diag/quoteValidationSmoke.ts",
     "diag:odoo-export": "tsx scripts/diag/odooExportSmoke.ts",
     "diag:orphan-contacts": "tsx scripts/diag/orphanContactsDiag.ts",
     "backfill:contacts": "tsx scripts/backfillContactsFromSaleOrders.ts",

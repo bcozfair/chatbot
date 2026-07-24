@@ -25,6 +25,59 @@ import {
   normalizeProductScope
 } from './rules/index.js';
 
+export type ValidationStage = 'draft' | 'save' | 'confirm';
+
+export interface Violation {
+  type: 'BLOCKED' | 'OUT_OF_STOCK' | 'MOQ_VIOLATION' | 'MIN_PRICE_VIOLATION' | 'SYSTEM_ERROR';
+  model: string;
+  display_message: string;
+  warn_msg?: string;
+  is_optional?: boolean;
+  linked_to_model?: string;
+  // เฉพาะชนิด (คงไว้เผื่อผู้ใช้)
+  price?: number;
+  min_price?: number;
+  min_order_qty?: number;
+  qty?: number;
+  actual_quantity?: number;
+}
+
+/** สร้างข้อความพร้อมโชว์จาก violation — ถ้อยคำเดียวของทั้งระบบ (server เป็น source of truth) */
+export function buildViolationDisplay(v: Omit<Violation, 'display_message'>): string {
+  const model = v.model || '-';
+  const optionalNote = v.is_optional && v.linked_to_model ? ` (สินค้าเสริมของ ${v.linked_to_model})` : '';
+  switch (v.type) {
+    case 'BLOCKED':
+      return v.warn_msg || `❌ ระงับการเสนอราคาสินค้า ${model} กรุณาติดต่อแอดมิน`;
+    case 'OUT_OF_STOCK': {
+      const detail = v.warn_msg ? `: ${v.warn_msg}` : '';
+      return `📦 ระงับเมื่อสต็อกไม่พอ รายการ ${model}${optionalNote}${detail}`;
+    }
+    case 'MOQ_VIOLATION': {
+      const detail = v.warn_msg
+        ? `: ${v.warn_msg}`
+        : ` (สั่งขั้นต่ำ ${v.min_order_qty ?? '-'} ชิ้น, ใส่มา ${v.qty ?? '-'} ชิ้น)`;
+      return `⬇️ จำนวนไม่ถึงขั้นต่ำ รายการ ${model}${detail}`;
+    }
+    case 'MIN_PRICE_VIOLATION': {
+      const price = Number(v.price ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const minPrice = Number(v.min_price ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      return `💰 ห้ามขายต่ำกว่าราคาขั้นต่ำ รายการ ${model} (ราคาหลังลด ฿${price} < ขั้นต่ำ ฿${minPrice})`;
+    }
+    case 'SYSTEM_ERROR':
+      return '⚠️ ตรวจสอบกฎไม่สำเร็จ กรุณาลองใหม่หรือติดต่อแอดมิน';
+    default:
+      return v.warn_msg || '';
+  }
+}
+
+/** ประกอบหลาย violation เป็นข้อความเดียวสำหรับ LINE (หัวข้อ + รายการ) */
+export function buildViolationText(violations: Violation[]): string {
+  if (!violations || violations.length === 0) return '';
+  const lines = violations.map(v => ` - ${v.display_message}`).join('\n');
+  return `❌ ระงับการเสนอราคา ตามเงื่อนไขด้านล่าง\nกรุณาแก้ไข หรือติดต่อแอดมิน\n\n${lines}`;
+}
+
 const cleanState = (s: any) => String(s || '').replace(/\s*\(.*/, '').split(/\s+/)[0].trim();
 
 const cleanAddressField = (fieldVal: any, rawState: any, zip: any) => {
@@ -940,40 +993,68 @@ export async function validateAndPrepareItems(items: any[] | null): Promise<{
   return { items: expanded, errors };
 }
 
-export async function processQuotationRequest(userId: string, rawCustomerQuery: string, rawContactQuery: string, itemsForDb: any[] | null, salesperson: any): Promise<any> {
-  const blockedError = await getBlockedProductError(itemsForDb);
-  if (blockedError) {
-    return { text: blockedError };
-  }
+/**
+ * ด่านตรวจกฎเดียวของทั้งระบบ — ทุกเส้นทาง draft/save/confirm/revision เรียกตัวนี้
+ * ลำดับ: expand optional → blocked → stock → MOQ → min-price เหนือ "ทุกบรรทัด"
+ * fail-closed: check ใด throw → คืน SYSTEM_ERROR violation ให้ผู้เรียก reject เสมอ
+ * stage เป็น metadata สำหรับ log เท่านั้น (ชุดกฎเท่ากันทุก stage)
+ */
+export async function validateQuotationItems(
+  items: any[] | null,
+  opts: { customerName?: string | null; stage: ValidationStage }
+): Promise<{ items: any[]; violations: Violation[] }> {
+  if (!items || items.length === 0) return { items: [], violations: [] };
+  const violations: Violation[] = [];
+  let expanded: any[] = items;
+  try {
+    expanded = await expandOptionalProducts(items);
 
-  // เรียกใช้ Validation Pipeline (F2, F3, F4)
-  const { items: expanded, errors } = await validateAndPrepareItems(itemsForDb);
-  if (errors && errors.length > 0) {
-    const stockErrors = errors.filter(e => e.type === 'OUT_OF_STOCK');
-    const moqErrors = errors.filter(e => e.type === 'MOQ_VIOLATION');
-    
-    let errorText = '❌ ระงับการเสนอราคา ตามเงื่อนไขด้านล่าง\nกรุณาแก้ไข หรือติดต่อแอดมิน\n\n';
-    
-    if (stockErrors.length > 0) {
-      errorText += '📦 สินค้านี้ถูกระงับเมื่อไม่มีสต็อก:\n';
-      stockErrors.forEach(e => {
-        if (e.is_optional && e.linked_to_model) {
-          errorText += ` - [${e.model}] (สินค้าเสริมของ ${e.linked_to_model}): ${e.warn_msg}\n`;
-        } else {
-          errorText += ` - [${e.model}]: ${e.warn_msg}\n`;
-        }
-      });
-      errorText += '\n';
+    // blocked (is_locked)
+    const blockedMsg = await getBlockedProductError(expanded);
+    if (blockedMsg) {
+      const v: Omit<Violation, 'display_message'> = { type: 'BLOCKED', model: '-', warn_msg: blockedMsg };
+      violations.push({ ...v, display_message: buildViolationDisplay(v) });
     }
-    
-    if (moqErrors.length > 0) {
-      errorText += '⬇️ จำนวนไม่ถึงขั้นต่ำ (MOQ):\n';
-      moqErrors.forEach(e => {
-        errorText += ` - [${e.model}]: ${e.warn_msg}\n`;
-      });
+
+    // stock
+    const stockErrors = await checkStockRules(expanded);
+    for (const e of stockErrors) {
+      const v: Omit<Violation, 'display_message'> = {
+        type: 'OUT_OF_STOCK', model: e.model, warn_msg: e.warn_msg,
+        is_optional: e.is_optional, linked_to_model: e.linked_to_model, actual_quantity: e.actual_quantity
+      };
+      violations.push({ ...v, display_message: buildViolationDisplay(v) });
     }
-    
-    return { text: errorText.trim() };
+
+    // MOQ
+    const moqErrors = await checkMinOrderQty(expanded);
+    for (const e of moqErrors) {
+      const v: Omit<Violation, 'display_message'> = {
+        type: 'MOQ_VIOLATION', model: e.model, warn_msg: e.warn_msg, min_order_qty: e.min_order_qty, qty: e.qty
+      };
+      violations.push({ ...v, display_message: buildViolationDisplay(v) });
+    }
+
+    // min-price
+    const priceErrors = await checkMinSalesPrice(expanded, opts.customerName ?? null);
+    for (const e of priceErrors) {
+      const v: Omit<Violation, 'display_message'> = {
+        type: 'MIN_PRICE_VIOLATION', model: e.model, warn_msg: e.warn_msg, price: e.price, min_price: e.min_price
+      };
+      violations.push({ ...v, display_message: buildViolationDisplay(v) });
+    }
+  } catch (err) {
+    console.error(`[validateQuotationItems] stage=${opts.stage} check failed (fail-closed):`, err);
+    const v: Omit<Violation, 'display_message'> = { type: 'SYSTEM_ERROR', model: '-' };
+    return { items: expanded, violations: [{ ...v, display_message: buildViolationDisplay(v) }] };
+  }
+  return { items: expanded, violations };
+}
+
+export async function processQuotationRequest(userId: string, rawCustomerQuery: string, rawContactQuery: string, itemsForDb: any[] | null, salesperson: any): Promise<any> {
+  const { items: expanded, violations } = await validateQuotationItems(itemsForDb, { stage: 'draft' });
+  if (violations && violations.length > 0) {
+    return { text: buildViolationText(violations) };
   }
 
   let cleanCust = String(rawCustomerQuery || '').trim();
