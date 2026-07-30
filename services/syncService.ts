@@ -1,6 +1,6 @@
-import pg from 'pg';
 import { pool } from '../config/db.js';
 import { GatewayUnreachableError } from '../scripts/sync/gatewayClient.js';
+import { refreshCustomerDataView } from '../scripts/sync/refreshCustomerDirectory.js';
 import { clearCustomerSearchCache } from './customerService.js';
 
 // ============================================================
@@ -159,29 +159,12 @@ async function reconcileOrphanContacts() {
  * REFRESH materialized view customers_data_view หลัง sync (customers/sale_orders เปลี่ยนผ่าน sync เท่านั้น
  * → refresh ท้าย sync = matview สดเสมอในทางปฏิบัติ) แล้วล้าง in-memory search cache
  *
- * ⚠️ ต้องใช้ pg.Client เฉพาะกิจ ไม่ใช่ pool — เพราะ pool ตั้ง statement_timeout/query_timeout=15s
- *    แต่ REFRESH CONCURRENTLY ใช้ ~10s+ (จะถูกฆ่ากลางคัน). REFRESH CONCURRENTLY ต้องมี unique index
- *    (idx_cdv_company_contact) และห้ามอยู่ใน transaction. ห้าม throw — เป็น guard ท้าย sync
+ * logic REFRESH จริงอยู่ใน refreshCustomerDataView() (แชร์กับ CLI sync scripts); ที่นี่ห่อเพิ่ม
+ * clearCustomerSearchCache() ซึ่งเป็นเรื่องเฉพาะโปรเซสแอปที่รันอยู่
  */
 async function refreshCustomerDirectory() {
-  const client = new pg.Client({
-    host: process.env.PG_HOST,
-    port: process.env.PG_PORT ? parseInt(process.env.PG_PORT) : undefined,
-    database: process.env.PG_DATABASE,
-    user: process.env.PG_USER,
-    password: process.env.PG_PASSWORD,
-  });
-  try {
-    await client.connect();
-    const t0 = Date.now();
-    await client.query('REFRESH MATERIALIZED VIEW CONCURRENTLY public.customers_data_view');
-    console.log(`[sync] ♻️ refreshed customers_data_view ใน ${Date.now() - t0}ms`);
-    clearCustomerSearchCache();
-  } catch (err: any) {
-    console.error('[sync] refresh customers_data_view ล้มเหลว:', err?.message || err);
-  } finally {
-    try { await client.end(); } catch {}
-  }
+  await refreshCustomerDataView();
+  clearCustomerSearchCache();
 }
 
 /** เพิ่ม 4 คอลัมน์ผลรอบล่าสุด — เรียกตอน boot เพื่อให้ deploy แล้วใช้ได้เลยไม่ต้องรันมือ */
