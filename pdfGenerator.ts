@@ -574,7 +574,7 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
             <tr>
               <td class="sum-note-pdpa">
                 <div class="pdpa">
-                  ขอแจ้งนโยบายขอข้อมูลส่วนบุคคล เพื่อประโยชน์ในการได้รับข้อมูลผลิตภัณฑ์หรือบริการาของเรา<br>
+                  ขอแจ้งนโยบายขอข้อมูลส่วนบุคคล เพื่อประโยชน์ในการได้รับข้อมูลผลิตภัณฑ์หรือบริการของเรา<br>
                   อาทิ ใบเสนอราคา, การติดต่อกลับเพื่อสอบถามหรือนำเสนอข้อมูล ดูรายละเอียดเพิ่มเติม:<br>
                   https://www.primusthai.com/primus/Activity/info?ID=340
                 </div>
