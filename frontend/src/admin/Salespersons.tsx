@@ -17,10 +17,14 @@ import {
   ArrowUp,
   ArrowDown,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Edit2,
+  X
 } from 'lucide-react';
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
+
+type ToastType = 'success' | 'error' | 'warning';
 
 interface Salesperson {
   user_id: string;
@@ -30,8 +34,17 @@ interface Salesperson {
   salesperson_id: string | null;
   branch: string | null;
   has_sale_sig: boolean;
+  quotation_count: number;
   created_at: string;
   updated_at: string;
+}
+
+// รายชื่อพนักงานจริงจาก sale_orders — ชุดเดียวกับที่หน้า LIFF ใช้ใน dropdown
+interface RosterEntry {
+  name: string;
+  salesperson_id: string | null;
+  phone: string | null;
+  branch: string | null;
 }
 
 export function Salespersons() {
@@ -73,7 +86,23 @@ export function Salespersons() {
   const [sigTimestamp, setSigTimestamp] = useState<number>(0);
 
   // Dialog/Toast Message
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [toast, setToast] = useState<{ message: string; type: ToastType } | null>(null);
+
+  // รายชื่อพนักงานจริง (สำหรับ dropdown ในโมดัลแก้ไข)
+  const [roster, setRoster] = useState<RosterEntry[]>([]);
+  const [showNameSuggest, setShowNameSuggest] = useState(false);
+
+  // Delete confirm
+  const [deletingSp, setDeletingSp] = useState<Salesperson | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  // Edit profile modal (ชื่อ / เบอร์โทร / รหัสพนักงาน)
+  const [editingSp, setEditingSp] = useState<Salesperson | null>(null);
+  const [formName, setFormName] = useState('');
+  const [formPhone, setFormPhone] = useState('');
+  const [formSpId, setFormSpId] = useState('');
+  const [formError, setFormError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const currentUploadTarget = useRef<{ id: string } | null>(null);
@@ -108,11 +137,108 @@ export function Salespersons() {
     return () => clearTimeout(timer);
   }, [fetchSalespersons]);
 
-  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+  // รายชื่อพนักงานจริงจาก sale_orders (endpoint เดียวกับที่หน้า LIFF ใช้ — ไม่ต้องใช้ token)
+  useEffect(() => {
+    fetch('/api/salespeople')
+      .then(res => res.ok ? res.json() : [])
+      .then((data: RosterEntry[]) => setRoster(Array.isArray(data) ? data : []))
+      .catch(err => console.error('โหลดรายชื่อพนักงานไม่สำเร็จ:', err));
+  }, []);
+
+  const showToast = (message: string, type: ToastType = 'success') => {
     setToast({ message, type });
     setTimeout(() => {
       setToast(null);
-    }, 4000);
+    }, type === 'success' ? 4000 : 7000);
+  };
+
+  const openEditModal = (sp: Salesperson) => {
+    setEditingSp(sp);
+    // ชื่อตั้งต้น 'รอดำเนินการ' คือ placeholder ตอนบอทสร้างแถว ไม่ใช่ชื่อจริง — ให้แอดมินเลือกใหม่
+    setFormName(sp.name === 'รอดำเนินการ' ? '' : sp.name);
+    setFormPhone(sp.phone || '');
+    setFormSpId(sp.salesperson_id || '');
+    setFormError(null);
+    setShowNameSuggest(false);
+  };
+
+  // เลือกชื่อจากรายการ → เติมรหัส/เบอร์ให้อัตโนมัติ เหมือนหน้า LIFF
+  const applyRosterPick = (entry: RosterEntry) => {
+    setFormName(entry.name);
+    setFormSpId(entry.salesperson_id || '');
+    if (entry.phone) setFormPhone(entry.phone);
+    setShowNameSuggest(false);
+  };
+
+  const nameSuggestions = roster.filter(r => {
+    const q = formName.trim().toLowerCase();
+    if (!q) return true;
+    return r.name.toLowerCase().includes(q) || (r.salesperson_id || '').toLowerCase().includes(q);
+  }).slice(0, 50);
+
+  const handleDelete = async () => {
+    if (!deletingSp) return;
+    setIsDeleting(true);
+    try {
+      const res = await fetch(`/api/admin/salespersons/${encodeURIComponent(deletingSp.user_id)}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const result = await res.json();
+      if (!res.ok) {
+        throw new Error(result.error || 'ลบพนักงานขายไม่สำเร็จ');
+      }
+      setDeletingSp(null);
+      showToast(`ลบ ${result.name || deletingSp.name} ออกจากระบบแล้ว`);
+      fetchSalespersons();
+    } catch (err: unknown) {
+      console.error(err);
+      showToast(err instanceof Error ? err.message : 'ลบพนักงานขายไม่สำเร็จ', 'error');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleSaveProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingSp) return;
+
+    const name = formName.trim();
+    const salespersonId = formSpId.trim();
+    if (!name) { setFormError('กรุณากรอกชื่อพนักงานขาย'); return; }
+    if (!salespersonId) { setFormError('กรุณากรอกรหัสพนักงานขาย'); return; }
+
+    setIsSaving(true);
+    setFormError(null);
+    try {
+      const res = await fetch(`/api/admin/salespersons/${encodeURIComponent(editingSp.user_id)}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ name, phone: formPhone.trim(), salespersonId })
+      });
+      const result = await res.json();
+      if (!res.ok) {
+        throw new Error(result.error || 'บันทึกข้อมูลไม่สำเร็จ');
+      }
+
+      setEditingSp(null);
+      // รหัสซ้ำไม่ได้บล็อกไว้ แต่ต้องบอกให้รู้ เพราะลายเซ็นผูกกับรหัส = ใช้ร่วมกับคนนั้นทันที
+      const dup: string[] = result.duplicateWith || [];
+      if (dup.length > 0) {
+        showToast(`บันทึกแล้ว แต่รหัส ${salespersonId} ซ้ำกับ: ${dup.join(', ')} — ทั้งสองคนจะใช้ลายเซ็นใบเดียวกัน`, 'warning');
+      } else {
+        showToast('บันทึกข้อมูลพนักงานขายสำเร็จ');
+      }
+      fetchSalespersons();
+    } catch (err: unknown) {
+      console.error(err);
+      setFormError(err instanceof Error ? err.message : 'บันทึกข้อมูลไม่สำเร็จ');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleUploadClick = (salespersonId: string) => {
@@ -293,16 +419,18 @@ export function Salespersons() {
       {toast && (
         <div 
           id="toast-notification"
-          className={`fixed bottom-5 right-5 z-50 flex items-center gap-3 px-5 py-3.5 rounded-2xl shadow-xl transition-all border animate-fade-in ${
-            toast.type === 'success' 
-              ? 'bg-emerald-50 border-emerald-200 text-emerald-800' 
-              : 'bg-red-50 border-red-200 text-red-800'
+          className={`fixed bottom-5 right-5 z-[60] max-w-md flex items-center gap-3 px-5 py-3.5 rounded-2xl shadow-xl transition-all border animate-fade-in ${
+            toast.type === 'success'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+              : toast.type === 'warning'
+                ? 'bg-amber-50 border-amber-200 text-amber-900'
+                : 'bg-red-50 border-red-200 text-red-800'
           }`}
         >
           {toast.type === 'success' ? (
             <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
           ) : (
-            <AlertTriangle className="w-5 h-5 text-red-600 flex-shrink-0" />
+            <AlertTriangle className={`w-5 h-5 flex-shrink-0 ${toast.type === 'warning' ? 'text-amber-500' : 'text-red-600'}`} />
           )}
           <span className="text-sm font-semibold">{toast.message}</span>
         </div>
@@ -325,7 +453,7 @@ export function Salespersons() {
             จัดการลายเซ็นพนักงาน
           </h2>
           <p className="text-xs text-slate-500 mt-1">
-            ค้นหาข้อมูลพนักงานขาย และอัปโหลด/ลบลายเซ็นรูปภาพ (รองรับไฟล์ PNG และ JPG/JPEG)
+            ค้นหาข้อมูลพนักงานขาย แก้ไขชื่อ/เบอร์โทร/รหัสพนักงาน และอัปโหลด/ลบลายเซ็นรูปภาพ (รองรับไฟล์ PNG และ JPG/JPEG)
           </p>
         </div>
 
@@ -391,6 +519,7 @@ export function Salespersons() {
                   >
                     ลายเซ็นพนักงานขาย {renderSortIcon('has_sale_sig')}
                   </th>
+                  <th className="px-6 py-4 text-center w-20">จัดการ</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-sm text-slate-700">
@@ -399,10 +528,18 @@ export function Salespersons() {
                     {/* ข้อมูลทั่วไป */}
                     <td className="px-6 py-4 space-y-1">
                       <div className="font-bold text-slate-900">{sp.name}</div>
-                      <div className="text-xs text-slate-500 flex items-center gap-1.5">
-                        <FileText className="w-3.5 h-3.5 text-slate-400" />
-                        ID: <span className="font-semibold text-slate-700">{sp.salesperson_id || 'ไม่มีรหัส'}</span>
-                      </div>
+                      {sp.salesperson_id ? (
+                        <div className="text-xs text-slate-500 flex items-center gap-1.5">
+                          <FileText className="w-3.5 h-3.5 text-slate-400" />
+                          ID: <span className="font-semibold text-slate-700">{sp.salesperson_id}</span>
+                        </div>
+                      ) : (
+                        // ไม่มีรหัส = พนักงานคนนี้บันทึกหน้าลงทะเบียน LIFF ไม่ได้จนกว่าแอดมินจะเติมให้
+                        <div className="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1 inline-flex items-center gap-1.5">
+                          <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+                          ไม่มีรหัสพนักงาน
+                        </div>
+                      )}
                       {sp.phone && (
                         <div className="text-xs text-slate-500 flex items-center gap-1.5">
                           <Phone className="w-3.5 h-3.5 text-slate-400" />
@@ -432,6 +569,26 @@ export function Salespersons() {
                         onUpload={() => sp.salesperson_id && handleUploadClick(sp.salesperson_id)}
                         onDelete={() => sp.salesperson_id && handleDeleteSignature(sp.salesperson_id)}
                       />
+                    </td>
+
+                    {/* จัดการ */}
+                    <td className="px-6 py-4">
+                      <div className="flex items-center justify-center gap-1">
+                        <button
+                          onClick={() => openEditModal(sp)}
+                          className="p-1.5 hover:bg-slate-100 text-slate-500 hover:text-slate-900 rounded-lg transition-colors"
+                          title="แก้ไขชื่อ / เบอร์โทร / รหัสพนักงาน"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => setDeletingSp(sp)}
+                          className="p-1.5 hover:bg-red-50 text-slate-500 hover:text-red-600 rounded-lg transition-colors"
+                          title="ลบพนักงานขายออกจากระบบ"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -493,6 +650,177 @@ export function Salespersons() {
                 className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Profile Modal — ชื่อ / เบอร์โทร / รหัสพนักงาน */}
+      {editingSp && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl border border-slate-200 w-full max-w-md shadow-2xl flex flex-col">
+
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100">
+              <div>
+                <h3 className="font-bold text-slate-900 text-sm">แก้ไขข้อมูลพนักงานขาย</h3>
+                <p className="text-[11px] text-slate-400 mt-0.5">LINE User ID: {editingSp.user_id}</p>
+              </div>
+              <button
+                onClick={() => setEditingSp(null)}
+                className="w-7 h-7 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-400 hover:text-slate-600 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveProfile} className="flex flex-col">
+              <div className="px-5 py-4 space-y-4">
+                {formError && (
+                  <div className="bg-red-50 border border-red-100 text-red-700 p-3.5 rounded-xl flex items-start gap-2.5 text-xs">
+                    <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                    <span>{formError}</span>
+                  </div>
+                )}
+
+                <div className="space-y-1.5">
+                  <label className="block text-[11px] font-semibold text-slate-500 mb-1">
+                    ชื่อพนักงานขาย <span className="text-red-500">*</span>
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={formName}
+                      onChange={(e) => { setFormName(e.target.value); setShowNameSuggest(true); }}
+                      onFocus={() => setShowNameSuggest(true)}
+                      onBlur={() => setTimeout(() => setShowNameSuggest(false), 150)}
+                      placeholder="แตะเพื่อเลือกจากรายชื่อ หรือพิมพ์ค้นหา..."
+                      autoComplete="off"
+                      className="w-full h-9 px-3 bg-white border border-slate-200 focus:border-[#009032] rounded-xl text-sm text-slate-800 outline-none transition-all focus:ring-2 focus:ring-[#009032]/10"
+                    />
+                    {showNameSuggest && (
+                      <div className="absolute left-0 right-0 top-full mt-1 z-10 max-h-52 overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-lg">
+                        {nameSuggestions.length === 0 ? (
+                          <div className="px-3 py-2.5 text-xs text-slate-400 italic">
+                            ไม่พบชื่อในรายการขาย — พิมพ์ชื่อและรหัสเองได้สำหรับพนักงานใหม่
+                          </div>
+                        ) : nameSuggestions.map((r) => (
+                          <button
+                            key={`${r.salesperson_id}-${r.name}`}
+                            type="button"
+                            onMouseDown={(e) => { e.preventDefault(); applyRosterPick(r); }}
+                            className="w-full text-left px-3 py-2 hover:bg-slate-50 border-b border-slate-100 last:border-b-0 transition-colors"
+                          >
+                            <span className="text-sm text-slate-800">{r.name}</span>
+                            <span className="ml-2 text-[11px] font-mono text-slate-400">{r.salesperson_id}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-slate-400 leading-relaxed">
+                    เลือกจากรายชื่อแล้วรหัส/เบอร์จะเติมให้อัตโนมัติ — พนักงานใหม่ที่ยังไม่มีออร์เดอร์ พิมพ์เองได้
+                  </p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-[11px] font-semibold text-slate-500 mb-1">เบอร์โทรศัพท์</label>
+                  <input
+                    type="text"
+                    value={formPhone}
+                    onChange={(e) => setFormPhone(e.target.value)}
+                    placeholder="เช่น 081-234-5678"
+                    maxLength={100}
+                    className="w-full h-9 px-3 bg-white border border-slate-200 focus:border-[#009032] rounded-xl text-sm text-slate-800 outline-none transition-all focus:ring-2 focus:ring-[#009032]/10"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-[11px] font-semibold text-slate-500 mb-1">
+                    รหัสพนักงานขาย <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={formSpId}
+                    onChange={(e) => setFormSpId(e.target.value)}
+                    placeholder="เช่น SP001"
+                    maxLength={50}
+                    className="w-full h-9 px-3 bg-white border border-slate-200 focus:border-[#009032] rounded-xl text-sm font-mono text-slate-800 outline-none transition-all focus:ring-2 focus:ring-[#009032]/10"
+                  />
+                  <p className="text-[10px] text-slate-400 leading-relaxed">
+                    รหัสนี้ใช้ผูกกับไฟล์ลายเซ็น และพนักงานต้องมีรหัสก่อนจึงจะบันทึกหน้าลงทะเบียนใน LINE ได้
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 px-5 py-3.5 border-t border-slate-100 bg-slate-50/60 rounded-b-2xl">
+                <button
+                  type="button"
+                  onClick={() => setEditingSp(null)}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 border border-slate-200 hover:bg-slate-100 rounded-lg transition-all"
+                >
+                  ยกเลิก
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSaving}
+                  className="px-5 py-2 text-xs font-bold text-white bg-[#009032] hover:bg-[#007b2b] rounded-lg transition-all active:scale-95 shadow-sm flex items-center gap-1.5 disabled:opacity-60"
+                >
+                  {isSaving && <Loader2 className="w-3 h-3 animate-spin" />}
+                  บันทึกข้อมูล
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation */}
+      {deletingSp && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl border border-slate-200 w-full max-w-md shadow-2xl">
+            <div className="px-5 py-4 border-b border-slate-100 flex items-start gap-3">
+              <div className="w-9 h-9 rounded-xl bg-red-50 border border-red-100 flex items-center justify-center flex-shrink-0">
+                <AlertTriangle className="w-4.5 h-4.5 text-red-600" />
+              </div>
+              <div>
+                <h3 className="font-bold text-slate-900 text-sm">ลบพนักงานขายรายนี้?</h3>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  {deletingSp.name} · รหัส {deletingSp.salesperson_id || 'ไม่มีรหัส'}
+                </p>
+              </div>
+            </div>
+
+            <div className="px-5 py-4 space-y-2.5 text-xs text-slate-600">
+              <p className="font-semibold text-slate-700">สิ่งที่จะเกิดขึ้น</p>
+              <ul className="space-y-1.5 list-disc list-inside">
+                <li>ผู้ใช้ LINE รายนี้จะกลายเป็นผู้ที่ยังไม่ลงทะเบียน ต้องลงทะเบียนใหม่จึงจะใช้บอทได้</li>
+                {deletingSp.quotation_count > 0 && (
+                  <li className="text-amber-700">
+                    ใบเสนอราคา <span className="font-bold">{deletingSp.quotation_count}</span> ใบจะไม่ผูกกับพนักงานคนนี้อีก
+                    (ใบยังอยู่ในระบบ ชื่อ/รหัสบนใบยังพิมพ์ออกได้จากข้อมูลที่บันทึกไว้ตอนออกใบ แต่ผูกกลับคืนไม่ได้แม้ลงทะเบียนใหม่)
+                  </li>
+                )}
+                <li>ไฟล์ลายเซ็นไม่ถูกลบ (ผูกกับรหัสพนักงาน) — ลงทะเบียนใหม่ด้วยรหัสเดิมแล้วใช้ได้เหมือนเดิม</li>
+              </ul>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 px-5 py-3.5 border-t border-slate-100 bg-slate-50/60 rounded-b-2xl">
+              <button
+                type="button"
+                onClick={() => setDeletingSp(null)}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 border border-slate-200 hover:bg-slate-100 rounded-lg transition-all"
+              >
+                ยกเลิก
+              </button>
+              <button
+                type="button"
+                onClick={handleDelete}
+                disabled={isDeleting}
+                className="px-5 py-2 text-xs font-bold text-white bg-red-600 hover:bg-red-700 rounded-lg transition-all active:scale-95 shadow-sm flex items-center gap-1.5 disabled:opacity-60"
+              >
+                {isDeleting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+                ลบพนักงานขาย
               </button>
             </div>
           </div>

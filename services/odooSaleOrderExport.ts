@@ -1,30 +1,33 @@
 /**
- * แปลงใบเสนอราคาเป็นไฟล์นำเข้า Sale Order ของ Odoo (template "24.Sale order.xlsx")
+ * แปลงใบเสนอราคาเป็นไฟล์นำเข้า Sale Order ของ Odoo (template "import odoo template.xlsx")
  *
- * เป็นจุดเดียวในระบบที่รู้เรื่อง format นี้ — ทั้งลำดับ 16 คอลัมน์ การแปลงค่า และการเขียนไฟล์
+ * เป็นจุดเดียวในระบบที่รู้เรื่อง format นี้ — ทั้งลำดับ 18 คอลัมน์ การแปลงค่า และการเขียนไฟล์
  * โมดูลนี้ไม่ยุ่งกับ Express/HTTP เพื่อให้ diag harness เรียกทดสอบได้ตรง ๆ
  *
- * ⚠️ กติกา one2many ของ Odoo: 1 ใบสั่งขายที่มีหลายรายการ = แถวแรกใส่ครบ A–P
- *    แถวที่ 2 เป็นต้นไปต้อง **เว้น A–I ว่าง** ใส่แต่ J–P
+ * ⚠️ กติกา one2many ของ Odoo: 1 ใบสั่งขายที่มีหลายรายการ = แถวแรกใส่ครบ A–R
+ *    แถวที่ 2 เป็นต้นไปต้อง **เว้น A–L ว่าง** ใส่แต่ M–R
  *    ถ้าใส่ค่าหัวใบซ้ำทุกแถว Odoo จะสร้างใบสั่งขายแยกทีละแถว
  */
 import { Parser } from 'json2csv';
 import ExcelJS from 'exceljs';
 import { calcNetPrice } from '../utils/pricing.js';
+import { resolveMinWarrantyDisplay, warrantyNoteText } from '../utils/warranty.js';
 
-/** หัวคอลัมน์ A–P — ต้องตรงกับชีต "Import " ของ template เป๊ะ ห้ามสลับลำดับ */
+/** หัวคอลัมน์ A–R — ต้องตรงกับชีต "Import " ของ template เป๊ะ ห้ามสลับลำดับ */
 export const ODOO_SO_HEADERS = [
+  'name',
   'partner_id',
-  'contact_id',
+  'contact',
   'partner_invoice_id',
   'partner_shipping_id',
   'date_order',
-  'Pricelist_id',
   'payment_term_id',
   'Salesperson',
   'Sales Team',
+  'employee_quotation_id',
+  'source_id',
+  'note',
   'order_line/product',
-  'order_line/product_template_id',
   'order_line/product_uom_qty',
   'order_line/product_uom',
   'order_line/price_unit',
@@ -38,19 +41,20 @@ export const ODOO_SO_SHEET_NAME = 'Import ';
 export type OdooExportFormat = 'xlsx' | 'csv';
 
 export interface OdooExportConfig {
-  /** F: Pricelist_id — Odoo บังคับ แต่ระบบเราไม่ได้เก็บ */
-  pricelist: string;
-  /** O: order_line/tax_id */
+  /** Q: order_line/tax_id — template กำหนดให้ใส่ค่าเดียวกันทุกแถว */
   tax: string;
-  /** G: payment_term_id — ใช้เมื่อ snapshot ของใบไม่มีเครดิตเทอม */
-  paymentTermFallback: string;
-  /** M: order_line/product_uom — ใช้เมื่อหาหน่วยของสินค้าไม่เจอ */
-  uomFallback: string;
+  /** K: source_id — template กำหนดให้ใส่ "Sales" เสมอ */
+  sourceId: string;
+  /** O: order_line/product_uom — template กำหนดให้เป็น Pcs ทุกแถว ไม่ดูหน่วยจริงของสินค้า */
+  uom: string;
 }
 
 /** แถวใบเสนอราคาที่ endpoint/diag ส่งเข้ามา (มาจาก quotations LEFT JOIN salesperson) */
 export interface OdooExportQuotationRow {
+  /** A: name — เลขที่ใบเสนอราคา */
   quotation_no?: string | null;
+  /** F: date_order — template ใหม่ใช้เวลาที่แก้ไขล่าสุด ไม่ใช่เวลาที่สร้าง */
+  updated_at?: Date | string | null;
   created_at?: Date | string | null;
   customer_details?: any;
   item_details?: any;
@@ -63,18 +67,22 @@ export interface OdooExportQuotationRow {
 
 /** 1 แถวในไฟล์ = 1 รายการสินค้า (ช่องหัวใบเป็นค่าว่างในแถวที่ 2 ขึ้นไปของใบเดียวกัน) */
 export interface OdooSoRow {
+  name: string;
   partner_id: string;
-  contact_id: string;
+  /** 'ชื่อบริษัท, ชื่อผู้ติดต่อ' ตาม display name ของ res.partner ลูก */
+  contact: string;
   partner_invoice_id: string;
   partner_shipping_id: string;
   /** 'YYYY-MM-DD HH:mm:ss' ตามเวลา Asia/Bangkok — ว่างในแถวต่อเนื่อง */
   date_order: string;
-  pricelist_id: string;
   payment_term_id: string;
   salesperson: string;
   sales_team: string;
+  employee_quotation_id: string;
+  source_id: string;
+  /** หมายเหตุการรับประกันของทั้งใบ (ข้อความเดียวกับท้าย PDF) */
+  note: string;
   product: string;
-  product_template_id: number | null;
   quantity: number;
   uom: string;
   price_unit: number;
@@ -85,10 +93,9 @@ export interface OdooSoRow {
 
 export function loadOdooExportConfig(): OdooExportConfig {
   return {
-    pricelist: process.env.ODOO_EXPORT_PRICELIST || 'THB pricelist (THB)',
     tax: process.env.ODOO_EXPORT_TAX || 'Output VAT 7% (Exc)',
-    paymentTermFallback: process.env.ODOO_EXPORT_PAYMENT_TERM || '',
-    uomFallback: process.env.ODOO_EXPORT_UOM || 'Units',
+    sourceId: process.env.ODOO_EXPORT_SOURCE || 'Sales',
+    uom: process.env.ODOO_EXPORT_UOM || 'Pcs',
   };
 }
 
@@ -101,7 +108,7 @@ function clean(value: any): string {
 /**
  * วันเวลาตามโซน Asia/Bangkok รูปแบบ 'YYYY-MM-DD HH:mm:ss'
  *
- * created_at เป็น timestamptz — ถ้าปล่อยให้ toISOString() จะได้เวลา UTC ซึ่งเลื่อนไป 7 ชั่วโมง
+ * updated_at เป็น timestamptz — ถ้าปล่อยให้ toISOString() จะได้เวลา UTC ซึ่งเลื่อนไป 7 ชั่วโมง
  * จากที่เซลล์เห็นในระบบ ใบที่ออกช่วงเช้าจะกลายเป็นวันก่อนหน้า
  */
 function formatBangkok(value: Date | string | null | undefined): string {
@@ -130,17 +137,17 @@ function combinedDiscountPercent(price: number, disc1: number, disc2: number): n
   return Math.round(pct * 10000) / 10000;
 }
 
-/** product_template_id ทั้งหมดที่ใช้ในชุดใบเสนอราคา — เอาไปดึงหน่วยนับทีเดียว */
-export function collectProductTemplateIds(quotes: OdooExportQuotationRow[]): number[] {
-  const ids: number[] = [];
-  (quotes || []).forEach(q => {
-    const items = Array.isArray(q.item_details) ? q.item_details : [];
-    items.forEach((item: any) => {
-      const id = Number(item?.product_id);
-      if (Number.isFinite(id) && id > 0) ids.push(id);
-    });
-  });
-  return Array.from(new Set(ids));
+/**
+ * ต่อท้ายชื่อเซลล์ด้วยสังกัดของใบ เช่น "คุณนฤเบศร์" → "คุณนฤเบศร์(PM)"
+ *
+ * สังกัดดูจากคำนำหน้าเลขที่ใบ (QP=PM, QT=THT) — กติกาเดียวกับที่ pdfGenerator และ
+ * enrichQuotationData ใช้ ใบที่ยังไม่มีเลขที่จะไม่เดาสังกัดให้ (ปล่อยชื่อเปล่า)
+ */
+export function withCompanySuffix(name: string, quotationNo: string): string {
+  const no = String(quotationNo ?? '').trim().toUpperCase();
+  const suffix = no.startsWith('QT') ? '(THT)' : no.startsWith('QP') ? '(PM)' : '';
+  if (!name || !suffix || name.endsWith(suffix)) return name;
+  return `${name}${suffix}`;
 }
 
 /**
@@ -151,7 +158,6 @@ export function collectProductTemplateIds(quotes: OdooExportQuotationRow[]): num
  */
 export function buildOdooSaleOrderRows(
   quotes: OdooExportQuotationRow[],
-  uomMap: Record<number, string>,
   config: OdooExportConfig
 ): OdooSoRow[] {
   const rows: OdooSoRow[] = [];
@@ -165,40 +171,54 @@ export function buildOdooSaleOrderRows(
     // enrichQuotationData() (services/quotationService.ts) เพื่อให้ชื่อที่ส่งออกตรงกับที่หน้าจอโชว์
     const company = clean(String(cust.customer_name ?? '').split(' | ')[0]);
     const contact = clean(cust.contact_name);
-    const address = clean(cust.address);
+    // ช่อง contact ของ Odoo คือ res.partner ลูก ซึ่ง display name = "บริษัท, ผู้ติดต่อ"
+    // ต่อชื่อตาม template เสมอแม้ 2 ชื่อจะซ้ำกัน (ลูกค้าบุคคลจะได้ "ก, ก" — ตั้งใจให้เป็นแบบนั้น)
+    // ใบที่ยังไม่มีชื่อผู้ติดต่อใส่แค่ชื่อบริษัท ไม่ต้องมี ", " ห้อยท้าย
+    const contactDisplay = company && contact ? `${company}, ${contact}` : (company || contact);
+    // ทั้ง Salesperson และ employee_quotation_id มาจาก saleperson ตัวเดียวกันตามชีต "คำอธิบาย"
+    // และต้องมีสังกัดห้อยท้ายเพราะเซลล์คนเดียวกันเป็นคนละ user ใน Odoo ของ PM กับ THT
+    const quotationNo = clean(quote.quotation_no);
+    const salesperson = withCompanySuffix(
+      clean(quote.employee_details?.saleperson) || clean(quote.salesperson_name),
+      quotationNo
+    );
 
     const header = {
+      name: quotationNo,
       partner_id: company,
-      contact_id: contact,
-      partner_invoice_id: address,
-      partner_shipping_id: address,
-      date_order: formatBangkok(quote.created_at),
-      pricelist_id: config.pricelist,
-      payment_term_id: clean(cust.payment_terms) || config.paymentTermFallback,
-      salesperson: clean(quote.employee_details?.saleperson) || clean(quote.salesperson_name),
+      contact: contactDisplay,
+      partner_invoice_id: company,
+      partner_shipping_id: company,
+      date_order: formatBangkok(quote.updated_at ?? quote.created_at),
+      // ใบที่ไม่มีเครดิตเทอมปล่อยเป็นเซลล์ว่าง ไม่ยัดค่าตั้งต้นให้ — ให้ Odoo ใช้เทอมของลูกค้าเอง
+      payment_term_id: clean(cust.payment_terms),
+      salesperson,
       sales_team: clean(quote.salesperson_branch),
+      employee_quotation_id: salesperson,
+      source_id: config.sourceId,
+      note: warrantyNoteText(resolveMinWarrantyDisplay(items)),
     };
 
     items.forEach((item: any, index: number) => {
       const isFirst = index === 0;
-      const templateId = Number(item?.product_id);
-      const hasTemplateId = Number.isFinite(templateId) && templateId > 0;
       const price = Number(item?.price) || 0;
 
       rows.push({
+        name: isFirst ? header.name : '',
         partner_id: isFirst ? header.partner_id : '',
-        contact_id: isFirst ? header.contact_id : '',
+        contact: isFirst ? header.contact : '',
         partner_invoice_id: isFirst ? header.partner_invoice_id : '',
         partner_shipping_id: isFirst ? header.partner_shipping_id : '',
         date_order: isFirst ? header.date_order : '',
-        pricelist_id: isFirst ? header.pricelist_id : '',
         payment_term_id: isFirst ? header.payment_term_id : '',
         salesperson: isFirst ? header.salesperson : '',
         sales_team: isFirst ? header.sales_team : '',
+        employee_quotation_id: isFirst ? header.employee_quotation_id : '',
+        source_id: isFirst ? header.source_id : '',
+        note: isFirst ? header.note : '',
         product: clean(item?.internal_reference) || clean(item?.model),
-        product_template_id: hasTemplateId ? templateId : null,
         quantity: Number(item?.quantity) || 0,
-        uom: (hasTemplateId ? uomMap[templateId] : '') || config.uomFallback,
+        uom: config.uom,
         price_unit: price,
         tax_id: config.tax,
         discount: combinedDiscountPercent(price, Number(item?.discount_1) || 0, Number(item?.discount_2) || 0),
@@ -209,7 +229,7 @@ export function buildOdooSaleOrderRows(
   return rows;
 }
 
-/** ค่าของแถวเรียงตามลำดับคอลัมน์ A–P */
+/** ค่าของแถวเรียงตามลำดับคอลัมน์ A–R */
 function toOrderedValues(row: OdooSoRow, format: OdooExportFormat): (string | number | Date | null)[] {
   // xlsx ใช้ null เพื่อให้เซลล์ว่างจริง ส่วน csv ใช้สตริงว่าง
   const blank = format === 'xlsx' ? null : '';
@@ -218,17 +238,19 @@ function toOrderedValues(row: OdooSoRow, format: OdooExportFormat): (string | nu
   const date = row.date_order ? new Date(`${row.date_order.replace(' ', 'T')}Z`) : null;
 
   return [
+    text(row.name),
     text(row.partner_id),
-    text(row.contact_id),
+    text(row.contact),
     text(row.partner_invoice_id),
     text(row.partner_shipping_id),
     row.date_order ? (format === 'xlsx' ? date : row.date_order) : blank,
-    text(row.pricelist_id),
     text(row.payment_term_id),
     text(row.salesperson),
     text(row.sales_team),
+    text(row.employee_quotation_id),
+    text(row.source_id),
+    text(row.note),
     text(row.product),
-    row.product_template_id === null ? blank : row.product_template_id,
     row.quantity,
     text(row.uom),
     row.price_unit,
@@ -251,15 +273,15 @@ export function serializeOdooRowsToCsv(rows: OdooSoRow[]): string {
 export async function serializeOdooRowsToXlsx(rows: OdooSoRow[]): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
   // Odoo อ่านเฉพาะชีตแรกของไฟล์ จึงสร้างชีตเดียวแทนการ round-trip ไฟล์ template
-  // (template จริงมีรูปหน้าจอ ~700KB ในชีต Details ที่ไม่จำเป็นต่อการนำเข้า)
+  // (ชีต "คำอธิบาย" ใน template เป็นคู่มือของคน ไม่เกี่ยวกับการนำเข้า)
   const sheet = workbook.addWorksheet(ODOO_SO_SHEET_NAME);
 
   sheet.addRow([...ODOO_SO_HEADERS]);
   sheet.getRow(1).font = { bold: true };
   rows.forEach(row => sheet.addRow(toOrderedValues(row, 'xlsx')));
 
-  // คอลัมน์ E (date_order) — ต้องเป็นเซลล์วันที่ ไม่ใช่ตัวเลข serial ดิบ
-  sheet.getColumn(5).numFmt = 'yyyy-mm-dd h:mm:ss';
+  // คอลัมน์ F (date_order) — ต้องเป็นเซลล์วันที่ ไม่ใช่ตัวเลข serial ดิบ
+  sheet.getColumn(6).numFmt = 'yyyy-mm-dd h:mm:ss';
   ODOO_SO_HEADERS.forEach((headerText, i) => {
     sheet.getColumn(i + 1).width = Math.max(14, Math.min(38, headerText.length + 4));
   });

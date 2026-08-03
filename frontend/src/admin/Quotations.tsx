@@ -242,7 +242,10 @@ export const Quotations: React.FC = () => {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `sale_order_odoo_${new Date().toISOString().split('T')[0]}.${format}`;
+      // ต้องได้ชื่อเดียวกับ Content-Disposition ฝั่ง backend — attribute นี้เป็นตัวชนะเวลาเบราว์เซอร์เซฟไฟล์
+      // ล็อกโซนไทยไว้ ไม่งั้นเครื่องที่ตั้งโซนอื่นจะได้วันที่คนละวันกับชื่อไฟล์ฝั่ง server
+      const stamp = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date());
+      a.download = `salechatbot_quotation_${stamp}.${format}`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);

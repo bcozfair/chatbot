@@ -12,6 +12,7 @@ import {
   normalizeProductScope
 } from "./services/rules/index.js";
 import { calcNetPrice, calcVat, calcGrandTotal } from "./utils/pricing.js";
+import { DEFAULT_WARRANTY_DISPLAY, resolveMinWarrantyDisplay, warrantyNoteText } from "./utils/warranty.js";
 
 // ใช้ Chrome ตัวเดียวร่วมกันทุก request แทนการ launch ใหม่ทุกครั้ง
 // เดิม: launch ต่อ request และ browser.close() ไม่อยู่ใน finally -> error หนึ่งครั้ง = Chrome ค้าง 1 ตัว สะสมจน RAM หมด
@@ -74,51 +75,19 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
   const itemSnapshots = quoteData.item_details || [];
 
   // คำนวณวันรับประกันและระยะเวลาจัดส่ง
-  let minWarrantyDisplay = '1 ปี';
+  let minWarrantyDisplay = DEFAULT_WARRANTY_DISPLAY;
   let allItemsInStock = true;
   const itemDeliveryDays: number[] = [];
 
   // หากมี Snapshot ครบถ้วน (itemSnapshots) และความยาวเท่ากัน ให้ดึงค่าจาก Snapshot
   if (itemSnapshots && Array.isArray(itemSnapshots) && itemSnapshots.length > 0 && itemSnapshots.length === itemsList.length) {
-    let minWarrantyMonths = Infinity;
-
-    itemsList.forEach((_item: any, idx: number) => {
-      const snap = itemSnapshots[idx];
-
-      // ค่าขนส่งไม่มีการรับประกัน — ถ้าปล่อยผ่าน warranty_display ที่ว่างจะกลายเป็น "1 ปี"
-      // แล้วลากการรับประกันของทั้งใบลงมาเหลือ 1 ปี ทั้งที่สินค้าจริงอาจรับประกัน 3 ปี
-      if (snap?.delivery_source === 'shipping_fee') return;
-
-      // ดึงเงื่อนไขการรับประกันจาก snapshot (วันจัดส่งคำนวณรวมทีเดียวหลังลูป)
-      const warrantyText = snap.warranty_display || '1 ปี';
-      let inMonths = 12;
-      let warrantyVal = 1;
-      let warrantyUnit = 'year';
-
-      if (warrantyText.includes('เดือน')) {
-        warrantyVal = parseInt(warrantyText) || 1;
-        warrantyUnit = 'month';
-        inMonths = warrantyVal;
-      } else if (warrantyText.includes('ปี')) {
-        warrantyVal = parseInt(warrantyText) || 1;
-        warrantyUnit = 'year';
-        inMonths = warrantyVal * 12;
-      }
-
-      if (inMonths < minWarrantyMonths) {
-        minWarrantyMonths = inMonths;
-        minWarrantyDisplay = warrantyText;
-      }
-    });
+    // helper ตัวเดียวกับที่ไฟล์นำเข้า Odoo ใช้เขียนช่อง note — หมายเหตุ 2 ที่จึงตรงกันเสมอ
+    minWarrantyDisplay = resolveMinWarrantyDisplay(itemSnapshots);
 
     // ใช้ helper ตัวเดียวกับที่ enrichQuotationData เรียก — เลขในเอกสารจึงตรงกับที่หน้า LIFF โชว์เสมอ
     const snapshotDelivery = resolveQuotationDeliveryDays(itemsList, itemSnapshots);
     allItemsInStock = snapshotDelivery.all_in_stock;
     itemDeliveryDays.push(snapshotDelivery.days);
-
-    if (minWarrantyMonths === Infinity) {
-      minWarrantyDisplay = '1 ปี';
-    }
   } else {
     // Fallback: คำนวณกฎเงื่อนไขสดจาก quotation_rules แทนการอ่าน snapshot
     // path นี้ให้ตัวเลขคนละชุดกับ snapshot ได้ (เช่นกฏถูกแก้หลังใบถูกสร้าง) จึงต้องดังพอให้เห็นใน log
@@ -174,7 +143,7 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
     });
 
     if (minWarrantyMonths === Infinity) {
-      minWarrantyDisplay = '1 ปี';
+      minWarrantyDisplay = DEFAULT_WARRANTY_DISPLAY;
     }
   }
 
@@ -562,7 +531,7 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
           <tbody>
             <tr>
               <td class="sum-note-pdpa" rowspan="2">
-                 <div><b>หมายเหตุ:</b> เงื่อนไขการรับประกันสินค้า ${minWarrantyDisplay}</div>
+                 <div><b>หมายเหตุ:</b> ${warrantyNoteText(minWarrantyDisplay)}</div>
               </td>
               <td class="sl">รวมเงิน</td>
               <td class="sa">${isLastPage ? discountedSubTotal.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : ""}</td>

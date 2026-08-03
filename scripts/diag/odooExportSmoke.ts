@@ -1,28 +1,27 @@
 // ─────────────────────────────────────────────────────────────────────────────
-//  Smoke test ของไฟล์นำเข้า Sale Order สำหรับ Odoo (template "24.Sale order.xlsx")
+//  Smoke test ของไฟล์นำเข้า Sale Order สำหรับ Odoo (template "import odoo template.xlsx")
 //  รัน:  npm run diag:odoo-export            (ค่าตั้งต้น 20 ใบล่าสุด)
 //        npm run diag:odoo-export -- --limit 100
 //        npm run diag:odoo-export -- --status draft
 //
 //  read-only ทั้งหมด — อ่านใบเสนอราคาจริงมา build แถวแล้วตรวจ ไม่เขียนอะไรลง DB
 //
-//  ครอบคลุม: ลำดับ/จำนวนหัวคอลัมน์ · กติกา one2many ของ Odoo (แถวที่ 2+ ต้องเว้น A–I) ·
-//            ช่องบังคับที่ว่างไม่ได้ · ชนิดข้อมูลของช่องตัวเลข · ส่วนต่างของยอดรวม
-//            หลังยุบส่วนลด 2 ชั้นเหลือช่องเดียว · รายการที่หา product/หน่วยนับไม่เจอ
+//  ครอบคลุม: ลำดับ/จำนวนหัวคอลัมน์ · กติกา one2many ของ Odoo (แถวที่ 2+ ต้องเว้น A–L) ·
+//            ช่องบังคับที่ว่างไม่ได้ · ช่องค่าคงที่ (source_id/uom/tax) · ชนิดข้อมูลของช่องตัวเลข
+//            ส่วนต่างของยอดรวมหลังยุบส่วนลด 2 ชั้นเหลือช่องเดียว · หมายเหตุการรับประกัน
 //  ให้รันซ้ำทุกครั้งที่แตะ services/odooSaleOrderExport.ts หรือ endpoint export
 // ─────────────────────────────────────────────────────────────────────────────
 import { pool } from '../../config/db.js';
-import { getProductUomByTemplateIds } from '../../db/repositories.js';
 import {
   ODOO_SO_HEADERS,
   buildOdooSaleOrderRows,
-  collectProductTemplateIds,
   loadOdooExportConfig,
   serializeOdooRowsToCsv,
   serializeOdooRowsToXlsx,
   type OdooExportQuotationRow,
 } from '../../services/odooSaleOrderExport.js';
 import { calcLineTotal } from '../../utils/pricing.js';
+import { resolveMinWarrantyDisplay, warrantyNoteText } from '../../utils/warranty.js';
 
 const ok = (label: string, cond: boolean, extra = '') =>
   console.log(`${cond ? '✓' : '✗ FAIL'}  ${label}${extra ? '  ' + extra : ''}`);
@@ -39,14 +38,14 @@ const status = argValue('status', '');
 
 /** หัวคอลัมน์ที่คัดลอกจากชีต "Import " ของ template ต้นฉบับ — ตัวเทียบอิสระจากโค้ด */
 const TEMPLATE_HEADERS = [
-  'partner_id', 'contact_id', 'partner_invoice_id', 'partner_shipping_id',
-  'date_order', 'Pricelist_id', 'payment_term_id', 'Salesperson', 'Sales Team',
-  'order_line/product', 'order_line/product_template_id', 'order_line/product_uom_qty',
+  'name', 'partner_id', 'contact', 'partner_invoice_id', 'partner_shipping_id',
+  'date_order', 'payment_term_id', 'Salesperson', 'Sales Team', 'employee_quotation_id',
+  'source_id', 'note', 'order_line/product', 'order_line/product_uom_qty',
   'order_line/product_uom', 'order_line/price_unit', 'order_line/tax_id', 'order_line/discount',
 ];
 
 // ── 1. หัวคอลัมน์ตรงกับ template ────────────────────────────────────────
-ok('หัวคอลัมน์มี 16 ช่อง', ODOO_SO_HEADERS.length === 16, `(ได้ ${ODOO_SO_HEADERS.length})`);
+ok('หัวคอลัมน์มี 18 ช่อง', ODOO_SO_HEADERS.length === 18, `(ได้ ${ODOO_SO_HEADERS.length})`);
 ok('หัวคอลัมน์ตรงกับ template ทั้งชื่อและลำดับ',
   JSON.stringify([...ODOO_SO_HEADERS]) === JSON.stringify(TEMPLATE_HEADERS));
 
@@ -58,7 +57,7 @@ const filterSql = status
 const filterParams = status ? [status, limit] : [limit];
 const limitParam = status ? '$2' : '$1';
 const { rows: quotes } = await pool.query<OdooExportQuotationRow & { quotation_no: string; total_sum: string }>(
-  `SELECT q.quotation_no, q.total_sum, q.created_at, q.customer_details, q.item_details, q.employee_details,
+  `SELECT q.quotation_no, q.total_sum, q.created_at, q.updated_at, q.customer_details, q.item_details, q.employee_details,
           s.name AS salesperson_name, s.branch AS salesperson_branch
      FROM quotations q
      LEFT JOIN salesperson s ON q.user_id = s.user_id
@@ -75,11 +74,9 @@ if (quotes.length === 0) {
 }
 
 const config = loadOdooExportConfig();
-console.log(`   config: pricelist="${config.pricelist}" tax="${config.tax}"` +
-  ` paymentTermFallback="${config.paymentTermFallback}" uomFallback="${config.uomFallback}"`);
+console.log(`   config: tax="${config.tax}" sourceId="${config.sourceId}" uom="${config.uom}"`);
 
-const uomMap = await getProductUomByTemplateIds(collectProductTemplateIds(quotes));
-const rows = buildOdooSaleOrderRows(quotes, uomMap, config);
+const rows = buildOdooSaleOrderRows(quotes, config);
 
 const quotesWithItems = quotes.filter(q => Array.isArray(q.item_details) && q.item_details.length > 0);
 const expectedRowCount = quotesWithItems.reduce((sum, q) => sum + q.item_details.length, 0);
@@ -91,34 +88,65 @@ if (quotesWithItems.length !== quotes.length) {
 
 // ── 3. กติกา one2many: แถวแรกของใบมีหัวใบครบ แถวถัดไปต้องว่าง ───────────
 const HEADER_KEYS = [
-  'partner_id', 'contact_id', 'partner_invoice_id', 'partner_shipping_id',
-  'date_order', 'pricelist_id', 'payment_term_id', 'salesperson', 'sales_team',
+  'name', 'partner_id', 'contact', 'partner_invoice_id', 'partner_shipping_id',
+  'date_order', 'payment_term_id', 'salesperson', 'sales_team', 'employee_quotation_id',
+  'source_id', 'note',
 ] as const;
 
 let cursor = 0;
 let firstRowBad = 0;
 let continuationBad = 0;
 let missingCompany = 0;
+let missingQuotationNo = 0;
 let missingPaymentTerm = 0;
-let missingAddress = 0;
+let badContact = 0;
+let badNote = 0;
+let badSuffix = 0;
 
 for (const quote of quotesWithItems) {
   const slice = rows.slice(cursor, cursor + quote.item_details.length);
   cursor += quote.item_details.length;
 
   const first = slice[0];
-  // partner_id / date_order / Pricelist_id เป็นช่องที่ Odoo บังคับในแถวหัวใบ
-  if (!first.date_order || !first.pricelist_id) {
+  // date_order / source_id เป็นช่องที่ Odoo บังคับในแถวหัวใบ
+  if (!first.date_order || !first.source_id) {
     firstRowBad++;
-    console.log(`   ✗ ${quote.quotation_no}: แถวแรกขาดค่าหัวใบ (date_order="${first.date_order}" pricelist="${first.pricelist_id}")`);
+    console.log(`   ✗ ${quote.quotation_no}: แถวแรกขาดค่าหัวใบ (date_order="${first.date_order}" source_id="${first.source_id}")`);
   }
   if (!first.partner_id) {
     missingCompany++;
     console.log(`   ⚠️  ${quote.quotation_no}: partner_id ว่าง — ใบนี้ยังไม่ได้ผูกลูกค้า นำเข้า Odoo ไม่ผ่าน`);
   }
+  if (!first.name) missingQuotationNo++;
+  // เครดิตเทอมว่าง = ปล่อยเซลล์ว่างตามที่ตกลงไว้ ไม่ใช่ข้อผิดพลาด — นับไว้ให้เห็นภาพเฉย ๆ
   if (!first.payment_term_id) missingPaymentTerm++;
-  // C/D (ที่อยู่ออกใบกำกับ/ส่งของ) ไม่ใช่ช่องบังคับใน Odoo — แค่เตือนให้เห็นว่าใบไหนไม่มีที่อยู่
-  if (!first.partner_invoice_id) missingAddress++;
+
+  // C: contact ต้องเป็น "บริษัท, ผู้ติดต่อ" ตาม template — ต่อชื่อเสมอแม้ 2 ชื่อซ้ำกัน
+  const contactName = String(quote.customer_details?.contact_name ?? '').trim();
+  const hasContact = contactName !== '' && contactName !== '-';
+  const expectedContact = hasContact && first.partner_id
+    ? `${first.partner_id}, ${contactName}`
+    : (first.partner_id || (hasContact ? contactName : ''));
+  if (first.contact !== expectedContact) {
+    badContact++;
+    console.log(`   ✗ ${quote.quotation_no}: contact ไม่ตรงรูปแบบ (ได้ "${first.contact}" คาด "${expectedContact}")`);
+  }
+
+  // H/J: ชื่อเซลล์ต้องมีสังกัดห้อยท้ายตามคำนำหน้าเลขที่ใบ และต้องเป็นค่าเดียวกันทั้ง 2 ช่อง
+  const expectedSuffix = quote.quotation_no.toUpperCase().startsWith('QT') ? '(THT)' : '(PM)';
+  if (first.salesperson !== first.employee_quotation_id ||
+      (first.salesperson && !first.salesperson.endsWith(expectedSuffix))) {
+    badSuffix++;
+    console.log(`   ✗ ${quote.quotation_no}: ชื่อเซลล์ไม่ลงท้าย ${expectedSuffix}` +
+      ` (H="${first.salesperson}" J="${first.employee_quotation_id}")`);
+  }
+
+  // L: note ต้องเป็นหมายเหตุการรับประกันชุดเดียวกับที่ PDF พิมพ์
+  const expectedNote = warrantyNoteText(resolveMinWarrantyDisplay(quote.item_details));
+  if (first.note !== expectedNote) {
+    badNote++;
+    console.log(`   ✗ ${quote.quotation_no}: note ไม่ตรง (ได้ "${first.note}" คาด "${expectedNote}")`);
+  }
 
   for (const row of slice.slice(1)) {
     const leaked = HEADER_KEYS.filter(key => row[key] !== '');
@@ -130,32 +158,34 @@ for (const quote of quotesWithItems) {
 }
 
 ok('ทุกใบมีค่าหัวใบครบในแถวแรก', firstRowBad === 0, firstRowBad ? `(พลาด ${firstRowBad} ใบ)` : '');
-ok('แถวที่ 2 ขึ้นไปเว้นคอลัมน์ A–I ว่างตามกติกา one2many', continuationBad === 0,
+ok('แถวที่ 2 ขึ้นไปเว้นคอลัมน์ A–L ว่างตามกติกา one2many', continuationBad === 0,
   continuationBad ? `(พลาด ${continuationBad} แถว)` : '');
 ok('ทุกใบผูกลูกค้าแล้ว (partner_id ไม่ว่าง)', missingCompany === 0,
   missingCompany ? `(ว่าง ${missingCompany} ใบ)` : '');
-if (missingPaymentTerm > 0) {
-  console.log(`   ⚠️  ${missingPaymentTerm} ใบไม่มี payment_term_id (Odoo บังคับ) — ตั้ง ODOO_EXPORT_PAYMENT_TERM ใน .env`);
+ok('ช่อง contact เป็นรูปแบบ "บริษัท, ผู้ติดต่อ"', badContact === 0,
+  badContact ? `(พลาด ${badContact} ใบ)` : '');
+ok('ช่อง note ตรงกับหมายเหตุการรับประกันของใบ', badNote === 0, badNote ? `(พลาด ${badNote} ใบ)` : '');
+ok('ชื่อเซลล์ (H/J) มีสังกัด (PM)/(THT) ห้อยท้ายตามเลขที่ใบ', badSuffix === 0,
+  badSuffix ? `(พลาด ${badSuffix} ใบ)` : '');
+if (missingQuotationNo > 0) {
+  console.log(`   ⚠️  ${missingQuotationNo} ใบไม่มีเลขที่ใบเสนอราคา (ช่อง name จะว่าง — Odoo จะออกเลขให้เอง)`);
 }
-if (missingAddress > 0) {
-  console.log(`   ⚠️  ${missingAddress} ใบไม่มีที่อยู่ (partner_invoice_id/partner_shipping_id จะว่าง)`);
+if (missingPaymentTerm > 0) {
+  console.log(`   ℹ️  ${missingPaymentTerm} ใบไม่มีเครดิตเทอม → ช่อง payment_term_id เป็นเซลล์ว่าง (ตามที่ตกลงไว้)`);
 }
 
 // ── 4. ชนิด/ช่วงค่าของช่องรายการสินค้า ──────────────────────────────────
 const noProduct = rows.filter(r => !r.product).length;
-const noTemplateId = rows.filter(r => r.product_template_id === null).length;
 const badNumber = rows.filter(r => !Number.isFinite(r.quantity) || !Number.isFinite(r.price_unit)).length;
 const badDiscount = rows.filter(r => !(r.discount >= 0 && r.discount <= 100)).length;
-const fallbackUom = rows.filter(r => r.uom === config.uomFallback).length;
+const badUom = rows.filter(r => r.uom !== config.uom).length;
+const badTax = rows.filter(r => r.tax_id !== config.tax).length;
 
 ok('ทุกแถวมีรหัสสินค้า (order_line/product)', noProduct === 0, noProduct ? `(ว่าง ${noProduct} แถว)` : '');
 ok('จำนวนและราคาเป็นตัวเลขทุกแถว', badNumber === 0, badNumber ? `(พลาด ${badNumber} แถว)` : '');
 ok('ส่วนลดอยู่ในช่วง 0–100%', badDiscount === 0, badDiscount ? `(นอกช่วง ${badDiscount} แถว)` : '');
-if (noTemplateId > 0) {
-  const refs = Array.from(new Set(rows.filter(r => r.product_template_id === null).map(r => r.product)));
-  console.log(`   ⚠️  ${noTemplateId} แถวไม่มี product_template_id (ช่อง K จะว่าง) → ${refs.join(', ')}`);
-}
-if (fallbackUom > 0) console.log(`   ⚠️  ${fallbackUom} แถวใช้หน่วยสำรอง "${config.uomFallback}" เพราะหา unit_of_measure ไม่เจอ`);
+ok(`หน่วยนับเป็น "${config.uom}" ทุกแถวตาม template`, badUom === 0, badUom ? `(พลาด ${badUom} แถว)` : '');
+ok(`ภาษีเป็น "${config.tax}" ทุกแถวตาม template`, badTax === 0, badTax ? `(พลาด ${badTax} แถว)` : '');
 
 // ── 5. ส่วนต่างของยอดหลังยุบส่วนลด 2 ชั้นเหลือช่องเดียว ─────────────────
 //  ยอดที่ Odoo จะได้ = Σ qty × price × (1 − discount/100) ต้องเท่ากับยอดที่ระบบคิดไว้
@@ -200,8 +230,8 @@ const outDir = process.argv.includes('--write') ? argValue('write', '.') : '';
 if (outDir) {
   const { writeFileSync } = await import('fs');
   const { join } = await import('path');
-  writeFileSync(join(outDir, 'sale_order_odoo_sample.csv'), csv, 'utf8');
-  writeFileSync(join(outDir, 'sale_order_odoo_sample.xlsx'), xlsx);
+  writeFileSync(join(outDir, 'salechatbot_quotation_sample.csv'), csv, 'utf8');
+  writeFileSync(join(outDir, 'salechatbot_quotation_sample.xlsx'), xlsx);
   console.log(`   เขียนไฟล์ตัวอย่างไว้ที่ ${outDir}`);
 }
 

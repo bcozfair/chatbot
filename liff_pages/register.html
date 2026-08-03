@@ -198,6 +198,14 @@
       margin-top: 3px;
     }
 
+    #empCodeStatus {
+      font-size: 12px;
+      line-height: 1.45;
+      color: var(--danger);
+      display: none;
+      margin-top: 3px;
+    }
+
     /* ─── DIVIDER ─── */
     .divider {
       border: none;
@@ -614,7 +622,7 @@
       <div class="form-group">
         <label for="inputName">👤 ชื่อพนักงานขาย <span style="color:var(--danger)">*</span></label>
         <div class="name-row">
-          <input type="text" id="inputName" autocomplete="off" placeholder="พิมพ์ค้นหา หรือเลือกชื่อของท่าน..." required>
+          <input type="text" id="inputName" autocomplete="off" placeholder="แตะเพื่อเลือกชื่อ หรือพิมพ์ค้นหา..." required>
           <div id="acDropdown" class="ac-dropdown" role="listbox"></div>
         </div>
         <small id="suggestStatus"></small>
@@ -626,8 +634,9 @@
       </div>
 
       <div class="form-group">
-        <label for="inputEmployeeCode">🆔 รหัสพนักงานขาย</label>
+        <label for="inputEmployeeCode">🆔 รหัสพนักงานขาย <span style="color:var(--danger)">*</span></label>
         <input type="text" id="inputEmployeeCode" placeholder="ดึงข้อมูลจากฐานข้อมูลอัตโนมัติ" readonly>
+        <small id="empCodeStatus"></small>
       </div>
     </div>
 
@@ -687,6 +696,11 @@
     let selectedBranches = new Set();  // เก็บชื่อสาขา (ไม่ใช้ code)
     let userId = null;
     let isEditingMode = false;
+    // ชื่อ/รหัสที่มีอยู่แล้วในตาราง salesperson (แอดมินตั้งให้ หรือลงทะเบียนไว้ก่อนหน้า)
+    // ใช้เป็นชื่อที่ "ยอมรับได้" อีกหนึ่งชื่อ นอกจากรายการจาก sale_orders — คนใหม่ที่ยังไม่มีออร์เดอร์
+    // จะไม่โผล่ในรายการ ถ้าไม่ยอมชื่อนี้ แอดมินเติมรหัสให้ก็ยังลงทะเบียนไม่ได้อยู่ดี
+    let dbSalespersonName = '';
+    let dbSalespersonId = '';
 
     async function apiFetch(url, options = {}) {
       const headers = Object.assign({}, options.headers || {}, {
@@ -733,6 +747,7 @@
     const inputName = document.getElementById('inputName');
     const inputPhone = document.getElementById('inputPhone');
     const inputEmployeeCode = document.getElementById('inputEmployeeCode');
+    const empCodeStatus = document.getElementById('empCodeStatus');
     const formTitle = document.getElementById('formTitle');
     const formSubtitle = document.getElementById('formSubtitle');
 
@@ -939,9 +954,65 @@
       document.getElementById('pickerOverlay').classList.add('open');
     }
 
+    function normName(str) {
+      return String(str || '').trim().toLowerCase();
+    }
+
+    /** ชื่อที่ยอมรับได้ = ตรงกับรายการพนักงานจริงเท่านั้น (พิมพ์ชื่อเองไม่ผ่าน)
+        คืน object พนักงานที่แมตช์ หรือ null */
+    function matchSalesperson(nameVal) {
+      const q = normName(nameVal);
+      if (!q) return null;
+
+      const fromList = salespeopleList.find(sp => normName(sp.name) === q);
+      if (fromList) return fromList;
+
+      // ชื่อที่แอดมินตั้งให้พร้อมรหัส ใช้ได้เหมือนกัน (คนใหม่ที่ยังไม่มีใน sale_orders)
+      if (dbSalespersonId && normName(dbSalespersonName) === q) {
+        return { name: dbSalespersonName, salesperson_id: dbSalespersonId };
+      }
+      return null;
+    }
+
+    /** รหัสพนักงานผูกกับชื่อเสมอ — เปลี่ยนชื่อเมื่อไหร่ต้องคำนวณรหัสใหม่ทุกครั้ง
+        ไม่งั้นเลือกชื่อ ก. (ได้รหัสมา) แล้วพิมพ์ทับเป็นชื่อ ข. จะบันทึกด้วยรหัสของ ก. */
+    function syncEmployeeCodeFromName() {
+      const matched = matchSalesperson(inputName.value);
+      inputEmployeeCode.value = matched ? (matched.salesperson_id || '') : '';
+    }
+
     function updateSaveButtonState() {
       const nameVal = inputName.value.trim();
-      btnSave.disabled = !(nameVal.length > 0 && selectedBranches.size > 0);
+      const empCodeVal = inputEmployeeCode.value.trim();
+      const nameOk = !!matchSalesperson(nameVal);
+
+      // ต้องเลือกชื่อจากรายการ + ต้องมีรหัสพนักงาน จึงจะบันทึกได้
+      // (ลายเซ็นใน PDF ผูกกับรหัสนี้ ไม่มีรหัสก็ออกใบเสนอราคาแบบมีลายเซ็นไม่ได้)
+      btnSave.disabled = !(nameOk && empCodeVal.length > 0 && selectedBranches.size > 0);
+
+      if (!nameVal) {
+        if (suggestStatus.dataset.state === 'error') {
+          suggestStatus.style.display = 'none';
+          suggestStatus.dataset.state = '';
+        }
+      } else if (!nameOk) {
+        suggestStatus.style.display = 'block';
+        suggestStatus.style.color = 'var(--danger)';
+        suggestStatus.innerText = '⚠️ ต้องเลือกชื่อจากรายการที่ระบบแนะนำเท่านั้น — พิมพ์เพื่อค้นหา แล้วแตะชื่อของท่าน';
+        suggestStatus.dataset.state = 'error';
+      } else if (suggestStatus.dataset.state === 'error') {
+        suggestStatus.style.display = 'none';
+        suggestStatus.dataset.state = '';
+      }
+
+      // ช่องรหัสเป็น readonly เติมอัตโนมัติ → ถ้าว่างต้องบอกทางออกให้ชัด ไม่งั้นเห็นแค่ปุ่มเทาแล้วงง
+      if (empCodeVal.length === 0) {
+        empCodeStatus.style.display = 'block';
+        empCodeStatus.innerText = '⚠️ ยังไม่มีรหัสพนักงาน จึงยังบันทึกไม่ได้ — กรุณาเลือกชื่อของท่านจากรายการที่ระบบแนะนำ หรือติดต่อแอดมินให้เพิ่มรหัสพนักงานให้ก่อนครับ';
+      } else {
+        empCodeStatus.style.display = 'none';
+        empCodeStatus.innerText = '';
+      }
     }
 
     inputName.addEventListener('input', updateSaveButtonState);
@@ -1000,6 +1071,7 @@
       suggestStatus.style.display = 'block';
       suggestStatus.style.color = 'var(--green-dark)';
       suggestStatus.innerText = '✓ ดึงข้อมูลพนักงานและสาขาดูแลอัตโนมัติสำเร็จ';
+      suggestStatus.dataset.state = 'ok';
       closeDropdown();
       updateSaveButtonState();
     }
@@ -1010,37 +1082,43 @@
       acHighlight = -1;
     }
 
+    const AC_MAX_ITEMS = 50;   // ลิสต์จาก sale_orders ยาวได้เป็นร้อย — ตัดให้พอเลื่อนไหว
+
     function renderDropdown(query) {
       acDropdown.innerHTML = '';
       acHighlight = -1;
 
-      // Only show when user has typed something
-      if (!query || query.length === 0) {
-        closeDropdown();
-        return;
-      }
-
-      const matches = salespeopleList.filter(sp =>
-        sp.name.toLowerCase().includes(query.toLowerCase())
-      );
+      // ไม่มีคำค้น (เช่นเพิ่งแตะช่อง) = โชว์ทั้งรายการ ผู้ใช้จะได้รู้ว่าต้องเลือกจากที่นี่
+      const q = (query || '').trim();
+      const matches = q
+        ? salespeopleList.filter(sp => sp.name.toLowerCase().includes(q.toLowerCase()))
+        : salespeopleList.slice();
 
       if (matches.length === 0) {
         const empty = document.createElement('div');
         empty.className = 'ac-empty';
-        empty.textContent = 'ไม่พบชื่อที่ตรงกัน';
+        empty.textContent = 'ไม่พบชื่อที่ตรงกัน — หากเป็นพนักงานใหม่ กรุณาติดต่อแอดมิน';
         acDropdown.appendChild(empty);
       } else {
-        matches.forEach((sp, idx) => {
+        matches.slice(0, AC_MAX_ITEMS).forEach((sp) => {
           const item = document.createElement('div');
           item.className = 'ac-item';
           item.setAttribute('role', 'option');
-          item.innerHTML = highlightMatch(sp.name, query);
+          item.innerHTML = highlightMatch(escapeHtml(sp.name), q);
+          item._sp = sp;   // ผูกข้อมูลไว้กับ element เพื่อให้คีย์บอร์ดกับเมาส์เลือกตัวเดียวกันเสมอ
           item.addEventListener('mousedown', (e) => {
             e.preventDefault();   // prevent input blur before click fires
             applySelection(sp);
           });
           acDropdown.appendChild(item);
         });
+
+        if (matches.length > AC_MAX_ITEMS) {
+          const more = document.createElement('div');
+          more.className = 'ac-empty';
+          more.textContent = `แสดง ${AC_MAX_ITEMS} จาก ${matches.length} รายชื่อ — พิมพ์เพื่อค้นหาเพิ่มเติม`;
+          acDropdown.appendChild(more);
+        }
       }
 
       acDropdown.classList.add('open');
@@ -1059,9 +1137,8 @@
         acHighlight = Math.max(acHighlight - 1, 0);
       } else if (e.key === 'Enter' && acHighlight >= 0) {
         e.preventDefault();
-        const query = inputName.value.trim();
-        const matches = salespeopleList.filter(sp => sp.name.toLowerCase().includes(query.toLowerCase()));
-        if (matches[acHighlight]) applySelection(matches[acHighlight]);
+        const picked = items[acHighlight]._sp;
+        if (picked) applySelection(picked);
         return;
       } else if (e.key === 'Escape') {
         closeDropdown();
@@ -1076,13 +1153,21 @@
       const query = inputName.value.trim();
       renderDropdown(query);
 
-      // Clear auto-fill status when user edits away from a selected name
-      const exact = salespeopleList.find(sp => sp.name.toLowerCase() === query.toLowerCase());
-      if (!exact) {
+      // ชื่อเปลี่ยน = รหัสต้องคำนวณใหม่ (พิมพ์ทับชื่อที่เลือกไว้ → รหัสหลุดทันที)
+      syncEmployeeCodeFromName();
+
+      // ล้างข้อความ "ดึงข้อมูลสำเร็จ" เมื่อผู้ใช้พิมพ์ออกจากชื่อที่เลือกไว้
+      if (suggestStatus.dataset.state === 'ok' && !matchSalesperson(query)) {
         suggestStatus.style.display = 'none';
         suggestStatus.innerText = '';
+        suggestStatus.dataset.state = '';
       }
       updateSaveButtonState();
+    });
+
+    // แตะช่องชื่อแล้วเห็นรายการทั้งหมดทันที — บังคับให้เลือกจากรายการก็ต้องทำให้เลือกง่ายด้วย
+    inputName.addEventListener('focus', () => {
+      renderDropdown(inputName.value.trim());
     });
 
     inputName.addEventListener('blur', () => {
@@ -1096,7 +1181,7 @@
       const nameVal = inputName.value.trim();
       const phoneVal = inputPhone.value.trim();
       const employeeCodeVal = inputEmployeeCode.value.trim();
-      if (!nameVal || selectedBranches.size === 0 || !userId) return;
+      if (!nameVal || !employeeCodeVal || selectedBranches.size === 0 || !userId) return;
 
       loaderText.innerText = 'กำลังบันทึกข้อมูลลงทะเบียน...';
       loaderScreen.style.opacity = '1';
@@ -1110,7 +1195,7 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             userId, branchCodes, name: nameVal, phone: phoneVal,
-            salespersonId: employeeCodeVal || null
+            salespersonId: employeeCodeVal
           })
         });
         const result = await response.json();
@@ -1172,11 +1257,18 @@
         const response = await apiFetch(`/api/salesperson/${userId}`);
         const spData = await response.json();
 
+        // เติมรหัสพนักงาน/เบอร์โทรทั้งสองโหมด — คนที่ยังลงทะเบียนไม่เสร็จ (ชื่อยังเป็น 'รอดำเนินการ')
+        // อาจเพิ่งได้รหัสจากแอดมิน ถ้าเติมเฉพาะโหมดแก้ไขจะกลับมาลงทะเบียนไม่ได้เพราะช่องรหัสว่างตลอด
+        if (spData) {
+          inputEmployeeCode.value = spData.salesperson_id || '';
+          inputPhone.value = spData.phone || '';
+          dbSalespersonId = spData.salesperson_id || '';
+          dbSalespersonName = (spData.name && spData.name !== 'รอดำเนินการ') ? spData.name : '';
+        }
+
         if (spData && spData.name && spData.name !== 'รอดำเนินการ') {
           isEditingMode = true;
           inputName.value = spData.name || '';
-          inputPhone.value = spData.phone || '';
-          inputEmployeeCode.value = spData.salesperson_id || '';
           formTitle.innerText = '📝 ปรับปรุงข้อมูลพนักงานขาย';
           formSubtitle.innerText = 'แก้ไขข้อมูลส่วนตัวและสาขาดูแลของคุณตามต้องการ จากนั้นกดบันทึกเพื่ออัปเดตข้อมูล';
           btnSave.innerHTML = '<span>💾</span> บันทึกข้อมูลการแก้ไข';

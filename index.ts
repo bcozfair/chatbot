@@ -19,12 +19,10 @@ import {
   updateSalespersonByUserId,
   getBranchesByCodes,
   getBranches,
-  getProductUomByTemplateIds,
 } from './db/repositories.js';
 import { confirmQuotationAtomic, enrichQuotationData, buildItemSnapshots } from './services/quotationService.js';
 import {
   buildOdooSaleOrderRows,
-  collectProductTemplateIds,
   loadOdooExportConfig,
   serializeOdooRowsToCsv,
   serializeOdooRowsToXlsx,
@@ -1266,8 +1264,35 @@ app.post('/api/salesperson/update-branches', express.json(), async (req: any, re
       return res.status(400).json({ success: false, message: 'Missing required parameters' });
     }
 
+    // รหัสพนักงานบังคับ — ปุ่มใน LIFF ปิดไว้แล้ว แต่ยิง POST ตรงได้ จึงต้องกันซ้ำที่นี่
+    // (ลายเซ็นใน PDF ผูกกับ salesperson_id ไม่มีรหัส = ใช้ลายเซ็นไม่ได้)
+    const cleanSalespersonId = String(salespersonId ?? '').trim();
+    if (!cleanSalespersonId) {
+      return res.status(400).json({
+        success: false,
+        message: 'ไม่พบรหัสพนักงานขาย กรุณาเลือกชื่อจากรายการที่ระบบแนะนำ หรือติดต่อแอดมินให้เพิ่มรหัสพนักงานให้ก่อนครับ'
+      });
+    }
+
     // 1. ดึงข้อมูลพนักงานเพื่อดูสถานะปัจจุบัน
     const sp = await getSalespersonByUserId(userId);
+
+    // ชื่อต้องมาจากรายการพนักงานจริงเท่านั้น — พิมพ์ชื่อเองแล้วแนบรหัสมั่วไม่ผ่าน
+    // ยอมอีกกรณีเดียว: ชื่อ+รหัสที่แอดมินตั้งไว้ในตาราง salesperson (คนใหม่ที่ยังไม่มี sale order)
+    const cleanName = String(name ?? '').trim();
+    const eqText = (a: any, b: any) => String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase();
+    if (!cleanName) {
+      return res.status(400).json({ success: false, message: 'กรุณาเลือกชื่อพนักงานขายจากรายการที่ระบบแนะนำ' });
+    }
+    const roster = await listSalespeopleFromOrders();
+    const matchedInRoster = roster.some((r: any) => eqText(r.name, cleanName) && eqText(r.salesperson_id, cleanSalespersonId));
+    const matchedAdminSet = !!sp && eqText(sp.name, cleanName) && eqText(sp.salesperson_id, cleanSalespersonId);
+    if (!matchedInRoster && !matchedAdminSet) {
+      return res.status(400).json({
+        success: false,
+        message: 'ชื่อและรหัสพนักงานไม่ตรงกับรายชื่อพนักงานขายในระบบ กรุณาเลือกชื่อจากรายการที่ระบบแนะนำครับ'
+      });
+    }
 
     // 2. ข้อมูลพนักงานและบันทึกข้อมูล
     let nextStatus = 'active';
@@ -1281,13 +1306,12 @@ app.post('/api/salesperson/update-branches', express.json(), async (req: any, re
       status: nextStatus
     };
 
-    if (name !== undefined) updateData.name = name;
+    updateData.name = cleanName;
     if (phone !== undefined) updateData.phone = phone.trim();
-    if (salespersonId !== undefined) updateData.salesperson_id = salespersonId;
+    updateData.salesperson_id = cleanSalespersonId;
 
     if (isNew) {
       updateData.user_id = userId;
-      if (!updateData.name) updateData.name = 'รอดำเนินการ';
       const inserted = await insertSalesperson(updateData);
       if (!inserted) {
         return res.status(500).json({ success: false, message: 'insert salesperson failed' });
@@ -1317,8 +1341,8 @@ app.post('/api/salesperson/update-branches', express.json(), async (req: any, re
     const isRegistering = isNew || !sp || sp.status === 'pending_branch' || sp.status === 'pending_profile' || !sp.name || sp.name === 'รอดำเนินการ';
     let msg = '';
     if (isRegistering) {
-      const finalName = name || (sp ? sp.name : 'รอดำเนินการ');
-      const finalEmpCode = salespersonId !== undefined ? salespersonId : (sp ? sp.salesperson_id : null);
+      const finalName = cleanName;
+      const finalEmpCode = cleanSalespersonId;
       const finalPhone = phone !== undefined ? phone : (sp ? sp.phone : null);
 
       msg = `ลงทะเบียนสำเร็จเรียบร้อยแล้วครับ! 🎉\n\n👤 คุณ: ${finalName}\n🏢 สังกัดสาขา: ${branchNames}`;
@@ -1326,8 +1350,8 @@ app.post('/api/salesperson/update-branches', express.json(), async (req: any, re
       if (finalPhone) msg += `\n📞 เบอร์โทร: ${finalPhone}`;
       msg += `\n\nตอนนี้ระบบพร้อมใช้งานแล้วครับ คุณสามารถพิมพ์สั่งเช็คสต็อกสินค้าหรือพิมพ์ขอให้ออกใบเสนอราคาได้ทันทีครับ 🤖✨`;
     } else {
-      const finalName = name !== undefined ? name : (sp ? sp.name : '');
-      const finalEmpCode = salespersonId !== undefined ? salespersonId : (sp ? sp.salesperson_id : null);
+      const finalName = cleanName;
+      const finalEmpCode = cleanSalespersonId;
       const finalPhone = phone !== undefined ? phone : (sp ? sp.phone : null);
 
       msg = `✅ อัปเดตข้อมูลส่วนตัวและสาขาดูแลสำเร็จเรียบร้อยแล้วครับ!\n\n👤 คุณ: ${finalName}\n🏢 สาขาที่ดูแลในปัจจุบัน: ${branchNames}`;
@@ -1394,9 +1418,13 @@ app.get('/download-pdf/:quoteId', async (req: any, res: any) => {
       }
     }
 
-    enrichedQuote.salesperson_name = salespersonName;
-    enrichedQuote.salesperson_phone = salespersonPhone;
-    enrichedQuote.salesperson_employee_code = salespersonEmployeeCode;
+    // ข้อมูลสดมาก่อน แล้วค่อย fallback ไป snapshot ที่ enrichQuotationData เติมไว้จาก employee_details
+    // จำเป็นตอนพนักงานถูกลบ — FK ตั้ง quotations.user_id = NULL ทำให้ query ข้างบนไม่เจอใคร
+    // ถ้าไม่ fallback ใบเก่าที่โหลดซ้ำจะไม่มีชื่อผู้ขาย เบอร์ และลายเซ็น
+    enrichedQuote.salesperson_name = salespersonName || enrichedQuote.salesperson_name || '';
+    enrichedQuote.salesperson_phone = salespersonPhone || enrichedQuote.salesperson_phone || '';
+    enrichedQuote.salesperson_employee_code =
+      salespersonEmployeeCode || enrichedQuote.salesperson_employee_code || enrichedQuote.salesperson_id || null;
 
     // 2. สร้าง PDF สดๆ ณ ตอนดาวน์โหลด
     const pdfBuffer = await generateQuotationPDF(enrichedQuote, quoteNo);
@@ -1549,7 +1577,12 @@ app.post('/api/admin/signatures/upload', adminAuthMiddleware, express.json({ lim
 app.get('/api/admin/salespersons', adminAuthMiddleware, async (req: any, res: any) => {
   console.log(">>> GET /api/admin/salespersons received!");
   try {
-    const result = await pool.query('SELECT user_id, name, status, phone, salesperson_id, branch, created_at, updated_at FROM salesperson ORDER BY name ASC');
+    // quotation_count ใช้เตือนตอนลบ — ลบพนักงานแล้ว FK ตั้ง quotations.user_id = NULL (ON DELETE SET NULL)
+    const result = await pool.query(`
+      SELECT s.user_id, s.name, s.status, s.phone, s.salesperson_id, s.branch, s.created_at, s.updated_at,
+             (SELECT count(*) FROM quotations q WHERE q.user_id = s.user_id) AS quotation_count
+        FROM salesperson s
+       ORDER BY s.name ASC`);
 
     const saleSigsDir = path.join(process.cwd(), 'data', 'sale_sigs');
     const extensions = ['.png', '.jpg', '.jpeg'];
@@ -1568,6 +1601,7 @@ app.get('/api/admin/salespersons', adminAuthMiddleware, async (req: any, res: an
 
       return {
         ...row,
+        quotation_count: Number(row.quotation_count),   // COUNT(*) มาเป็น string จาก pg
         has_sale_sig
       };
     });
@@ -1576,6 +1610,81 @@ app.get('/api/admin/salespersons', adminAuthMiddleware, async (req: any, res: an
   } catch (err: any) {
     console.error("GET salespersons error:", err);
     res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// --- API Endpoint: Admin แก้ไขข้อมูลพนักงานขาย (ชื่อ / เบอร์โทร / รหัสพนักงาน) ---
+// หน้า LIFF บังคับรหัสพนักงานแล้ว → ทางนี้คือทางเดียวที่เติมรหัสให้คนที่ยังไม่มีได้
+app.put('/api/admin/salespersons/:userId', adminAuthMiddleware, express.json(), async (req: any, res: any) => {
+  console.log(">>> PUT /api/admin/salespersons received!", req.params.userId);
+  try {
+    const userId = req.params.userId;
+    const { name, phone, salespersonId } = req.body;
+
+    const cleanName = String(name ?? '').trim();
+    const cleanPhone = String(phone ?? '').trim() || null;
+    const cleanSpId = String(salespersonId ?? '').trim();
+
+    if (!cleanName) {
+      return res.status(400).json({ error: 'ต้องระบุชื่อพนักงานขาย' });
+    }
+    if (!cleanSpId) {
+      return res.status(400).json({ error: 'ต้องระบุรหัสพนักงานขาย' });
+    }
+
+    const existing = await getSalespersonByUserId(userId);
+    if (!existing) {
+      return res.status(404).json({ error: 'ไม่พบพนักงานขายรายนี้' });
+    }
+
+    // ตาราง salesperson ไม่มี unique constraint บน salesperson_id และไฟล์ลายเซ็นตั้งชื่อตามรหัส
+    // → รหัสซ้ำ = สองคนใช้ลายเซ็นใบเดียวกัน จึงเตือนกลับไป แต่ไม่บล็อก (ข้อมูลจริงอาจซ้ำได้)
+    const dupRes = await pool.query(
+      'SELECT name FROM salesperson WHERE salesperson_id = $1 AND user_id <> $2 ORDER BY name ASC',
+      [cleanSpId, userId]
+    );
+    const duplicateWith = dupRes.rows.map((r: any) => r.name);
+
+    const updated = await updateSalespersonByUserId(userId, {
+      name: cleanName,
+      phone: cleanPhone,
+      salesperson_id: cleanSpId
+    });
+    if (!updated) {
+      return res.status(500).json({ error: 'บันทึกข้อมูลพนักงานขายไม่สำเร็จ' });
+    }
+
+    res.json({ success: true, salesperson: updated, duplicateWith });
+  } catch (err: any) {
+    console.error("PUT salesperson error:", err);
+    res.status(500).json({ error: err.message || 'Internal Server Error' });
+  }
+});
+
+// --- API Endpoint: Admin ลบพนักงานขาย ---
+// ⚠️ FK quotations_user_id_fkey เป็น ON DELETE SET NULL → ใบเสนอราคาของคนนี้ไม่ถูกลบ
+// แต่ q.user_id กลายเป็น NULL ถาวร (ผูกกลับคืนไม่ได้แม้ลงทะเบียนใหม่ด้วย LINE เดิม)
+// ชื่อ/เบอร์/รหัสยังอยู่ใน q.employee_details (snapshot) — PDF จึงยังออกได้ครบ
+// ไฟล์ลายเซ็นไม่ถูกลบ เพราะผูกกับรหัสพนักงาน ไม่ได้ผูกกับ user_id (และอาจมีคนอื่นใช้รหัสเดียวกัน)
+app.delete('/api/admin/salespersons/:userId', adminAuthMiddleware, async (req: any, res: any) => {
+  console.log(">>> DELETE /api/admin/salespersons received!", req.params.userId);
+  try {
+    const userId = req.params.userId;
+
+    const existing = await getSalespersonByUserId(userId);
+    if (!existing) {
+      return res.status(404).json({ error: 'ไม่พบพนักงานขายรายนี้' });
+    }
+
+    const countRes = await pool.query('SELECT count(*) AS c FROM quotations WHERE user_id = $1', [userId]);
+    const quotationCount = Number(countRes.rows[0].c);
+
+    await pool.query('DELETE FROM salesperson WHERE user_id = $1', [userId]);
+
+    res.json({ success: true, name: existing.name, quotationCount });
+  } catch (err: any) {
+    console.error("DELETE salesperson error:", err);
+    res.status(500).json({ error: err.message || 'Internal Server Error' });
   }
 });
 
@@ -2364,6 +2473,12 @@ app.get('/api/admin/customers/types', adminAuthMiddleware, async (req: any, res:
   }
 });
 
+// พนักงานที่ถูกลบทำให้ q.user_id เป็น NULL (FK ON DELETE SET NULL) → join ไม่เจอชื่อ
+// แต่ชื่อ/เบอร์/รหัส ณ ตอนออกใบยังอยู่ใน snapshot q.employee_details จึง fallback ไปอ่านที่นั่น
+const SP_NAME_SQL = `COALESCE(s.name, q.employee_details->>'saleperson')`;
+const SP_PHONE_SQL = `COALESCE(s.phone, q.employee_details->>'sale_phone')`;
+const SP_CODE_SQL = `COALESCE(s.salesperson_id, q.employee_details->>'salesperson_id', q.salesperson_id)`;
+
 // --- API Endpoint: Admin Quotations List (with search, filter, pagination) ---
 app.get('/api/admin/quotations', adminAuthMiddleware, async (req: any, res: any) => {
   try {
@@ -2379,7 +2494,7 @@ app.get('/api/admin/quotations', adminAuthMiddleware, async (req: any, res: any)
       quotation_no: 'q.quotation_no',
       created_at: 'q.created_at',
       customer_name: "(q.customer_details->>'customer_name')",
-      salesperson_name: 's.name',
+      salesperson_name: SP_NAME_SQL,
       total_sum: 'q.total_sum',
       status: 'q.status'
     };
@@ -2393,7 +2508,7 @@ app.get('/api/admin/quotations', adminAuthMiddleware, async (req: any, res: any)
     let paramIndex = 1;
 
     if (search.trim()) {
-      conditions.push(`(q.quotation_no ILIKE $${paramIndex} OR (q.customer_details->>'customer_name') ILIKE $${paramIndex} OR s.name ILIKE $${paramIndex})`);
+      conditions.push(`(q.quotation_no ILIKE $${paramIndex} OR (q.customer_details->>'customer_name') ILIKE $${paramIndex} OR ${SP_NAME_SQL} ILIKE $${paramIndex})`);
       params.push(`%${search.trim()}%`);
       paramIndex++;
     }
@@ -2425,7 +2540,7 @@ app.get('/api/admin/quotations', adminAuthMiddleware, async (req: any, res: any)
 
     // Fetch data with LEFT JOIN to get salesperson info directly
     const dataResult = await pool.query(
-      `SELECT q.*, s.name AS salesperson_name, s.phone AS salesperson_phone, s.salesperson_id AS salesperson_employee_code FROM quotations q LEFT JOIN salesperson s ON q.user_id = s.user_id ${whereClause} ORDER BY ${sortBy} ${sortOrderParam} LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+      `SELECT q.*, ${SP_NAME_SQL} AS salesperson_name, ${SP_PHONE_SQL} AS salesperson_phone, ${SP_CODE_SQL} AS salesperson_employee_code FROM quotations q LEFT JOIN salesperson s ON q.user_id = s.user_id ${whereClause} ORDER BY ${sortBy} ${sortOrderParam} LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
       [...params, limit, offset]
     );
 
@@ -2469,7 +2584,7 @@ app.get('/api/admin/quotations/export', adminAuthMiddleware, async (req: any, re
       quotation_no: 'q.quotation_no',
       created_at: 'q.created_at',
       customer_name: "(q.customer_details->>'customer_name')",
-      salesperson_name: 's.name',
+      salesperson_name: SP_NAME_SQL,
       total_sum: 'q.total_sum',
       status: 'q.status'
     };
@@ -2483,7 +2598,7 @@ app.get('/api/admin/quotations/export', adminAuthMiddleware, async (req: any, re
     let paramIndex = 1;
 
     if (search.trim()) {
-      conditions.push(`(q.quotation_no ILIKE $${paramIndex} OR (q.customer_details->>'customer_name') ILIKE $${paramIndex} OR s.name ILIKE $${paramIndex})`);
+      conditions.push(`(q.quotation_no ILIKE $${paramIndex} OR (q.customer_details->>'customer_name') ILIKE $${paramIndex} OR ${SP_NAME_SQL} ILIKE $${paramIndex})`);
       params.push(`%${search.trim()}%`);
       paramIndex++;
     }
@@ -2515,8 +2630,8 @@ app.get('/api/admin/quotations/export', adminAuthMiddleware, async (req: any, re
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const result = await pool.query(
-      `SELECT q.created_at, q.customer_details, q.item_details, q.employee_details,
-              s.name AS salesperson_name, s.branch AS salesperson_branch
+      `SELECT q.quotation_no, q.created_at, q.updated_at, q.customer_details, q.item_details, q.employee_details,
+              ${SP_NAME_SQL} AS salesperson_name, s.branch AS salesperson_branch
          FROM quotations q
          LEFT JOIN salesperson s ON q.user_id = s.user_id
          ${whereClause}
@@ -2527,20 +2642,20 @@ app.get('/api/admin/quotations/export', adminAuthMiddleware, async (req: any, re
     // ไม่เรียก enrichQuotationData() ที่นี่ — format นี้ไม่ใช้สต๊อกสด/วันจัดส่ง/กฎโปรโมชัน
     // และ enrich ยิง query หลายครั้งต่อใบ ทำให้ export หลายร้อยใบช้าโดยไม่จำเป็น
     const quotes = result.rows || [];
-    const uomMap = await getProductUomByTemplateIds(collectProductTemplateIds(quotes));
-    const rows = buildOdooSaleOrderRows(quotes, uomMap, loadOdooExportConfig());
+    const rows = buildOdooSaleOrderRows(quotes, loadOdooExportConfig());
 
-    const stamp = new Date().toISOString().split('T')[0];
+    // วันที่ในชื่อไฟล์ตามเวลาไทย — toISOString() ให้วัน UTC ซึ่งจะเป็นวันก่อนหน้าถ้ากดก่อน 07:00
+    const stamp = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date());
     if (format === 'csv') {
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-      res.setHeader('Content-Disposition', `attachment; filename="sale_order_odoo_${stamp}.csv"`);
+      res.setHeader('Content-Disposition', `attachment; filename="salechatbot_quotation_${stamp}.csv"`);
       res.send(serializeOdooRowsToCsv(rows));
       return;
     }
 
     const xlsx = await serializeOdooRowsToXlsx(rows);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="sale_order_odoo_${stamp}.xlsx"`);
+    res.setHeader('Content-Disposition', `attachment; filename="salechatbot_quotation_${stamp}.xlsx"`);
     res.send(xlsx);
   } catch (err: any) {
     console.error("GET /api/admin/quotations/export error:", err);
