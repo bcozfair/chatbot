@@ -14,6 +14,7 @@ import {
   getBranchesByCodes,
 } from '../db/repositories.js';
 import { calcNetPrice, round2 } from '../utils/pricing.js';
+import { buildPdfLink } from '../utils/quotationLink.js';
 import { 
   createBranchSelectionFlex, 
   getQuotationSummaryMessage, 
@@ -512,11 +513,11 @@ export async function handleEvent(event: any): Promise<any> {
           }
 
           const reqUrl = process.env.APP_URL || `http://localhost:${process.env.PORT || 3011}`;
-          const pdfLink = `${reqUrl}/download-pdf/${qId}?openExternalBrowser=1`;
 
           if (currentQuote.status === 'confirmed') {
             // ยืนยันไปแล้ว — แสดงผลสำเร็จเหมือนเดิม (ผู้กดยืนยันต้องเห็น ✅ เสมอ ไม่ใช่ข้อความคลุมเครือ)
             const confirmedNo = currentQuote.quotation_no || '-';
+            const pdfLink = buildPdfLink(reqUrl, qId, currentQuote.quotation_no);
             replyMessages.push({
               type: 'text',
               text: `✅ ยืนยันสำเร็จ!\n📄 ใบเสนอราคาเลขที่: ${confirmedNo}`
@@ -583,6 +584,7 @@ export async function handleEvent(event: any): Promise<any> {
 
           // confirmed และ already_confirmed → ตอบผลสำเร็จเหมือนกัน (ผู้กดยืนยันต้องเห็น ✅ เสมอ)
           const quoteNo = confirmResult.quotationNo;
+          const pdfLink = buildPdfLink(reqUrl, qId, quoteNo);
           replyMessages.push({
             type: 'text',
             text: `✅ ยืนยันสำเร็จ!\n📄 ใบเสนอราคาเลขที่: ${quoteNo}`
@@ -1066,8 +1068,8 @@ export async function handleEvent(event: any): Promise<any> {
 
             for (const q of quotes) {
               const quoteNo = q.quotation_no || '-';
-              const pdfLink = `${reqUrl}/download-pdf/${q.id}?openExternalBrowser=1`;
-              
+              const pdfLink = buildPdfLink(reqUrl, q.id, q.quotation_no);
+
               messages.push({
                 type: 'text',
                 text: `✅ ยืนยันสำเร็จ!\n📄 ใบเสนอราคาเลขที่: ${quoteNo}`
@@ -1170,7 +1172,7 @@ export async function handleEvent(event: any): Promise<any> {
             const messages: any[] = [];
             for (const q of quotes) {
               const quoteNo = q.quotation_no || '-';
-              const pdfLink = `${reqUrl}/download-pdf/${q.id}?openExternalBrowser=1`;
+              const pdfLink = buildPdfLink(reqUrl, q.id, q.quotation_no);
               messages.push({
                 type: 'template',
                 altText: `ดาวน์โหลดใบเสนอราคา ${quoteNo} (PDF)`,

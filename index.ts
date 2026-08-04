@@ -37,6 +37,7 @@ import {
 } from './services/rules/index.js';
 import { handleEvent } from './handlers/lineHandler.js';
 import { buildAddressParts, buildThaiAddress } from './utils/address.js';
+import { buildPdfLink, buildPdfPath } from './utils/quotationLink.js';
 import { generateQuotationPDF, closePdfBrowser } from './pdfGenerator.js';
 import { Parser } from 'json2csv';
 import bcrypt from 'bcryptjs';
@@ -1048,8 +1049,6 @@ app.post('/api/quotation/:id/confirm', express.json(), async (req: any, res: any
       process.env.APP_URL = reqUrl;
       console.log(`>>> Dynamically set APP_URL from confirm API to: ${process.env.APP_URL}`);
     }
-    const pdfLink = `${reqUrl}/download-pdf/${quoteId}?openExternalBrowser=1`;
-
     // ยืนยันแบบ atomic + idempotent (ออกเลข + เปลี่ยน status ใน transaction เดียวพร้อม row lock
     // cancelOldRevision กรณี revision อยู่ใน tx เดียวกัน และไม่เขียนทับ created_at เพราะเลขคำนวณจากมัน)
     let confirmResult;
@@ -1068,6 +1067,8 @@ app.post('/api/quotation/:id/confirm', express.json(), async (req: any, res: any
     }
 
     // confirmed / already_confirmed → success เหมือนกัน (idempotent)
+    // ลิงก์ต้องสร้างหลังตรงนี้ เพราะเลขใบเสนอราคาเพิ่งถูกออกใน confirmQuotationAtomic
+    const pdfLink = buildPdfLink(reqUrl, quoteId, confirmResult.quotationNo);
     console.log(`[Push Disabled] Confirm quotation no: ${confirmResult.quotationNo} for user: ${userId}`);
     res.json({ success: true, quotation_no: confirmResult.quotationNo, pdf_link: pdfLink });
   } catch (err: any) {
@@ -1311,10 +1312,13 @@ app.post('/api/salesperson/update-branches', express.json(), async (req: any, re
 
 
 // --- Endpoint สำหรับสร้างและดาวน์โหลดไฟล์ใบเสนอราคา (PDF) แบบ On-the-fly ---
-app.get('/download-pdf/:quoteId', async (req: any, res: any) => {
+// รับได้ทั้ง /download-pdf/{uuid} (รูปแบบเดิม — ลิงก์เก่าในแชท LINE ต้องใช้ได้ตลอด)
+// และ /download-pdf/{uuid}/{เลขใบเสนอราคา} ที่อ่านรู้เรื่องกว่า
+// ค้นข้อมูลจาก uuid เท่านั้น ส่วนต่อท้ายเป็นแค่ป้าย — ถ้าไม่ตรงเลขจริงจะ redirect ไปตัวที่ถูก
+const downloadPdfHandler = async (req: any, res: any) => {
   try {
     const quoteId = req.params.quoteId;
-    
+
     // 1. ดึงข้อมูลใบเสนอราคาจาก Database ด้วย pool.query
     let quoteDb: any = null;
     try {
@@ -1327,6 +1331,16 @@ app.get('/download-pdf/:quoteId', async (req: any, res: any) => {
 
     if (!quoteDb) {
       return res.status(404).send('Quotation not found or invalid ID.');
+    }
+
+    // ปรับ URL ให้ตรงเลขจริงก่อนเจน PDF (เจนแล้ว redirect = เสียแรงเปล่า)
+    // ใช้ 302 ไม่ใช่ 301 เพราะใบร่างยังไม่มีเลข — ลิงก์เดิมจะกลายเป็น canonical ตอนยังร่างอยู่
+    // แล้วเปลี่ยนปลายทางหลังยืนยัน ถ้า 301 เบราว์เซอร์จะจำ redirect ผิดชุดไว้ถาวร
+    const canonicalPath = buildPdfPath(quoteId, quoteDb.quotation_no);
+    const currentPath = req.path;
+    if (currentPath !== canonicalPath) {
+      const qs = req.originalUrl.indexOf('?');
+      return res.redirect(302, qs === -1 ? canonicalPath : canonicalPath + req.originalUrl.slice(qs));
     }
 
     // Enrich ก่อนเพื่อให้ items มีข้อมูลสำหรับ resolveQuoteCompany ใน allocateQuotationNo และ pdfGenerator
@@ -1377,7 +1391,10 @@ app.get('/download-pdf/:quoteId', async (req: any, res: any) => {
     console.error('Generate PDF error:', err);
     res.status(500).send('Internal Server Error');
   }
-});
+};
+
+app.get('/download-pdf/:quoteId', downloadPdfHandler);
+app.get('/download-pdf/:quoteId/:quoteNo', downloadPdfHandler);
 
 
 // --- API Endpoint: Admin Login ---

@@ -552,7 +552,7 @@ export const Quotations: React.FC = () => {
                           <div className="flex items-center justify-center gap-2">
                             {quote.quotation_no && (
                               <a
-                                href={`/download-pdf/${quote.id}`}
+                                href={`/download-pdf/${quote.id}/${encodeURIComponent(quote.quotation_no)}`}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="p-2 bg-white hover:bg-emerald-50 text-slate-500 hover:text-emerald-600 border border-slate-200 hover:border-emerald-200 rounded-xl transition-all active:scale-95 shadow-sm"
