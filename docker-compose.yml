@@ -5,22 +5,36 @@ services:
   db:
     image: postgres:18
     restart: unless-stopped
+    # จำกัดขนาด log ไม่ให้โตไม่จำกัด: เก็บ 5 ไฟล์ ไฟล์ละ 10MB (รวมสูงสุด ~50MB) แล้ว rotate ทับของเก่า
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     environment:
       POSTGRES_DB: ${PG_DATABASE}
       POSTGRES_USER: ${PG_USER}
       POSTGRES_PASSWORD: ${PG_PASSWORD}
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # postgres:18 เก็บ data ในซับไดเรกทอรีตาม major version → ต้อง mount ที่ /var/lib/postgresql (พาเรนต์) ไม่ใช่ /data
+      - pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${PG_USER} -d ${PG_DATABASE}"]
       interval: 5s
       timeout: 5s
       retries: 10
     # ไม่ publish port 5432 ออก host → app คุยกับ db ผ่าน network ภายในชื่อ "db" เท่านั้น (ปลอดภัย + ไม่ชนโปรเจคอื่น)
+    # ถ้าเครื่องไหนต้องต่อ db จากภายนอก (เช่น VSCode DB extension) ให้ publish ใน docker-compose.override.yml ของเครื่องนั้น
 
   app:
     build: .
     restart: unless-stopped
+    # จำกัดขนาด log ไม่ให้โตไม่จำกัด: เก็บ 5 ไฟล์ ไฟล์ละ 10MB (รวมสูงสุด ~50MB) แล้ว rotate ทับของเก่า
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     env_file: .env
     environment:
       PG_HOST: db          # ชี้ไปที่ service db (override ค่าใน .env)
@@ -37,6 +51,8 @@ services:
     volumes:
       - sig_sale:/app/data/sale_sigs     # รูปลายเซ็นที่อัปโหลด (คงอยู่ข้าม rebuild)
       - sig_admin:/app/data/admin_sigs
+
+  # HTTPS/subdomain จัดการผ่าน Cloudflare + reverse proxy กลางของ IT → โปรเจคนี้ไม่รัน reverse proxy เอง
 
 volumes:
   pgdata:

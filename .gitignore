@@ -11,6 +11,10 @@ node_modules
 
 # Local dev tooling binaries
 ngrok.exe
+*.deb
+
+# ค่า docker เฉพาะเครื่อง (port ที่ publish, path ฯลฯ) — compose merge ให้อัตโนมัติ ห้าม commit
+docker-compose.override.yml
 
 # Build output — tsx รัน .ts ตรงๆ ไม่ต้องใช้ dist/
 dist/
