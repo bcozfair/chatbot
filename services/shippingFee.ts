@@ -18,15 +18,22 @@ import { resolveQuoteCompany } from './quotationService.js';
 /** สถานะร่างที่ยังแก้ได้ — ชุดเดียวกับที่ insertDraftQuotations ใช้ลบร่างเดิม */
 const DRAFT_STATUSES = ['pending_company', 'pending_contact', 'draft'];
 
+/** "<เลข> Days" — 30 Days / 60 Days / 5 days / 30days */
+const DAYS_TERMS_RE = /^\d+\s*days$/i;
+
+/** "เช็คล่วงหน้า<เลข>วัน" — เช็คล่วงหน้า30วัน / เช็คล่วงหน้า7วัน / เช็คล่วงหน้า15วัน / เช็คล่วงหน้า45วัน */
+const ADVANCE_CHEQUE_RE = /^เช็คล่วงหน้า\s*\d+\s*วัน$/;
+
 /**
- * "มีเครดิต" = customer_payment_terms เป็นรูปแบบ "<เลข> Days" เท่านั้น
+ * "มีเครดิต" = จ่ายทีหลังได้ — ทั้งเครดิตเทอมปกติและเช็คล่วงหน้า
  *
- * ค่าที่มีจริงในฐานข้อมูล (ยืนยันแล้ว): 30 Days / 60 Days / 45 Days / 90 Days / 15 Days /
- * 7 Days / 65 Days / 14 Days / 5 Days / 40 Days / 20 Days / 10 Days  → มีเครดิต
- * NULL / Cash / เช็คล่วงหน้า30วัน / เช็คล่วงหน้า7วัน / Immediate Payment  → ไม่มีเครดิต
+ * ค่าที่มีจริงในฐานข้อมูล (ยืนยันแล้ว):
+ *   30/60/45/90/15/7/65/14/5/40/20/10 Days · เช็คล่วงหน้า 30/15/7/45 วัน  → มีเครดิต
+ *   NULL / Cash / Immediate Payment                                      → ไม่มีเครดิต
  */
 export function hasCreditTerms(paymentTerms: string | null | undefined): boolean {
-  return /^\d+\s*days$/i.test(String(paymentTerms ?? '').trim());
+  const terms = String(paymentTerms ?? '').trim();
+  return DAYS_TERMS_RE.test(terms) || ADVANCE_CHEQUE_RE.test(terms);
 }
 
 export interface ShippingFeeConfig {

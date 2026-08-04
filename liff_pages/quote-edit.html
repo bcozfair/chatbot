@@ -2067,9 +2067,10 @@
         );
       }
 
-      /** "มีเครดิต" = customer_payment_terms เป็นรูปแบบ "<เลข> Days" เท่านั้น */
+      /** "มีเครดิต" = "<เลข> Days" หรือ "เช็คล่วงหน้า<เลข>วัน" (mirror ของ utils/paymentTerms.ts) */
       function hasCreditTerms(paymentTerms) {
-        return /^\d+\s*days$/i.test(String(paymentTerms == null ? "" : paymentTerms).trim());
+        const terms = String(paymentTerms == null ? "" : paymentTerms).trim();
+        return /^\d+\s*days$/i.test(terms) || /^เช็คล่วงหน้า\s*\d+\s*วัน$/.test(terms);
       }
 
       /**

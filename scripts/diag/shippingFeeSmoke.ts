@@ -46,7 +46,7 @@ const cached = await loadShippingFeeConfig();
 ok('เรียกครั้งที่ 2 มาจาก cache', cached === cfg);
 
 // ── 2. เครดิตเทอม — เทียบกับค่าที่มีจริงในฐานข้อมูลทุกค่า ───────────────
-//  ทุกค่าที่ไม่ใช่รูปแบบ "<เลข> Days" ถือว่าไม่มีเครดิต → เข้าเงื่อนไขค่าขนส่ง
+//  ทุกค่าที่ไม่ใช่ "<เลข> Days" หรือ "เช็คล่วงหน้า<เลข>วัน" ถือว่าไม่มีเครดิต → เข้าเงื่อนไขค่าขนส่ง
 const { rows: termRows } = await pool.query(
   `SELECT DISTINCT customer_payment_terms AS t FROM customers ORDER BY 1`
 );
@@ -68,10 +68,14 @@ ok('ไม่มีช่องว่างก็ยังจับได้ ("3
 ok('null / "" / undefined = ไม่มีเครดิต',
   !hasCreditTerms(null) && !hasCreditTerms('') && !hasCreditTerms(undefined));
 ok('"Cash" = ไม่มีเครดิต', !hasCreditTerms('Cash'));
-ok('"เช็คล่วงหน้า30วัน" = ไม่มีเครดิต', !hasCreditTerms('เช็คล่วงหน้า30วัน'));
 ok('"Immediate Payment" = ไม่มีเครดิต', !hasCreditTerms('Immediate Payment'));
 ok('"Days" เปล่า ๆ = ไม่มีเครดิต', !hasCreditTerms('Days'));
 ok('"Net 30 Days" = ไม่มีเครดิต (ต้องตรงทั้งสตริง)', !hasCreditTerms('Net 30 Days'));
+ok('เช็คล่วงหน้าทุกค่าที่มีจริง = มีเครดิต',
+  ['เช็คล่วงหน้า30วัน', 'เช็คล่วงหน้า15วัน', 'เช็คล่วงหน้า7วัน', 'เช็คล่วงหน้า45วัน'].every(hasCreditTerms));
+ok('เช็คล่วงหน้า — เว้นวรรคแทรกไม่มีผล', hasCreditTerms(' เช็คล่วงหน้า 30 วัน '));
+ok('"เช็คล่วงหน้าวัน" (ไม่มีเลข) = ไม่มีเครดิต', !hasCreditTerms('เช็คล่วงหน้าวัน'));
+ok('"เช็คล่วงหน้า30วันครึ่ง" = ไม่มีเครดิต (ต้องตรงทั้งสตริง)', !hasCreditTerms('เช็คล่วงหน้า30วันครึ่ง'));
 
 // ── 3. ระบุบรรทัดค่าขนส่ง ───────────────────────────────────────────────
 ok('จับได้จาก model', isShippingFeeItem({ model: cfg.productModel }, cfg));
@@ -224,7 +228,8 @@ liff.setCfg({
 });
 
 const parityTerms = [...termRows.map((r: any) => r.t),
-  '30 Days', '  60 Days  ', '5 days', '30days', 'Days', 'Net 30 Days', '', null];
+  '30 Days', '  60 Days  ', '5 days', '30days', 'Days', 'Net 30 Days', '', null,
+  'เช็คล่วงหน้า30วัน', ' เช็คล่วงหน้า 30 วัน ', 'เช็คล่วงหน้าวัน', 'เช็คล่วงหน้า30วันครึ่ง'];
 const termDiff = parityTerms.filter(t => liff.hasCreditTerms(t) !== hasCreditTerms(t));
 ok('hasCreditTerms ตรงกันทุกค่า', termDiff.length === 0,
   `${parityTerms.length} ค่า${termDiff.length ? ' ต่าง: ' + JSON.stringify(termDiff) : ''}`);
