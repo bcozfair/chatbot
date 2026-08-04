@@ -36,6 +36,7 @@ import {
   invalidateRuleCache
 } from './services/rules/index.js';
 import { handleEvent } from './handlers/lineHandler.js';
+import { buildAddressParts, buildThaiAddress } from './utils/address.js';
 import { generateQuotationPDF, closePdfBrowser } from './pdfGenerator.js';
 import { Parser } from 'json2csv';
 import bcrypt from 'bcryptjs';
@@ -546,25 +547,6 @@ app.get('/api/customer/:id/contacts', async (req: any, res: any) => {
 
     let formatted: any[] = [];
     if (data) {
-      const cleanState = (s: any) => String(s || '').replace(/\s*\(.*/, '').split(/\s+/)[0].trim();
-      const cleanAddressField = (fieldVal: any, rawState: any, zip: any) => {
-        if (!fieldVal) return '';
-        const cleanZip = String(zip || '').trim();
-        const cleanStateVal = String(rawState || '').replace(/\s*\(.*/, '').trim();
-        const words = fieldVal.split(/[\s,]+/).map((w: any) => w.trim()).filter(Boolean);
-        const filtered = words.filter((word: any) => {
-          const wordLower = word.toLowerCase();
-          if (cleanZip && wordLower === cleanZip.toLowerCase()) return false;
-          if (['thailand', 'th', 'china', 'taiwan', 'malaysia', 'singapore', 'israel'].includes(wordLower)) return false;
-          if (cleanStateVal) {
-            const stateLower = cleanStateVal.toLowerCase();
-            if (stateLower.includes(wordLower) || wordLower.includes(stateLower)) return false;
-          }
-          return true;
-        });
-        return filtered.join(' ');
-      };
-
       // Fetch company default address once
       let companyDefaultAddr = null;
       const companyRows = await getCompanyAddressRows(req.params.id);
@@ -579,17 +561,7 @@ app.get('/api/customer/:id/contacts', async (req: any, res: any) => {
         const hasAddr = (c.invoice_street && c.invoice_street.trim()) || (c.invoice_state && c.invoice_state.trim());
         const target = hasAddr ? c : (companyDefaultAddr || c);
 
-        const stateCleaned = cleanState(target.invoice_state);
-        const districtCleaned = cleanAddressField(target.invoice_district, target.invoice_state, target.invoice_zip);
-        const subDistrictCleaned = cleanAddressField(target.invoice_sub_district, target.invoice_state, target.invoice_zip);
-
-        const addrComplete = [
-          target.invoice_street,
-          districtCleaned,
-          subDistrictCleaned,
-          stateCleaned,
-          target.invoice_zip
-        ].map(s => String(s || '').trim()).filter(Boolean).join(' ');
+        const parts = buildAddressParts(target);
 
         return {
           id: c.id,
@@ -598,11 +570,11 @@ app.get('/api/customer/:id/contacts', async (req: any, res: any) => {
           phone: c.phone,
           email: c.email,
           invoice_street: target.invoice_street,
-          invoice_district: districtCleaned,
-          invoice_sub_district: subDistrictCleaned,
-          invoice_state: stateCleaned,
+          invoice_district: parts.district,
+          invoice_sub_district: parts.subDistrict,
+          invoice_state: parts.state,
           invoice_zip: target.invoice_zip,
-          address_complete: addrComplete || ''
+          address_complete: parts.full
         };
       });
     }
@@ -913,26 +885,6 @@ app.put('/api/quotation/:id', express.json(), async (req: any, res: any) => {
             const uniqueEmails = Array.from(new Set(emails));
             contactEmail = uniqueEmails.length > 0 ? uniqueEmails.join(', ') : '';
 
-            // Clean & format address
-            const cleanState = (s: any) => String(s || '').replace(/\s*\(.*/, '').split(/\s+/)[0].trim();
-            const cleanAddressField = (fieldVal: any, rawState: any, zip: any) => {
-              if (!fieldVal) return '';
-              const cleanZip = String(zip || '').trim();
-              const cleanStateVal = String(rawState || '').replace(/\s*\(.*/, '').trim();
-              const words = fieldVal.split(/[\s,]+/).map((w: any) => w.trim()).filter(Boolean);
-              const filtered = words.filter((word: any) => {
-                const wordLower = word.toLowerCase();
-                if (cleanZip && wordLower === cleanZip.toLowerCase()) return false;
-                if (['thailand', 'th', 'china', 'taiwan', 'malaysia', 'singapore', 'israel'].includes(wordLower)) return false;
-                if (cleanStateVal) {
-                  const stateLower = cleanStateVal.toLowerCase();
-                  if (stateLower.includes(wordLower) || wordLower.includes(stateLower)) return false;
-                }
-                return true;
-              });
-              return filtered.join(' ');
-            };
-
             // ที่อยู่ดึงจาก customers_data_view (ผ่าน getContactById) เพราะ view blend อำเภอ/ตำบลที่ขาดจาก sale_orders ล่าสุดให้
             let addrSrc: any = custData;
             if (custData.contact_id) {
@@ -940,19 +892,7 @@ app.put('/api/quotation/:id', express.json(), async (req: any, res: any) => {
               if (viewContact) addrSrc = viewContact;
             }
 
-            const stateCleaned = cleanState(addrSrc.invoice_state);
-            const districtCleaned = cleanAddressField(addrSrc.invoice_district, addrSrc.invoice_state, addrSrc.invoice_zip);
-            const subDistrictCleaned = cleanAddressField(addrSrc.invoice_sub_district, addrSrc.invoice_state, addrSrc.invoice_zip);
-
-            const addr = [
-              addrSrc.invoice_street,
-              districtCleaned,
-              subDistrictCleaned,
-              stateCleaned,
-              addrSrc.invoice_zip
-            ].map(s => String(s || '').trim()).filter(Boolean).join(' ');
-
-            contactAddress = addr || '';
+            contactAddress = buildThaiAddress(addrSrc);
           }
         } catch (err) {
           console.error('Error fetching customer details in PUT API:', err);

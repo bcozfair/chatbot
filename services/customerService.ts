@@ -10,6 +10,7 @@ import {
   findContactsWithCustomerByName,
 } from '../db/repositories.js';
 import Fuse from 'fuse.js';
+import { buildAddressParts } from '../utils/address.js';
 
 // Kill-switches (safety valves — เซ็ต =1 เพื่อกลับไปใช้ pipeline เดิมเป๊ะโดยไม่ต้อง rollback code)
 const isNewSearchDisabled = () => process.env.DISABLE_NEW_SEARCH === '1';
@@ -1124,49 +1125,20 @@ export async function findContactCandidates(customerId: any, contactQuery: strin
   }
 
   // Construct address_complete on JavaScript side for each contact
-  const cleanState = (s: any) => String(s || '').replace(/\s*\(.*/, '').split(/\s+/)[0].trim();
-  const cleanAddressField = (fieldVal: any, rawState: any, zip: any) => {
-    if (!fieldVal) return '';
-    const cleanZip = String(zip || '').trim();
-    const cleanStateVal = String(rawState || '').replace(/\s*\(.*/, '').trim();
-    const words = fieldVal.split(/[\s,]+/).map((w: any) => w.trim()).filter(Boolean);
-    const filtered = words.filter((word: any) => {
-      const wordLower = word.toLowerCase();
-      if (cleanZip && wordLower === cleanZip.toLowerCase()) return false;
-      if (['thailand', 'th', 'china', 'taiwan', 'malaysia', 'singapore', 'israel'].includes(wordLower)) return false;
-      if (cleanStateVal) {
-        const stateLower = cleanStateVal.toLowerCase();
-        if (stateLower.includes(wordLower) || wordLower.includes(stateLower)) return false;
-      }
-      return true;
-    });
-    return filtered.join(' ');
-  };
-
   const contactsWithAddr = dbContacts.map((c: any) => {
     const hasAddr = (c.invoice_street && c.invoice_street.trim()) || (c.invoice_state && c.invoice_state.trim());
     const target = hasAddr ? c : (companyDefaultAddr || c);
 
-    const stateCleaned = cleanState(target.invoice_state);
-    const districtCleaned = cleanAddressField(target.invoice_district, target.invoice_state, target.invoice_zip);
-    const subDistrictCleaned = cleanAddressField(target.invoice_sub_district, target.invoice_state, target.invoice_zip);
-
-    const addr = [
-      target.invoice_street,
-      districtCleaned,
-      subDistrictCleaned,
-      stateCleaned,
-      target.invoice_zip
-    ].map(s => String(s || '').trim()).filter(Boolean).join(' ');
+    const parts = buildAddressParts(target);
 
     return {
       ...c,
       invoice_street: target.invoice_street,
-      invoice_district: districtCleaned,
-      invoice_sub_district: subDistrictCleaned,
-      invoice_state: stateCleaned,
+      invoice_district: parts.district,
+      invoice_sub_district: parts.subDistrict,
+      invoice_state: parts.state,
       invoice_zip: target.invoice_zip,
-      address_complete: addr || '-'
+      address_complete: parts.full || '-'
     };
   });
 

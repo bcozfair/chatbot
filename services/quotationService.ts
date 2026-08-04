@@ -15,6 +15,7 @@ import {
 import { expandOptionalProducts, checkStockRules, StockViolation } from './productService.js';
 import { sumLineTotals, calcNetPrice } from '../utils/pricing.js';
 import { validateProductPriceWithPromotions } from '../utils/promotionValidator.js';
+import { buildThaiAddress } from '../utils/address.js';
 import {
   loadQuotationRules,
   resolveQuotationRule,
@@ -77,26 +78,6 @@ export function buildViolationText(violations: Violation[]): string {
   const lines = violations.map(v => ` - ${v.display_message}`).join('\n');
   return `❌ ระงับการเสนอราคา ตามเงื่อนไขด้านล่าง\nกรุณาแก้ไข หรือติดต่อแอดมิน\n\n${lines}`;
 }
-
-const cleanState = (s: any) => String(s || '').replace(/\s*\(.*/, '').split(/\s+/)[0].trim();
-
-const cleanAddressField = (fieldVal: any, rawState: any, zip: any) => {
-  if (!fieldVal) return '';
-  const cleanZip = String(zip || '').trim();
-  const cleanStateVal = String(rawState || '').replace(/\s*\(.*/, '').trim();
-  const words = fieldVal.split(/[\s,]+/).map((w: any) => w.trim()).filter(Boolean);
-  const filtered = words.filter((word: any) => {
-    const wordLower = word.toLowerCase();
-    if (cleanZip && wordLower === cleanZip.toLowerCase()) return false;
-    if (['thailand', 'th', 'china', 'taiwan', 'malaysia', 'singapore', 'israel'].includes(wordLower)) return false;
-    if (cleanStateVal) {
-      const stateLower = cleanStateVal.toLowerCase();
-      if (stateLower.includes(wordLower) || wordLower.includes(stateLower)) return false;
-    }
-    return true;
-  });
-  return filtered.join(' ');
-};
 
 /**
  * เพิ่มตัวนับของ key แล้วคืนลำดับใหม่แบบ atomic (row lock ผ่าน ON CONFLICT DO UPDATE)
@@ -616,19 +597,7 @@ export async function insertDraftQuotations(
           if (viewContact) addrSrc = viewContact;
         }
 
-        const stateCleaned = cleanState(addrSrc.invoice_state);
-        const districtCleaned = cleanAddressField(addrSrc.invoice_district, addrSrc.invoice_state, addrSrc.invoice_zip);
-        const subDistrictCleaned = cleanAddressField(addrSrc.invoice_sub_district, addrSrc.invoice_state, addrSrc.invoice_zip);
-
-        const addr = [
-          addrSrc.invoice_street,
-          districtCleaned,
-          subDistrictCleaned,
-          stateCleaned,
-          addrSrc.invoice_zip
-        ].map(s => String(s || '').trim()).filter(Boolean).join(' ');
-
-        contactAddress = addr || '';
+        contactAddress = buildThaiAddress(addrSrc);
       }
     } catch (err) {
       console.error('[insertDraftQuotations] Error fetching customer details:', err);
@@ -1408,11 +1377,8 @@ export async function updateQuotationCustomerSnapshot(
       if (row.contact_phone && !customerDetails.phone) customerDetails.phone = row.contact_phone;
       if (row.contact_email && !customerDetails.email) customerDetails.email = row.contact_email;
       if (row.contact_address && !customerDetails.address) {
-        const stateCleaned = cleanState(row.invoice_state);
-        const districtCleaned = cleanAddressField(row.invoice_district, row.invoice_state, row.invoice_zip);
-        const subDistrictCleaned = cleanAddressField(row.invoice_sub_district, row.invoice_state, row.invoice_zip);
-        const fullAddr = [row.contact_address, districtCleaned, subDistrictCleaned, stateCleaned, row.invoice_zip]
-          .map((s: any) => String(s || '').trim()).filter(Boolean).join(' ');
+        // query alias invoice_street มาเป็น contact_address จึงต้อง map กลับให้ helper อ่านชื่อคอลัมน์เดิมได้
+        const fullAddr = buildThaiAddress({ ...row, invoice_street: row.contact_address });
         if (fullAddr) customerDetails.address = fullAddr;
       }
       if (row.payment_terms) customerDetails.payment_terms = row.payment_terms;
@@ -1700,19 +1666,9 @@ export async function enrichQuotationData(quoteDb: any): Promise<any> {
             }
           }
 
-          const stateCleaned = cleanState(target.invoice_state);
-          const districtCleaned = cleanAddressField(target.invoice_district, target.invoice_state, target.invoice_zip);
-          const subDistrictCleaned = cleanAddressField(target.invoice_sub_district, target.invoice_state, target.invoice_zip);
-
-          const addr = [
-            target.invoice_street,
-            districtCleaned,
-            subDistrictCleaned,
-            stateCleaned,
-            target.invoice_zip
-          ].map(s => String(s || '').trim()).filter(Boolean).join(' ');
-          contactAddress = addr || '';
-          deliveryAddress = addr || '';
+          const addr = buildThaiAddress(target);
+          contactAddress = addr;
+          deliveryAddress = addr;
         } else if (contactNameQuery) {
           contactName = contactNameQuery;
         }
