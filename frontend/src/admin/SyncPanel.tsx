@@ -11,6 +11,7 @@ import {
   Save,
   Info,
   ChevronRight,
+  RotateCcw,
 } from 'lucide-react';
 
 const BRAND = '#009032';
@@ -52,6 +53,8 @@ interface SyncStatus {
   lastError: string | null;
   aborted: boolean;
   trigger: 'manual' | 'schedule' | null;
+  /** true = รอบที่กำลังรันเป็น full sync (กวาดใหม่ทั้งหมด) */
+  forceFull?: boolean;
   resources: ResourceStatus[];
   settings: SyncSettings;
 }
@@ -323,21 +326,37 @@ export function SyncPanel() {
     }
   }, [running, status?.lastError, fetchStatus, showToast]);
 
-  const triggerSync = async (resources: ResourceId[] | 'all') => {
+  const triggerSync = async (resources: ResourceId[] | 'all', full = false) => {
     if (!token || running) return;
     try {
       const res = await fetch('/api/admin/sync/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ resources }),
+        body: JSON.stringify({ resources, full }),
       });
       const result = await res.json();
       if (!res.ok) throw new Error(result.error || 'ไม่สามารถเริ่ม sync ได้');
-      showToast('เริ่ม sync ข้อมูลแล้ว...', 'success');
+      showToast(full ? 'เริ่ม full sync แล้ว (อาจใช้เวลานาน)...' : 'เริ่ม sync ข้อมูลแล้ว...', 'success');
       await fetchStatus({ silent: true });
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : 'เริ่ม sync ไม่สำเร็จ', 'error');
     }
+  };
+
+  /**
+   * full sync กวาดใหม่ทั้งหมด ใช้เวลานานกว่ารอบปกติมาก — ถามยืนยันก่อนเสมอ
+   * และรับได้ทีละ resource เท่านั้น (ฝั่ง server ก็ปฏิเสธถ้าส่งมาหลายรายการ)
+   */
+  const triggerFullSync = (id: ResourceId, label: string) => {
+    if (running) return;
+    if (
+      !window.confirm(
+        `Full sync ${label} จะล้าง cursor แล้วดึงข้อมูลใหม่ทั้งหมดจาก ERP ซึ่งใช้เวลานานกว่ารอบปกติมาก\n\nยืนยันที่จะเริ่มหรือไม่?`
+      )
+    ) {
+      return;
+    }
+    void triggerSync([id], true);
   };
 
   const saveSettings = async () => {
@@ -419,6 +438,8 @@ export function SyncPanel() {
   }
 
   const resources = status?.resources ?? [];
+  /** รอบที่กำลังรันอยู่เป็น full sync — ใช้เลือกว่าจะหมุน spinner ที่ปุ่มไหน */
+  const fullRun = running && !!status?.forceFull;
   const failing = resources.filter((r) => r.last_status && r.last_status !== 'success');
   const recovered = resources.filter(
     (r) => r.last_status === 'success' && r.last_error && isRecent(r.last_error_at)
@@ -440,6 +461,8 @@ export function SyncPanel() {
             <p className="text-[11px] text-slate-400 leading-tight truncate">สินค้า · ลูกค้า · ใบสั่งขาย</p>
           </div>
         </div>
+        {/* Sync ทั้งหมด = incremental เสมอ — full sync มีให้เฉพาะรายรายการด้านล่าง
+            (กวาดใหม่ทั้ง 3 resource พร้อมกันกินเวลานานเกินกว่าจะเป็นปุ่มกดพลาดได้) */}
         <button
           onClick={() => triggerSync('all')}
           disabled={running}
@@ -456,7 +479,7 @@ export function SyncPanel() {
         <div className="flex items-center gap-2 px-4 sm:px-5 py-1.5 bg-emerald-50 border-b border-emerald-100 text-emerald-800 text-[11px] font-medium">
           <Loader2 className="w-3 h-3 animate-spin shrink-0" />
           <span className="truncate">
-            กำลัง sync
+            {fullRun ? 'กำลัง full sync' : 'กำลัง sync'}
             {status?.currentResource
               ? `: ${resources.find((r) => r.id === status.currentResource)?.label ?? status.currentResource}`
               : '...'}
@@ -536,14 +559,34 @@ export function SyncPanel() {
                   </span>
                 </span>
               </div>
-              <button
-                onClick={() => triggerSync([r.id])}
-                disabled={running}
-                className="flex items-center gap-1 px-2.5 py-1 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-md text-[11px] font-semibold shadow-sm transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
-              >
-                {isCurrent ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-                Sync
-              </button>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  onClick={() => triggerSync([r.id])}
+                  disabled={running}
+                  className="flex items-center gap-1 px-2.5 py-1 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-md text-[11px] font-semibold shadow-sm transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isCurrent && !fullRun ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <RefreshCw className="w-3 h-3" />
+                  )}
+                  Sync
+                </button>
+                {/* Full sync — กวาดใหม่ทั้งหมด ใช้เวลานาน จึงทำเป็นปุ่มรองแยกจาก Sync ปกติ */}
+                <button
+                  onClick={() => triggerFullSync(r.id, r.label)}
+                  disabled={running}
+                  title={`Full sync ${r.label} — ล้าง cursor แล้วดึงข้อมูลใหม่ทั้งหมด (ใช้เวลานาน)`}
+                  className="flex items-center gap-1 px-2.5 py-1 bg-white hover:bg-amber-50 text-amber-700 border border-amber-200 rounded-md text-[11px] font-semibold shadow-sm transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isCurrent && fullRun ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <RotateCcw className="w-3 h-3" />
+                  )}
+                  Full
+                </button>
+              </div>
             </div>
           );
         })}

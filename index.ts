@@ -1707,13 +1707,21 @@ app.post('/api/admin/sync/run', adminAuthMiddleware, express.json(), async (req:
       return res.status(409).json({ error: 'มีการ sync กำลังทำงานอยู่ กรุณารอให้เสร็จก่อน' });
     }
 
-    const started = startSync(resources as any, 'manual');
+    // full=true → reset cursor แล้วกวาดใหม่ทั้งหมด (เท่ากับ npm run sync:xxx -- --full)
+    const forceFull = req.body?.full === true || req.body?.full === 'true';
+
+    // full sync ได้ทีละรายการเท่านั้น — กวาดใหม่พร้อมกันทั้ง 3 resource กินเวลานานเกินไป
+    if (forceFull && resources.length !== 1) {
+      return res.status(400).json({ error: 'full sync ทำได้ทีละรายการเท่านั้น' });
+    }
+
+    const started = startSync(resources as any, 'manual', { forceFull });
     if (!started) {
       return res.status(409).json({ error: 'ไม่สามารถเริ่ม sync ได้ (อาจกำลังทำงานอยู่)' });
     }
 
     const status = await getSyncStatus();
-    res.status(202).json({ message: 'เริ่ม sync แล้ว', ...status });
+    res.status(202).json({ message: forceFull ? 'เริ่ม full sync แล้ว' : 'เริ่ม sync แล้ว', ...status });
   } catch (err: any) {
     console.error('POST /api/admin/sync/run error:', err);
     res.status(500).json({ error: 'ไม่สามารถเริ่ม sync ได้' });

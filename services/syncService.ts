@@ -13,11 +13,14 @@ import { clearCustomerSearchCache } from './customerService.js';
 // ============================================================
 type ResourceId = 'products' | 'customers' | 'saleorders';
 
+/** ฟังก์ชัน sync ของแต่ละ resource — forceFull = reset cursor แล้วกวาดใหม่ทั้งหมดจาก since=1970 */
+type SyncFn = (opts?: { forceFull?: boolean }) => Promise<unknown>;
+
 interface ResourceDef {
   id: ResourceId;
   stateKey: string;
   label: string;
-  load: () => Promise<() => Promise<unknown>>;
+  load: () => Promise<SyncFn>;
 }
 
 const RESOURCES: Record<ResourceId, ResourceDef> = {
@@ -60,6 +63,8 @@ interface RunState {
   /** true = รอบล่าสุดถูกยกเลิกกลางคันเพราะติดต่อ gateway ไม่ได้ */
   aborted: boolean;
   trigger: 'manual' | 'schedule' | null;
+  /** true = รอบนี้เป็น full sync (reset cursor กวาดใหม่ทั้งหมด) */
+  forceFull: boolean;
 }
 
 const runState: RunState = {
@@ -71,6 +76,7 @@ const runState: RunState = {
   lastError: null,
   aborted: false,
   trigger: null,
+  forceFull: false,
 };
 
 export function isRunning() {
@@ -190,12 +196,23 @@ async function ensureSyncStateColumns() {
  * เริ่ม sync แบบ background (fire-and-forget) — คืนค่าทันที ไม่รอให้จบ
  * เพราะ sync สินค้าใช้เวลาหลายนาที (HTTP request ไม่ควรค้างรอ)
  * คืน false ถ้ามี sync กำลังรันอยู่แล้ว
+ *
+ * opts.forceFull = reset cursor ก่อนกวาด (เท่ากับ npm run sync:xxx -- --full)
+ * ใช้เวลานานกว่ารอบ incremental มาก จึงให้สั่งได้เฉพาะแบบ manual เท่านั้น
  */
-export function startSync(resources: ResourceId[], trigger: 'manual' | 'schedule'): boolean {
+export function startSync(
+  resources: ResourceId[],
+  trigger: 'manual' | 'schedule',
+  opts?: { forceFull?: boolean }
+): boolean {
   if (runState.running) return false;
 
   const list = resources.filter(isValidResource);
   if (list.length === 0) return false;
+
+  // full sync กินเวลานาน — อนุญาตเฉพาะ manual ทีละ resource
+  // (ห้าม scheduler สั่งเอง ไม่งั้นรอบอัตโนมัติทุก 15 นาทีจะกวาดใหม่ทั้งฐาน)
+  const forceFull = trigger === 'manual' && !!opts?.forceFull && list.length === 1;
 
   runState.running = true;
   runState.queue = [...list];
@@ -205,6 +222,7 @@ export function startSync(resources: ResourceId[], trigger: 'manual' | 'schedule
   runState.lastError = null;
   runState.aborted = false;
   runState.trigger = trigger;
+  runState.forceFull = forceFull;
 
   // ไม่ await — ปล่อยรันเบื้องหลัง
   void (async () => {
@@ -215,9 +233,11 @@ export function startSync(resources: ResourceId[], trigger: 'manual' | 'schedule
         runState.currentResource = id;
         const def = RESOURCES[id];
         try {
-          console.log(`[sync] เริ่ม sync ${def.label} (${id}) — trigger=${trigger}`);
+          console.log(
+            `[sync] เริ่ม sync ${def.label} (${id}) — trigger=${trigger}${forceFull ? ' mode=full' : ''}`
+          );
           const fn = await def.load();
-          await fn();
+          await fn({ forceFull });
           console.log(`[sync] sync ${def.label} เสร็จแล้ว`);
           await recordResult(id, 'success');
         } catch (err: any) {
@@ -467,6 +487,7 @@ export async function getStatus() {
     lastError: runState.lastError,
     aborted: runState.aborted,
     trigger: runState.trigger,
+    forceFull: runState.forceFull,
     resources,
     settings,
   };
