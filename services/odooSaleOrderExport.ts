@@ -106,6 +106,23 @@ function clean(value: any): string {
 }
 
 /**
+ * ชื่อลูกค้า/ผู้ติดต่อต้องส่งดิบ ๆ ห้ามตัดช่องว่างหัวท้าย
+ *
+ * Odoo จับคู่ res.partner ด้วยการเทียบชื่อแบบตรงตัวทุกอักขระ และชื่อที่ลงท้ายด้วยช่องว่างมีอยู่จริง
+ * ในระบบ (ฝั่ง master เจอ 17,666 แถวในชื่อผู้ติดต่อ) พอ clean() .trim() ทิ้ง ค่าที่ส่งออกจะกลายเป็น
+ * คนละชื่อกับที่ Odoo เก็บ แล้วนำเข้าไม่ผ่านทั้งใบ — เคสที่เจอคือ "คุณแนน " ของ บริษัท ฟิลด์ เทส
+ * เซอร์วิส จำกัด, "คุณชาตรี " ของ เอซี เมคคาทรอนิค, "คุณกษมา " ของ ทริปเปิ้ลคิวแฟชั่น และ
+ * "คุณวรฐ " ของ พลัส เทค
+ *
+ * ยังคงตัด '-' และค่าที่มีแต่ช่องว่างให้เป็นเซลล์ว่างเหมือนเดิม เพราะนั่นคือ "ไม่มีข้อมูล" ไม่ใช่ชื่อ
+ */
+function cleanName(value: any): string {
+  const s = String(value ?? '');
+  const t = s.trim();
+  return t === '' || t === '-' ? '' : s;
+}
+
+/**
  * วันเวลาตามโซน Asia/Bangkok รูปแบบ 'YYYY-MM-DD HH:mm:ss'
  *
  * updated_at เป็น timestamptz — ถ้าปล่อยให้ toISOString() จะได้เวลา UTC ซึ่งเลื่อนไป 7 ชั่วโมง
@@ -169,8 +186,8 @@ export function buildOdooSaleOrderRows(
     const cust = quote.customer_details || {};
     // snapshot ควรเก็บเฉพาะชื่อบริษัท แต่ข้อมูลเก่าอาจปนเป็น "company | contact" — split แบบเดียวกับ
     // enrichQuotationData() (services/quotationService.ts) เพื่อให้ชื่อที่ส่งออกตรงกับที่หน้าจอโชว์
-    const company = clean(String(cust.customer_name ?? '').split(' | ')[0]);
-    const contact = clean(cust.contact_name);
+    const company = cleanName(String(cust.customer_name ?? '').split(' | ')[0]);
+    const contact = cleanName(cust.contact_name);
     // ช่อง contact ของ Odoo คือ res.partner ลูก ซึ่ง display name = "บริษัท, ผู้ติดต่อ"
     // ต่อชื่อตาม template เสมอแม้ 2 ชื่อจะซ้ำกัน (ลูกค้าบุคคลจะได้ "ก, ก" — ตั้งใจให้เป็นแบบนั้น)
     // ใบที่ยังไม่มีชื่อผู้ติดต่อใส่แค่ชื่อบริษัท ไม่ต้องมี ", " ห้อยท้าย

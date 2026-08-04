@@ -102,6 +102,9 @@ let missingPaymentTerm = 0;
 let badContact = 0;
 let badNote = 0;
 let badSuffix = 0;
+// ชื่อที่มีช่องว่างหัว/ท้ายใน snapshot ต้องไปถึงไฟล์แบบครบตัวอักษร ไม่โดน trim ระหว่างทาง
+let edgeSpaceNames = 0;
+let edgeSpaceTrimmed = 0;
 
 for (const quote of quotesWithItems) {
   const slice = rows.slice(cursor, cursor + quote.item_details.length);
@@ -122,14 +125,31 @@ for (const quote of quotesWithItems) {
   if (!first.payment_term_id) missingPaymentTerm++;
 
   // C: contact ต้องเป็น "บริษัท, ผู้ติดต่อ" ตาม template — ต่อชื่อเสมอแม้ 2 ชื่อซ้ำกัน
-  const contactName = String(quote.customer_details?.contact_name ?? '').trim();
-  const hasContact = contactName !== '' && contactName !== '-';
+  // ชื่อต้องคงช่องว่างหัวท้ายไว้ดิบ ๆ (ห้าม .trim()) เพราะ Odoo เทียบชื่อ res.partner แบบตรงตัวทุกอักขระ
+  const rawContactName = String(quote.customer_details?.contact_name ?? '');
+  const hasContact = rawContactName.trim() !== '' && rawContactName.trim() !== '-';
+  const contactName = hasContact ? rawContactName : '';
   const expectedContact = hasContact && first.partner_id
     ? `${first.partner_id}, ${contactName}`
-    : (first.partner_id || (hasContact ? contactName : ''));
+    : (first.partner_id || contactName);
   if (first.contact !== expectedContact) {
     badContact++;
     console.log(`   ✗ ${quote.quotation_no}: contact ไม่ตรงรูปแบบ (ได้ "${first.contact}" คาด "${expectedContact}")`);
+  }
+
+  // กันการถดถอยของบั๊กที่ทำให้นำเข้า Odoo ไม่ผ่าน: ชื่อผู้ติดต่ออย่าง "คุณแนน " (มีช่องว่างท้าย)
+  // เคยโดน .trim() ตอน export แล้วกลายเป็นคนละ res.partner กับที่ Odoo เก็บ ทั้งใบจึงนำเข้าไม่ได้
+  const rawCompanyName = String(quote.customer_details?.customer_name ?? '').split(' | ')[0];
+  for (const [label, raw, got] of [
+    ['ชื่อบริษัท', rawCompanyName, first.partner_id],
+    ['ชื่อผู้ติดต่อ', rawContactName, first.contact],
+  ] as const) {
+    if (raw.trim() === '' || raw.trim() === '-' || raw === raw.trim()) continue;
+    edgeSpaceNames++;
+    if (!got.includes(raw)) {
+      edgeSpaceTrimmed++;
+      console.log(`   ✗ ${quote.quotation_no}: ${label}โดนตัดช่องว่าง — snapshot "${raw}" แต่ไฟล์ได้ "${got}"`);
+    }
   }
 
   // H/J: ชื่อเซลล์ต้องมีสังกัดห้อยท้ายตามคำนำหน้าเลขที่ใบ และต้องเป็นค่าเดียวกันทั้ง 2 ช่อง
@@ -164,6 +184,8 @@ ok('ทุกใบผูกลูกค้าแล้ว (partner_id ไม่
   missingCompany ? `(ว่าง ${missingCompany} ใบ)` : '');
 ok('ช่อง contact เป็นรูปแบบ "บริษัท, ผู้ติดต่อ"', badContact === 0,
   badContact ? `(พลาด ${badContact} ใบ)` : '');
+ok('ชื่อลูกค้า/ผู้ติดต่อคงช่องว่างหัวท้ายไว้ครบ (ไม่โดน trim)', edgeSpaceTrimmed === 0,
+  edgeSpaceTrimmed ? `(โดนตัด ${edgeSpaceTrimmed} ชื่อ)` : `(ตรวจ ${edgeSpaceNames} ชื่อที่มีช่องว่างหัวท้าย)`);
 ok('ช่อง note ตรงกับหมายเหตุการรับประกันของใบ', badNote === 0, badNote ? `(พลาด ${badNote} ใบ)` : '');
 ok('ชื่อเซลล์ (H/J) มีสังกัด (PM)/(THT) ห้อยท้ายตามเลขที่ใบ', badSuffix === 0,
   badSuffix ? `(พลาด ${badSuffix} ใบ)` : '');
