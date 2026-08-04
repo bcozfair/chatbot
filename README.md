@@ -112,7 +112,7 @@ user_id, message_id, type, content, reply_token, reply_content, created_at
 - ฟิลด์: id, name, customer_id, mobile, phone, email, invoice_address
 
 **`products`** — ข้อมูลสินค้า PK: `product_template_id`
-- ฟิลด์สำคัญ: model (= code), name, brand, series, sales_price (= price), minimum_sales_price, actual_quantity (= stock), product_sub_category (= category), production, sales_description
+- ฟิลด์สำคัญ: model (= code), name, brand, series, sales_price (= price), minimum_sales_price, quantity_on_hand_unreserved (= stock, ของว่างขายได้จริงหลังหักที่ถูกจอง — ทุกจุดในระบบใช้ตัวนี้), product_sub_category (= category), production, sales_description
 
 **`sale_orders`** — ประวัติใบสั่งซื้อ PK: `(order_reference, model_code, model)`
 - ฟิลด์สำคัญ: salesperson, salesperson_id, salesperson_phone, employee_quotations, employee_quotations_phone, customer_sale_area, sales_team

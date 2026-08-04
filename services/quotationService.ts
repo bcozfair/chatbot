@@ -40,7 +40,7 @@ export interface Violation {
   min_price?: number;
   min_order_qty?: number;
   qty?: number;
-  actual_quantity?: number;
+  quantity_on_hand_unreserved?: number;
 }
 
 /** สร้างข้อความพร้อมโชว์จาก violation — ถ้อยคำเดียวของทั้งระบบ (server เป็น source of truth) */
@@ -258,7 +258,7 @@ export async function buildItemSnapshots(rawItems: any[], executor: DbExecutor =
     let dbProduct: any = null;
     try {
       const prodRes = await executor.query(
-        'SELECT product_template_id AS product_id, internal_reference, name, sales_description, brand, series, production FROM products WHERE model = $1 ORDER BY actual_quantity DESC LIMIT 1',
+        'SELECT product_template_id AS product_id, internal_reference, name, sales_description, brand, series, production FROM products WHERE model = $1 ORDER BY quantity_on_hand_unreserved DESC LIMIT 1',
         [code]
       );
       dbProduct = prodRes.rows[0];
@@ -384,7 +384,7 @@ export async function previewQuotationDeliveryDays(
   if (stockKeys.length > 0) {
     try {
       const { rows } = await pool.query(
-        'SELECT model AS code, actual_quantity AS stock FROM products WHERE model = ANY($1)',
+        'SELECT model AS code, quantity_on_hand_unreserved AS stock FROM products WHERE model = ANY($1)',
         [stockKeys]
       );
       rows.forEach((p: any) => {
@@ -734,7 +734,7 @@ export async function getProductInfo(code: string, executor: DbExecutor = pool):
         product_template_id
       FROM products
       WHERE model = $1
-      ORDER BY actual_quantity DESC
+      ORDER BY quantity_on_hand_unreserved DESC
       LIMIT 1
     `, [code]);
     return rows[0] || null;
@@ -990,7 +990,8 @@ export async function validateQuotationItems(
     for (const e of stockErrors) {
       const v: Omit<Violation, 'display_message'> = {
         type: 'OUT_OF_STOCK', model: e.model, warn_msg: e.warn_msg,
-        is_optional: e.is_optional, linked_to_model: e.linked_to_model, actual_quantity: e.actual_quantity
+        is_optional: e.is_optional, linked_to_model: e.linked_to_model,
+        quantity_on_hand_unreserved: e.quantity_on_hand_unreserved
       };
       violations.push({ ...v, display_message: buildViolationDisplay(v) });
     }
@@ -1512,7 +1513,7 @@ export async function enrichQuotationData(quoteDb: any): Promise<any> {
       quoteCompany = quoteDb.quotation_no?.toUpperCase()?.startsWith('QT') ? 'THT' : 'PM';
     }
 
-    // ดึงสต๊อกสด (actual_quantity) จากตารางสินค้า เพื่อให้คำเตือน "สินค้าคงเหลือ" ใน PDF
+    // ดึงสต๊อกสด (quantity_on_hand_unreserved = ของว่างขายได้จริง) จากตารางสินค้า เพื่อให้คำเตือน "สินค้าคงเหลือ" ใน PDF
     // ตรงกับที่แสดงใน flex message — snapshot ไม่ได้เก็บ stock ไว้ จึงต้อง query สดตอน enrich
     const stockMap: Record<string, number> = {};
     const stockKeys = itemDetails
@@ -1521,14 +1522,14 @@ export async function enrichQuotationData(quoteDb: any): Promise<any> {
     if (stockKeys.length > 0) {
       try {
         const { rows: stockRows } = await pool.query(
-          `SELECT model AS code, actual_quantity AS stock
+          `SELECT model AS code, quantity_on_hand_unreserved AS stock
              FROM products
             WHERE model = ANY($1)`,
           [stockKeys]
         );
         stockRows.forEach((p: any) => {
           const s = p.stock !== undefined && p.stock !== null ? Number(p.stock) : 0;
-          // เผื่อมีหลายแถวชื่อ model เดียวกัน ให้ใช้สต๊อกสูงสุด (เหมือน ORDER BY actual_quantity DESC)
+          // เผื่อมีหลายแถวชื่อ model เดียวกัน ให้ใช้สต๊อกสูงสุด (เหมือน ORDER BY quantity_on_hand_unreserved DESC)
           if (stockMap[p.code] === undefined || s > stockMap[p.code]) {
             stockMap[p.code] = s;
           }
@@ -1726,7 +1727,7 @@ export async function enrichQuotationData(quoteDb: any): Promise<any> {
         const { rows: productsData } = await pool.query(
           `SELECT 
              model AS code, 
-             actual_quantity AS stock, 
+             quantity_on_hand_unreserved AS stock,
              model, 
              product_sub_category, 
              sales_description, 

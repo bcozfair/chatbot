@@ -119,7 +119,7 @@ function buildProductSelectionMessages(slot: any, slotIndex: number, userId: str
   // ปุ่มเลือกรุ่น: model เด่นชัด (ตัวใหญ่/น้ำเงิน) กว่าราคา (เขียว) และจำนวนคงเหลือ (เทา/แดงถ้าหมด)
   const optionBoxes: any[] = (slot.candidates || []).map((c: any, i: number) => {
     const price = Number(c.sales_price || 0).toLocaleString();
-    const stock = Number(c.actual_quantity || 0);
+    const stock = Number(c.quantity_on_hand_unreserved || 0);
     const outOfStock = stock <= 0;
     return {
       type: 'box',
@@ -1688,7 +1688,7 @@ export async function handleEvent(event: any): Promise<any> {
             const cands = (result.candidates || []).slice(0, 5).map((c: any) => ({
               model: c.model,
               sales_price: c.sales_price,
-              actual_quantity: c.actual_quantity,
+              quantity_on_hand_unreserved: c.quantity_on_hand_unreserved,
               product_template_id: c.product_template_id,
               name: c.name,
               brand: c.brand,
@@ -1819,7 +1819,7 @@ export async function handleEvent(event: any): Promise<any> {
           if (result.found && result.product) {
             const dbProduct = result.product;
             const price = Number(dbProduct.sales_price) || 0;
-            const stock = Number(dbProduct.actual_quantity) || 0;
+            const stock = Number(dbProduct.quantity_on_hand_unreserved) || 0;
             infoReport += `ข้อมูลสินค้า [${dbProduct.model}]:\n`;
             infoReport += `📂 หมวดหมู่: ${dbProduct.product_category}\n`;
             infoReport += `💵 ราคา: ${price.toLocaleString()} บาท\n`;

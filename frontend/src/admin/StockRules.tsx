@@ -31,7 +31,7 @@ interface ProductStockRule {
   name: string;
   brand?: string;
   production?: string;
-  actual_quantity?: number;
+  quantity_on_hand_unreserved?: number;
   created_at: string;
   updated_at: string;
   internal_reference: string;
@@ -44,7 +44,7 @@ interface ProductSearchResult {
   internal_reference?: string;
   brand?: string;
   production?: string;
-  actual_quantity?: number;
+  quantity_on_hand_unreserved?: number;
 }
 
 interface ProductionOption {

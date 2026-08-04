@@ -670,7 +670,7 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
   if (productCodes.length > 0) {
     try {
       const { rows: productsData } = await pool.query(
-        'SELECT model AS code, actual_quantity AS stock, minimum_sales_price FROM products WHERE model = ANY($1)',
+        'SELECT model AS code, quantity_on_hand_unreserved AS stock, minimum_sales_price FROM products WHERE model = ANY($1)',
         [productCodes]
       );
 

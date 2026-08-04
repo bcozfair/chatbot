@@ -354,7 +354,6 @@ app.get('/api/products/search', async (req: any, res: any) => {
         p.model,
         p.sales_description,
         p.minimum_sales_price,
-        p.actual_quantity,
         p.product_template_id AS product_id,
         p.internal_reference,
         p.brand,
@@ -364,7 +363,7 @@ app.get('/api/products/search', async (req: any, res: any) => {
       WHERE (p.model ILIKE $1 OR p.name ILIKE $1 OR p.internal_reference ILIKE $1 OR p.brand ILIKE $1 OR p.product_template_id::text = $2)
         AND (p.production IS NULL OR LOWER(REPLACE(p.production, ' ', '')) NOT LIKE '%buytosell%')
         AND p.is_system_item = false
-      ORDER BY p.actual_quantity DESC
+      ORDER BY p.quantity_on_hand_unreserved DESC
       LIMIT $3
     `, [searchPattern, qTrim, dbLimit]);
 
@@ -509,7 +508,7 @@ app.get('/api/products/:code/blocked', async (req: any, res: any) => {
 
     // ดึงข้อมูลสินค้า
     const { rows } = await pool.query(
-      'SELECT model AS code, brand, series, production FROM products WHERE model = $1 ORDER BY actual_quantity DESC LIMIT 1',
+      'SELECT model AS code, brand, series, production FROM products WHERE model = $1 ORDER BY quantity_on_hand_unreserved DESC LIMIT 1',
       [code]
     );
     const prod = rows[0] || null;
@@ -615,7 +614,7 @@ app.post('/api/quotation/draft-cart', express.json(), async (req: any, res: any)
     for (const item of items) {
       const codeKey = item.model || item.product_code;
       const { rows } = await pool.query(
-        'SELECT * FROM products WHERE model = $1 ORDER BY actual_quantity DESC LIMIT 1',
+        'SELECT * FROM products WHERE model = $1 ORDER BY quantity_on_hand_unreserved DESC LIMIT 1',
         [codeKey]
       );
       const prod = rows[0] || null;
@@ -2732,7 +2731,7 @@ app.get('/api/admin/stock-rules', adminAuthMiddleware, async (req: any, res: any
         p.name,
         p.brand,
         p.production,
-        p.actual_quantity,
+        p.quantity_on_hand_unreserved,
         p.product_template_id AS product_id
       FROM product_stock_rules sr
       LEFT JOIN products p ON sr.internal_reference = p.internal_reference
@@ -2799,7 +2798,7 @@ app.get('/api/admin/stock-rules/product-lookup', adminAuthMiddleware, async (req
 
     params.push(limit);
     const { rows } = await pool.query(
-      `SELECT product_id, model, name, internal_reference, brand, production, actual_quantity
+      `SELECT product_id, model, name, internal_reference, brand, production, quantity_on_hand_unreserved
        FROM (
          SELECT DISTINCT ON (COALESCE(NULLIF(TRIM(p.internal_reference), ''), 'PID:' || p.product_template_id))
            p.product_template_id AS product_id,
@@ -2808,7 +2807,7 @@ app.get('/api/admin/stock-rules/product-lookup', adminAuthMiddleware, async (req
            p.internal_reference,
            p.brand,
            p.production,
-           p.actual_quantity
+           p.quantity_on_hand_unreserved
          FROM products p
          WHERE ${where}
          ORDER BY COALESCE(NULLIF(TRIM(p.internal_reference), ''), 'PID:' || p.product_template_id), p.product_template_id

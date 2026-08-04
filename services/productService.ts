@@ -16,7 +16,7 @@ export interface Product {
   product_category: string;
   product_sub_category: string;
   production: string;
-  actual_quantity: number;
+  quantity_on_hand_unreserved: number;
   unit_of_measure: string;
   sales_description: string;
   // virtual fields จาก query
@@ -174,7 +174,7 @@ export async function findProduct(codeRaw: any, chatContext?: string): Promise<F
     let report = `⚠️ พบหลายรุ่นที่ตรงกับ "${codeTrimmed}" กรุณาระบุเพิ่มเติม\n`;
     top3.forEach((p) => {
       const price = Number(p.sales_price || 0).toLocaleString();
-      const stock = Number(p.actual_quantity || 0);
+      const stock = Number(p.quantity_on_hand_unreserved || 0);
       report += `📌 รุ่น: ${p.model}\n`;
       report += `💵 ฿${price}  (📦คงเหลือ ${stock})\n`;
       report += `-------------------------------------\n`;
@@ -230,7 +230,7 @@ async function exactMatch(qNorm: string, codeTrimmed: string): Promise<Product |
           LOWER(REGEXP_REPLACE(COALESCE(model, ''), '[\\s,\\(\\)]', '', 'g')) = $1
           OR LOWER(REGEXP_REPLACE(COALESCE(name,  ''), '[\\s,\\(\\)]', '', 'g')) = $1
         )
-      ORDER BY actual_quantity DESC
+      ORDER BY quantity_on_hand_unreserved DESC
       LIMIT 1
       `,
       [qNorm]
@@ -286,7 +286,7 @@ async function multiTokenAndSearch(
       WHERE ${conditions.join(' AND ')}
         AND production NOT ILIKE '%buytosell%'
         AND is_system_item = false
-      ORDER BY actual_quantity DESC
+      ORDER BY quantity_on_hand_unreserved DESC
       LIMIT 10
     `;
 
@@ -347,7 +347,7 @@ async function numericCodeSearch(
       )
       AND production NOT ILIKE '%buytosell%'
       AND is_system_item = false
-      ORDER BY actual_quantity DESC
+      ORDER BY quantity_on_hand_unreserved DESC
       LIMIT 10
       `,
       [`%${numericCode}%`]
@@ -567,7 +567,7 @@ async function fuzzySearch(codeTrimmed: string, qNorm: string, chatContext?: str
   let report = `⚠️ รุ่นใกล้เคียง "${codeTrimmed}"\n`;
   top3.forEach((p) => {
     const price = Number(p.sales_price || 0).toLocaleString();
-    const stock = Number(p.actual_quantity || 0);
+    const stock = Number(p.quantity_on_hand_unreserved || 0);
     report += `📌 รุ่น: ${p.model}\n`;
     report += `💵 ฿${price}  (📦คงเหลือ ${stock})\n`;
     report += `-------------------------------------\n`;
@@ -729,8 +729,8 @@ async function legacySearch(codeTrimmed: string, qNorm: string): Promise<FindPro
   if (exactRows.length > 0) {
     exactRows.sort(
       (a: any, b: any) =>
-        (Number(b.actual_quantity) || 0) -
-        (Number(a.actual_quantity) || 0)
+        (Number(b.quantity_on_hand_unreserved) || 0) -
+        (Number(a.quantity_on_hand_unreserved) || 0)
     );
     return { found: true, product: exactRows[0], candidates: [], report: '' };
   }
@@ -766,7 +766,7 @@ async function legacySearch(codeTrimmed: string, qNorm: string): Promise<FindPro
     let report = `⚠️ รุ่นใกล้เคียง "${codeTrimmed}"\n`;
     top3.forEach((p: any) => {
       const price = Number(p.sales_price || 0).toLocaleString();
-      const stock = Number(p.actual_quantity || 0);
+      const stock = Number(p.quantity_on_hand_unreserved || 0);
       report += `📌 รุ่น: ${p.model}\n`;
       report += `💵 ฿${price}  (📦คงเหลือ ${stock})\n`;
       report += `-------------------------------------\n`;
@@ -785,7 +785,7 @@ export interface StockViolation {
   type: 'OUT_OF_STOCK';
   model: string;
   name: string;
-  actual_quantity: number;        // ของว่างขายได้จริง (unreserved) ณ ตอนตรวจ — ชื่อ field คงไว้เพื่อความเข้ากันได้
+  quantity_on_hand_unreserved: number;  // ของว่างขายได้จริง (หักที่ถูกจองแล้ว) ณ ตอนตรวจ
   warn_msg: string;
   is_optional?: boolean;          // true = หมดเพราะ optional แนบมา
   linked_to_model?: string;       // ชื่อ trigger product
@@ -801,7 +801,7 @@ export interface RuleStock {
 /**
  * ตัดสินว่าบรรทัดนี้ต้องถูกระงับหรือไม่ — ตรรกะ pure ไม่แตะ DB (เทสได้ตรง ๆ)
  *
- * เดิมเช็คแบบ "มี/ไม่มี" (actual_quantity <= 0) ทำให้ของมี 1 ชิ้นแต่สั่ง 2 ชิ้นหลุดกฎ
+ * เดิมเช็คแบบ "มี/ไม่มี" (สต๊อก <= 0) ทำให้ของมี 1 ชิ้นแต่สั่ง 2 ชิ้นหลุดกฎ
  * ตอนนี้เทียบ "ของว่างขายได้จริง (unreserved)" กับ "จำนวนที่สั่ง" → ของไม่พอส่งเมื่อไหร่ก็บล็อก
  * (ยืนยันกับฝ่ายขายแล้วว่านิยาม "หมด" คือ unreserved ไม่พอกับจำนวนที่สั่ง)
  */
@@ -817,7 +817,7 @@ export function evaluateStockViolation(
     type: 'OUT_OF_STOCK' as const,
     model: stock.model,
     name: stock.name,
-    actual_quantity: available,
+    quantity_on_hand_unreserved: available,
     warn_msg: available <= 0
       ? 'สินค้าหมดสต็อก'
       : `ของว่างขายได้ ${available} ชิ้น ไม่พอกับจำนวนที่สั่ง ${requested} ชิ้น`,
@@ -938,7 +938,7 @@ export async function resolveOptionalProductsFor(product: any): Promise<any[]> {
         model: optProduct.model,
         name: optProduct.name,
         price: optProduct.sales_price,
-        stock: optProduct.actual_quantity ?? 0,
+        stock: optProduct.quantity_on_hand_unreserved ?? 0,
         internal_reference: optProduct.internal_reference,
         brand: optProduct.brand,
       });
