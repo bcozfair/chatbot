@@ -219,7 +219,7 @@ CREATE MATERIALIZED VIEW public.customers_data_view AS
 WITH latest_so AS (
   SELECT DISTINCT ON (contact_id)
     contact_id, customer_name, customer_reference, customer_tax_id,
-    contact_name, contact_mobile, contact_phone, customer_sale_area, salesperson,
+    contact_name, contact_mobile, contact_phone, customer_sale_area, salesperson, sales_team,
     invoice_street, invoice_district, invoice_sub_district, invoice_state, invoice_zip
   FROM public.sale_orders
   WHERE contact_id IS NOT NULL AND contact_id > 0
@@ -236,6 +236,7 @@ base AS (
     public.clean_text(c.customer_payment_terms)  AS customer_payment_terms,
     public.clean_text(c.customer_sale_area)      AS customer_sale_area,
     public.clean_text(c.salesperson)             AS salesperson,
+    public.clean_text(c.sales_team)              AS sales_team,
     public.clean_text(c.customer_type)           AS customer_type,
     public.clean_text(c.phone)                   AS phone,
     public.clean_text(c.mobile)                  AS mobile,
@@ -263,6 +264,7 @@ base AS (
     comp.customer_payment_terms                  AS customer_payment_terms,
     public.clean_text(s.customer_sale_area)      AS customer_sale_area,
     public.clean_text(s.salesperson)             AS salesperson,
+    public.clean_text(s.sales_team)              AS sales_team,
     comp.customer_type                           AS customer_type,
     comp.phone                                   AS phone,
     comp.mobile                                  AS mobile,
@@ -304,7 +306,7 @@ SELECT
   b.company_id, b.contact_id, b.source,
   b.customer_name, b.customer_reference, b.customer_tax_id, b.customer_payment_terms,
   COALESCE(b.customer_sale_area, comp.customer_sale_area)         AS customer_sale_area,
-  b.salesperson, b.customer_type, b.phone, b.mobile, b.email,
+  b.salesperson, b.sales_team, b.customer_type, b.phone, b.mobile, b.email,
   b.contact_name, b.contact_mobile, b.contact_phone, b.contact_email,
   b.invoice_street,
   COALESCE(b.invoice_district, comp.invoice_district)            AS invoice_district,

@@ -152,13 +152,11 @@ for (const quote of quotesWithItems) {
     }
   }
 
-  // H/J: ชื่อเซลล์ต้องมีสังกัดห้อยท้ายตามคำนำหน้าเลขที่ใบ และต้องเป็นค่าเดียวกันทั้ง 2 ช่อง
+  // H: ชื่อเซลล์ต้องมีสังกัดห้อยท้ายตามคำนำหน้าเลขที่ใบ
   const expectedSuffix = quote.quotation_no.toUpperCase().startsWith('QT') ? '(THT)' : '(PM)';
-  if (first.salesperson !== first.employee_quotation_id ||
-      (first.salesperson && !first.salesperson.endsWith(expectedSuffix))) {
+  if (first.salesperson && !first.salesperson.endsWith(expectedSuffix)) {
     badSuffix++;
-    console.log(`   ✗ ${quote.quotation_no}: ชื่อเซลล์ไม่ลงท้าย ${expectedSuffix}` +
-      ` (H="${first.salesperson}" J="${first.employee_quotation_id}")`);
+    console.log(`   ✗ ${quote.quotation_no}: ชื่อเซลล์ไม่ลงท้าย ${expectedSuffix} (H="${first.salesperson}")`);
   }
 
   // L: note ต้องเป็นหมายเหตุการรับประกันชุดเดียวกับที่ PDF พิมพ์
@@ -187,8 +185,12 @@ ok('ช่อง contact เป็นรูปแบบ "บริษัท, ผ
 ok('ชื่อลูกค้า/ผู้ติดต่อคงช่องว่างหัวท้ายไว้ครบ (ไม่โดน trim)', edgeSpaceTrimmed === 0,
   edgeSpaceTrimmed ? `(โดนตัด ${edgeSpaceTrimmed} ชื่อ)` : `(ตรวจ ${edgeSpaceNames} ชื่อที่มีช่องว่างหัวท้าย)`);
 ok('ช่อง note ตรงกับหมายเหตุการรับประกันของใบ', badNote === 0, badNote ? `(พลาด ${badNote} ใบ)` : '');
-ok('ชื่อเซลล์ (H/J) มีสังกัด (PM)/(THT) ห้อยท้ายตามเลขที่ใบ', badSuffix === 0,
+ok('ชื่อเซลล์ (H) มีสังกัด (PM)/(THT) ห้อยท้ายตามเลขที่ใบ', badSuffix === 0,
   badSuffix ? `(พลาด ${badSuffix} ใบ)` : '');
+// J ต้องว่างทุกแถวรวมแถวหัวใบ ไม่ใช่แค่แถวต่อเนื่อง — เช็คจาก rows ทั้งก้อนกันหลุด
+const filledEmployeeQuotationId = rows.filter(r => r.employee_quotation_id !== '').length;
+ok('ช่อง employee_quotation_id (J) เป็นเซลล์ว่างทุกแถว', filledEmployeeQuotationId === 0,
+  filledEmployeeQuotationId ? `(มีค่า ${filledEmployeeQuotationId} แถว)` : `(ตรวจ ${rows.length} แถว)`);
 if (missingQuotationNo > 0) {
   console.log(`   ⚠️  ${missingQuotationNo} ใบไม่มีเลขที่ใบเสนอราคา (ช่อง name จะว่าง — Odoo จะออกเลขให้เอง)`);
 }

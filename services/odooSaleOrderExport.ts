@@ -78,7 +78,8 @@ export interface OdooSoRow {
   payment_term_id: string;
   salesperson: string;
   sales_team: string;
-  employee_quotation_id: string;
+  /** J: ปล่อยเป็นเซลล์ว่างเสมอ — คอลัมน์ยังต้องมีอยู่ให้ครบ 18 ช่องตาม template */
+  employee_quotation_id: '';
   source_id: string;
   /** หมายเหตุการรับประกันของทั้งใบ (ข้อความเดียวกับท้าย PDF) */
   note: string;
@@ -192,8 +193,8 @@ export function buildOdooSaleOrderRows(
     // ต่อชื่อตาม template เสมอแม้ 2 ชื่อจะซ้ำกัน (ลูกค้าบุคคลจะได้ "ก, ก" — ตั้งใจให้เป็นแบบนั้น)
     // ใบที่ยังไม่มีชื่อผู้ติดต่อใส่แค่ชื่อบริษัท ไม่ต้องมี ", " ห้อยท้าย
     const contactDisplay = company && contact ? `${company}, ${contact}` : (company || contact);
-    // ทั้ง Salesperson และ employee_quotation_id มาจาก saleperson ตัวเดียวกันตามชีต "คำอธิบาย"
-    // และต้องมีสังกัดห้อยท้ายเพราะเซลล์คนเดียวกันเป็นคนละ user ใน Odoo ของ PM กับ THT
+    // ช่อง Salesperson ต้องมีสังกัดห้อยท้าย เพราะเซลล์คนเดียวกันเป็นคนละ user ใน Odoo ของ PM กับ THT
+    // (ช่อง J employee_quotation_id ปล่อยว่างเสมอ ดูหมายเหตุตอน push แถว)
     const quotationNo = clean(quote.quotation_no);
     const salesperson = withCompanySuffix(
       clean(quote.employee_details?.saleperson) || clean(quote.salesperson_name),
@@ -211,7 +212,6 @@ export function buildOdooSaleOrderRows(
       payment_term_id: clean(cust.payment_terms),
       salesperson,
       sales_team: clean(quote.salesperson_branch),
-      employee_quotation_id: salesperson,
       source_id: config.sourceId,
       note: warrantyNoteText(resolveMinWarrantyDisplay(items)),
     };
@@ -230,7 +230,8 @@ export function buildOdooSaleOrderRows(
         payment_term_id: isFirst ? header.payment_term_id : '',
         salesperson: isFirst ? header.salesperson : '',
         sales_team: isFirst ? header.sales_team : '',
-        employee_quotation_id: isFirst ? header.employee_quotation_id : '',
+        // J: เว้นว่างทุกแถว รวมถึงแถวหัวใบ — ให้ Odoo กรอกเลขที่ใบเสนอราคาของพนักงานเอง
+        employee_quotation_id: '',
         source_id: isFirst ? header.source_id : '',
         note: isFirst ? header.note : '',
         product: clean(item?.internal_reference) || clean(item?.model),
