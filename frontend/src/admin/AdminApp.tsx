@@ -51,7 +51,7 @@ const NAV_ITEMS: { key: MainTab; label: string; icon: typeof LayoutDashboard }[]
   { key: 'dashboard', label: 'แผงควบคุม', icon: LayoutDashboard },
   { key: 'quotations', label: 'ประวัติใบเสนอราคา', icon: FileText },
   { key: 'promotions', label: 'จัดการโปรโมชันส่วนลด', icon: Tag },
-  { key: 'salespersons', label: 'จัดการลายเซ็นพนักงาน', icon: UserCheck },
+  { key: 'salespersons', label: 'จัดการข้อมูลพนักงาน', icon: UserCheck },
 ];
 
 const SETTINGS_SUBITEMS: { key: SubTab; label: string }[] = [
@@ -66,7 +66,7 @@ const PAGE_TITLES: Record<MainTab, string> = {
   dashboard: 'แผงควบคุม',
   quotations: 'ประวัติใบเสนอราคา',
   promotions: 'จัดการโปรโมชันส่วนลด',
-  salespersons: 'จัดการลายเซ็นพนักงาน',
+  salespersons: 'จัดการข้อมูลพนักงาน',
   settings: 'ตั้งค่าเงื่อนไข & กฎ',
 };
 
@@ -186,7 +186,7 @@ function AdminContent() {
   }[] = [
     { key: 'quotations', label: 'ใบเสนอราคา', unit: 'รายการ', icon: FileText, onClick: () => goTo('quotations') },
     { key: 'promotions', label: 'โปรโมชันส่วนลด', unit: 'รายการ', icon: Tag, onClick: () => goTo('promotions') },
-    { key: 'salespersons', label: 'ลายเซ็นพนักงาน', unit: 'คน', icon: UserCheck, onClick: () => goTo('salespersons') },
+    { key: 'salespersons', label: 'ข้อมูลพนักงาน', unit: 'คน', icon: UserCheck, onClick: () => goTo('salespersons') },
     { key: 'quotation_rules', label: 'เงื่อนไขหลัก', unit: 'รายการ', icon: Sliders, onClick: () => goToSubTab('quotation') },
     { key: 'optional_links', label: 'สินค้าพ่วงเสริม', unit: 'รายการ', icon: Sliders, onClick: () => goToSubTab('optional') },
     { key: 'stock_rules', label: 'ระงับเมื่อหมดสต็อก', unit: 'รายการ', icon: Sliders, onClick: () => goToSubTab('stock') },

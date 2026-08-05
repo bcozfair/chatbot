@@ -19,7 +19,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Edit2,
-  X
+  X,
+  FileSpreadsheet
 } from 'lucide-react';
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
@@ -33,6 +34,8 @@ interface Salesperson {
   phone: string | null;
   salesperson_id: string | null;
   branch: string | null;
+  /** ชื่อจริงฝั่ง Odoo — ใช้เป็นช่อง employee_quotation_id ตอน export ใบเสนอราคา */
+  employee_quotation_id: string | null;
   has_sale_sig: boolean;
   quotation_count: number;
   created_at: string;
@@ -101,6 +104,7 @@ export function Salespersons() {
   const [formName, setFormName] = useState('');
   const [formPhone, setFormPhone] = useState('');
   const [formSpId, setFormSpId] = useState('');
+  const [formEmpQuotationId, setFormEmpQuotationId] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -158,6 +162,7 @@ export function Salespersons() {
     setFormName(sp.name === 'รอดำเนินการ' ? '' : sp.name);
     setFormPhone(sp.phone || '');
     setFormSpId(sp.salesperson_id || '');
+    setFormEmpQuotationId(sp.employee_quotation_id || '');
     setFormError(null);
     setShowNameSuggest(false);
   };
@@ -217,7 +222,13 @@ export function Salespersons() {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify({ name, phone: formPhone.trim(), salespersonId })
+        // employeeQuotationId ว่าง = สั่งลบค่าเดิมทิ้ง (backend แปลงเป็น NULL)
+        body: JSON.stringify({
+          name,
+          phone: formPhone.trim(),
+          salespersonId,
+          employeeQuotationId: formEmpQuotationId.trim()
+        })
       });
       const result = await res.json();
       if (!res.ok) {
@@ -356,7 +367,8 @@ export function Salespersons() {
       sp.name.toLowerCase().includes(term) ||
       (sp.salesperson_id && sp.salesperson_id.toLowerCase().includes(term)) ||
       (sp.phone && sp.phone.toLowerCase().includes(term)) ||
-      (sp.branch && sp.branch.toLowerCase().includes(term))
+      (sp.branch && sp.branch.toLowerCase().includes(term)) ||
+      (sp.employee_quotation_id && sp.employee_quotation_id.toLowerCase().includes(term))
     );
   });
 
@@ -450,10 +462,10 @@ export function Salespersons() {
         <div>
           <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
             <UserCheck className="w-6 h-6 text-[#009032]" />
-            จัดการลายเซ็นพนักงาน
+            จัดการข้อมูลพนักงาน
           </h2>
           <p className="text-xs text-slate-500 mt-1">
-            ค้นหาข้อมูลพนักงานขาย แก้ไขชื่อ/เบอร์โทร/รหัสพนักงาน และอัปโหลด/ลบลายเซ็นรูปภาพ (รองรับไฟล์ PNG และ JPG/JPEG)
+            ค้นหาข้อมูลพนักงานขาย แก้ไขชื่อ/เบอร์โทร/รหัสพนักงาน/employee_name และอัปโหลด/ลบลายเซ็นรูปภาพ (รองรับไฟล์ PNG และ JPG/JPEG)
           </p>
         </div>
 
@@ -463,7 +475,7 @@ export function Salespersons() {
           <input
             id="salesperson-search-input"
             type="text"
-            placeholder="ค้นหาชื่อ, รหัส, เบอร์โทร, สาขา..."
+            placeholder="ค้นหาชื่อ, รหัส, เบอร์โทร, สาขา, employee_name..."
             value={searchQuery}
             onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
             className="w-full pl-10 pr-4 py-2 text-sm bg-slate-50 border border-slate-200 hover:border-slate-300 focus:border-[#009032] focus:bg-white rounded-2xl outline-none transition-all shadow-inner"
@@ -508,6 +520,12 @@ export function Salespersons() {
                     พนักงานขาย {renderSortIcon('name')}
                   </th>
                   <th
+                    onClick={() => handleSort('employee_quotation_id')}
+                    className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors"
+                  >
+                    employee_name {renderSortIcon('employee_quotation_id')}
+                  </th>
+                  <th
                     onClick={() => handleSort('branch')}
                     className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors"
                   >
@@ -545,6 +563,18 @@ export function Salespersons() {
                           <Phone className="w-3.5 h-3.5 text-slate-400" />
                           <span className="font-mono text-slate-600">{sp.phone}</span>
                         </div>
+                      )}
+                    </td>
+
+                    {/* employee_name — ชื่อจริงของเซลล์ที่ไฟล์ export (ช่อง J) ใช้ ว่างได้ */}
+                    <td className="px-6 py-4">
+                      {sp.employee_quotation_id ? (
+                        <div className="flex items-center gap-1.5">
+                          <FileSpreadsheet className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
+                          <span className="font-semibold text-slate-800">{sp.employee_quotation_id}</span>
+                        </div>
+                      ) : (
+                        <span className="text-xs italic text-slate-400">ยังไม่ระบุ</span>
                       )}
                     </td>
 
@@ -749,6 +779,36 @@ export function Salespersons() {
                   />
                   <p className="text-[10px] text-slate-400 leading-relaxed">
                     รหัสนี้ใช้ผูกกับไฟล์ลายเซ็น และพนักงานต้องมีรหัสก่อนจึงจะบันทึกหน้าลงทะเบียนใน LINE ได้
+                  </p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-[11px] font-semibold text-slate-500 mb-1">
+                    employee_name (ชื่อจริงสำหรับ export)
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={formEmpQuotationId}
+                      onChange={(e) => setFormEmpQuotationId(e.target.value)}
+                      placeholder="เช่น นฤเบศร์ ทองดี"
+                      maxLength={255}
+                      className="w-full h-9 pl-3 pr-9 bg-white border border-slate-200 focus:border-[#009032] rounded-xl text-sm text-slate-800 outline-none transition-all focus:ring-2 focus:ring-[#009032]/10"
+                    />
+                    {formEmpQuotationId && (
+                      <button
+                        type="button"
+                        onClick={() => setFormEmpQuotationId('')}
+                        title="ล้างค่า (บันทึกแล้วจะลบชื่อจริงออกจากระบบ)"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 w-6 h-6 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-400 hover:text-red-600 transition-colors"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-slate-400 leading-relaxed">
+                    ชื่อจริงของเซลล์ฝั่ง Odoo — ไฟล์ export จะเติมสังกัด (PM)/(THT) ให้เองตามเลขที่ใบ
+                    เว้นว่างไว้ได้ ช่องนี้ในไฟล์จะเป็นเซลล์ว่าง
                   </p>
                 </div>
               </div>

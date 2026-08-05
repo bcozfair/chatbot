@@ -10,6 +10,7 @@
 //            ช่องบังคับที่ว่างไม่ได้ · ช่องค่าคงที่ (source_id/uom/tax) · ชนิดข้อมูลของช่องตัวเลข
 //            ส่วนต่างของยอดรวมหลังยุบส่วนลด 2 ชั้นเหลือช่องเดียว · หมายเหตุการรับประกัน
 //            ช่อง Sales Team (I) = ทีมขายของผู้ติดต่อจาก customers_data ไม่ใช่สังกัดของเซลล์
+//            ช่อง employee_quotation_id (J) = ชื่อจริงของเซลล์จากตาราง salesperson + สังกัดห้อยท้าย
 //  ให้รันซ้ำทุกครั้งที่แตะ services/odooSaleOrderExport.ts หรือ endpoint export
 // ─────────────────────────────────────────────────────────────────────────────
 import { pool } from '../../config/db.js';
@@ -63,7 +64,8 @@ const { rows: quotes } = await pool.query<OdooExportQuotationRow & {
 }>(
   `SELECT q.quotation_no, q.total_sum, q.created_at, q.updated_at, q.customer_details, q.item_details, q.employee_details,
           q.customer_id, q.contact_id,
-          s.name AS salesperson_name, cust.sales_team AS customer_sales_team
+          s.name AS salesperson_name, cust.sales_team AS customer_sales_team,
+          s.employee_quotation_id AS salesperson_employee_quotation_id
      FROM quotations q
      LEFT JOIN salesperson s ON q.user_id = s.user_id
      ${ODOO_EXPORT_SALES_TEAM_JOIN}
@@ -139,6 +141,8 @@ let badSuffix = 0;
 let badSalesTeam = 0;
 let emptySalesTeam = 0;
 let noContactId = 0;
+let badEmpQuotationId = 0;
+let emptyEmpQuotationId = 0;
 // ชื่อที่มีช่องว่างหัว/ท้ายใน snapshot ต้องไปถึงไฟล์แบบครบตัวอักษร ไม่โดน trim ระหว่างทาง
 let edgeSpaceNames = 0;
 let edgeSpaceTrimmed = 0;
@@ -196,6 +200,22 @@ for (const quote of quotesWithItems) {
     console.log(`   ✗ ${quote.quotation_no}: ชื่อเซลล์ไม่ลงท้าย ${expectedSuffix} (H="${first.salesperson}")`);
   }
 
+  // J: ชื่อจริงของเซลล์จาก salesperson.employee_quotation_id + สังกัดห้อยท้ายชุดเดียวกับช่อง H
+  // ยังไม่กรอกในหน้าแอดมิน (NULL/''/'-') = เซลล์ว่าง ห้ามถอยไปใช้ชื่อจากช่อง H
+  // ตัวเทียบอิสระ: คำนวณสังกัดจากคำนำหน้าเลขที่ใบเอง (ใบที่ไม่ใช่ QT/QP ไม่ห้อยสังกัด)
+  // และไม่ห้อยซ้ำถ้าแอดมินพิมพ์สังกัดมาในค่าเองแล้ว — กติกาเดียวกับ withCompanySuffix()
+  const upperNo = quote.quotation_no.toUpperCase();
+  const suffix = upperNo.startsWith('QT') ? '(THT)' : upperNo.startsWith('QP') ? '(PM)' : '';
+  const rawEmpQuotationId = String(quote.salesperson_employee_quotation_id ?? '').trim();
+  const wantEmpQuotationId = rawEmpQuotationId === '' || rawEmpQuotationId === '-'
+    ? ''
+    : (suffix && !rawEmpQuotationId.endsWith(suffix) ? `${rawEmpQuotationId}${suffix}` : rawEmpQuotationId);
+  if (first.employee_quotation_id !== wantEmpQuotationId) {
+    badEmpQuotationId++;
+    console.log(`   ✗ ${quote.quotation_no}: employee_quotation_id ไม่ตรง (ได้ "${first.employee_quotation_id}" คาด "${wantEmpQuotationId}")`);
+  }
+  if (!first.employee_quotation_id) emptyEmpQuotationId++;
+
   // I: Sales Team ต้องเป็นทีมขายของผู้ติดต่อใน customers_data (join ด้วย contact_id)
   // ไม่ใช่สังกัดของเซลล์ (salesperson.branch) — ใบที่ผู้ติดต่อไม่มีทีมขายต้องได้เซลล์ว่าง
   const wantSalesTeam = expectedSalesTeam(quote);
@@ -241,10 +261,13 @@ if (emptySalesTeam > 0) {
     (noContactId > 0 ? ` (ในนั้น ${noContactId} ใบยังไม่ผูก contact_id)` : '') +
     ' — ผู้ติดต่อไม่มีทีมขายในฐานข้อมูล ไม่ถอยไปใช้สังกัดของเซลล์ตามที่ตกลงไว้');
 }
-// J ต้องว่างทุกแถวรวมแถวหัวใบ ไม่ใช่แค่แถวต่อเนื่อง — เช็คจาก rows ทั้งก้อนกันหลุด
-const filledEmployeeQuotationId = rows.filter(r => r.employee_quotation_id !== '').length;
-ok('ช่อง employee_quotation_id (J) เป็นเซลล์ว่างทุกแถว', filledEmployeeQuotationId === 0,
-  filledEmployeeQuotationId ? `(มีค่า ${filledEmployeeQuotationId} แถว)` : `(ตรวจ ${rows.length} แถว)`);
+ok('employee_quotation_id (J) ตรงกับ salesperson.employee_quotation_id + สังกัดห้อยท้าย',
+  badEmpQuotationId === 0,
+  badEmpQuotationId ? `(พลาด ${badEmpQuotationId} ใบ)` : `(ตรวจ ${quotesWithItems.length} ใบ)`);
+if (emptyEmpQuotationId > 0) {
+  console.log(`   ℹ️  ${emptyEmpQuotationId} ใบได้ช่อง J เป็นเซลล์ว่าง — เซลล์ยังไม่ถูกกรอกชื่อจริง` +
+    ' (หรือถูกลบไปแล้ว) ในหน้าจัดการพนักงาน ไม่ถอยไปใช้ชื่อจากช่อง H ตามที่ตกลงไว้');
+}
 if (missingQuotationNo > 0) {
   console.log(`   ⚠️  ${missingQuotationNo} ใบไม่มีเลขที่ใบเสนอราคา (ช่อง name จะว่าง — Odoo จะออกเลขให้เอง)`);
 }

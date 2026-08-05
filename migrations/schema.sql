@@ -590,7 +590,8 @@ CREATE TABLE public.salesperson (
     salesperson_id character varying(50),
     branch character varying(255),
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP
+    updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+    employee_quotation_id character varying(255)
 );
 
 

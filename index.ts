@@ -1536,7 +1536,8 @@ app.get('/api/admin/salespersons', adminAuthMiddleware, async (req: any, res: an
   try {
     // quotation_count ใช้เตือนตอนลบ — ลบพนักงานแล้ว FK ตั้ง quotations.user_id = NULL (ON DELETE SET NULL)
     const result = await pool.query(`
-      SELECT s.user_id, s.name, s.status, s.phone, s.salesperson_id, s.branch, s.created_at, s.updated_at,
+      SELECT s.user_id, s.name, s.status, s.phone, s.salesperson_id, s.branch,
+             s.employee_quotation_id, s.created_at, s.updated_at,
              (SELECT count(*) FROM quotations q WHERE q.user_id = s.user_id) AS quotation_count
         FROM salesperson s
        ORDER BY s.name ASC`);
@@ -1576,11 +1577,13 @@ app.put('/api/admin/salespersons/:userId', adminAuthMiddleware, express.json(), 
   console.log(">>> PUT /api/admin/salespersons received!", req.params.userId);
   try {
     const userId = req.params.userId;
-    const { name, phone, salespersonId } = req.body;
+    const { name, phone, salespersonId, employeeQuotationId } = req.body;
 
     const cleanName = String(name ?? '').trim();
     const cleanPhone = String(phone ?? '').trim() || null;
     const cleanSpId = String(salespersonId ?? '').trim();
+    // ชื่อจริงฝั่ง Odoo (ช่อง J ตอน export) — ไม่บังคับกรอก และส่งค่าว่างมาเพื่อ "ลบ" ค่าเดิมได้
+    const cleanEmpQuotationId = String(employeeQuotationId ?? '').trim() || null;
 
     if (!cleanName) {
       return res.status(400).json({ error: 'ต้องระบุชื่อพนักงานขาย' });
@@ -1605,7 +1608,8 @@ app.put('/api/admin/salespersons/:userId', adminAuthMiddleware, express.json(), 
     const updated = await updateSalespersonByUserId(userId, {
       name: cleanName,
       phone: cleanPhone,
-      salesperson_id: cleanSpId
+      salesperson_id: cleanSpId,
+      employee_quotation_id: cleanEmpQuotationId
     });
     if (!updated) {
       return res.status(500).json({ error: 'บันทึกข้อมูลพนักงานขายไม่สำเร็จ' });
@@ -2596,7 +2600,8 @@ app.get('/api/admin/quotations/export', adminAuthMiddleware, async (req: any, re
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const result = await pool.query(
       `SELECT q.quotation_no, q.created_at, q.updated_at, q.customer_details, q.item_details, q.employee_details,
-              ${SP_NAME_SQL} AS salesperson_name, cust.sales_team AS customer_sales_team
+              ${SP_NAME_SQL} AS salesperson_name, cust.sales_team AS customer_sales_team,
+              s.employee_quotation_id AS salesperson_employee_quotation_id
          FROM quotations q
          LEFT JOIN salesperson s ON q.user_id = s.user_id
          ${ODOO_EXPORT_SALES_TEAM_JOIN}

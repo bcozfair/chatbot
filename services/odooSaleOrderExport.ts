@@ -62,6 +62,12 @@ export interface OdooExportQuotationRow {
   /** salesperson.name — ใช้เป็น fallback ของช่อง Salesperson */
   salesperson_name?: string | null;
   /**
+   * J: employee_quotation_id — ชื่อจริงของเซลล์ฝั่ง Odoo (salesperson.employee_quotation_id)
+   * อ่านจากตาราง salesperson สด ๆ อย่างเดียว ไม่มี fallback ไป snapshot — ใบของพนักงานที่ถูกลบ
+   * (user_id = NULL) จึงได้เซลล์ว่าง เหมือนช่อง I ที่อ่านทีมขายจาก customers_data สด ๆ
+   */
+  salesperson_employee_quotation_id?: string | null;
+  /**
    * I: Sales Team — customers_data_view.sales_team ของผู้ติดต่อบนใบ (join ด้วย contact_id)
    * ไม่ใช่สังกัดของเซลล์ (salesperson.branch) เพราะทีมขายเป็นคุณสมบัติของลูกค้า
    */
@@ -81,8 +87,8 @@ export interface OdooSoRow {
   payment_term_id: string;
   salesperson: string;
   sales_team: string;
-  /** J: ปล่อยเป็นเซลล์ว่างเสมอ — คอลัมน์ยังต้องมีอยู่ให้ครบ 18 ช่องตาม template */
-  employee_quotation_id: '';
+  /** J: ชื่อจริงของเซลล์ฝั่ง Odoo พร้อมสังกัดห้อยท้ายเหมือนช่อง H — ว่างถ้ายังไม่กรอกในหน้าแอดมิน */
+  employee_quotation_id: string;
   source_id: string;
   /** หมายเหตุการรับประกันของทั้งใบ (ข้อความเดียวกับท้าย PDF) */
   note: string;
@@ -197,10 +203,15 @@ export function buildOdooSaleOrderRows(
     // ใบที่ยังไม่มีชื่อผู้ติดต่อใส่แค่ชื่อบริษัท ไม่ต้องมี ", " ห้อยท้าย
     const contactDisplay = company && contact ? `${company}, ${contact}` : (company || contact);
     // ช่อง Salesperson ต้องมีสังกัดห้อยท้าย เพราะเซลล์คนเดียวกันเป็นคนละ user ใน Odoo ของ PM กับ THT
-    // (ช่อง J employee_quotation_id ปล่อยว่างเสมอ ดูหมายเหตุตอน push แถว)
     const quotationNo = clean(quote.quotation_no);
     const salesperson = withCompanySuffix(
       clean(quote.employee_details?.saleperson) || clean(quote.salesperson_name),
+      quotationNo
+    );
+    // J: ชื่อจริงของเซลล์ที่แอดมินกรอกไว้ในตาราง salesperson — ห้อยสังกัดด้วยกติกาเดียวกับช่อง H
+    // ยังไม่กรอก = เซลล์ว่าง ไม่ถอยไปใช้ชื่อจากช่อง H เพราะสองช่องนี้เป็นคนละความหมาย
+    const employeeQuotationId = withCompanySuffix(
+      clean(quote.salesperson_employee_quotation_id),
       quotationNo
     );
 
@@ -217,6 +228,7 @@ export function buildOdooSaleOrderRows(
       // I: ทีมขายของผู้ติดต่อ (มาจาก customers_data ผ่าน contact_id) — ผู้ติดต่อที่ยังไม่มีทีมขาย
       // ในฐานข้อมูล หรือใบที่ยังไม่ผูก contact_id ปล่อยเป็นเซลล์ว่าง ไม่ถอยไปใช้สังกัดของเซลล์
       sales_team: clean(quote.customer_sales_team),
+      employee_quotation_id: employeeQuotationId,
       source_id: config.sourceId,
       note: warrantyNoteText(resolveMinWarrantyDisplay(items)),
     };
@@ -235,8 +247,8 @@ export function buildOdooSaleOrderRows(
         payment_term_id: isFirst ? header.payment_term_id : '',
         salesperson: isFirst ? header.salesperson : '',
         sales_team: isFirst ? header.sales_team : '',
-        // J: เว้นว่างทุกแถว รวมถึงแถวหัวใบ — ให้ Odoo กรอกเลขที่ใบเสนอราคาของพนักงานเอง
-        employee_quotation_id: '',
+        // J: เป็นช่องหัวใบเหมือน A–L ที่เหลือ — แถวที่ 2 ขึ้นไปของใบเดียวกันต้องเว้นว่างตามกติกา one2many
+        employee_quotation_id: isFirst ? header.employee_quotation_id : '',
         source_id: isFirst ? header.source_id : '',
         note: isFirst ? header.note : '',
         product: clean(item?.internal_reference) || clean(item?.model),
