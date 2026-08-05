@@ -6,6 +6,7 @@ import fs from 'fs';
 dotenv.config();
 
 import { lineConfig, lineClient } from './config/clients.js';
+import { KeyedTaskQueue } from './services/webhookQueue.js';
 import {
   searchCustomersAdmin,
   getContactsByCustomerId,
@@ -102,52 +103,8 @@ app.get('/api/liff/config', (req: any, res: any) => {
   res.json({ liffId });
 });
 
-/**
- * คิวประมวลผล event แบบ FIFO ต่อ key (userId) — event ของผู้ใช้คนเดียวกันจะรันทีละตัว
- * ไม่ทับกัน (กันการกดปุ่มยืนยันรัว ๆ ชนกันเอง) ส่วนผู้ใช้คนละคนรันขนานกันได้
- * และจำกัดจำนวน key ที่ทำงานพร้อมกันทั้งระบบด้วย maxConcurrency
- */
-class KeyedTaskQueue {
-  private queues = new Map<string, (() => Promise<void>)[]>();
-  private activeKeys = new Set<string>();
-  private activeCount = 0;
-  private maxConcurrency: number;
-
-  constructor(maxConcurrency = 12) {
-    this.maxConcurrency = maxConcurrency;
-  }
-
-  public push(key: string, task: () => Promise<void>) {
-    const list = this.queues.get(key);
-    if (list) list.push(task);
-    else this.queues.set(key, [task]);
-    this.next();
-  }
-
-  private next() {
-    for (const [key, tasks] of this.queues) {
-      if (this.activeCount >= this.maxConcurrency) return;
-      // key ที่กำลังทำงานอยู่ให้ข้ามไป ไม่กินสล็อต จนกว่าตัวก่อนหน้าของ key นั้นจะเสร็จ
-      if (this.activeKeys.has(key) || tasks.length === 0) continue;
-
-      const task = tasks.shift()!;
-      if (tasks.length === 0) this.queues.delete(key);
-
-      this.activeKeys.add(key);
-      this.activeCount++;
-      task()
-        .catch((err) => {
-          console.error('[KeyedTaskQueue] Task error:', err);
-        })
-        .finally(() => {
-          this.activeKeys.delete(key);
-          this.activeCount--;
-          this.next();
-        });
-    }
-  }
-}
-
+// คิวประมวลผล event แบบ FIFO ต่อ key (userId) — ตรรกะอยู่ที่ services/webhookQueue.ts
+// (ย้ายออกไปเพื่อให้ scripts/diag/queueSim.ts เรียกคิว "ตัวเดียวกับ prod" มาจำลองโหลดได้)
 const webhookQueue = new KeyedTaskQueue(12);
 
 // --- Webhook สำหรับรับข้อความและเหตุการณ์จาก LINE ---

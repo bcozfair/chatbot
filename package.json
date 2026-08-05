@@ -28,6 +28,8 @@
     "diag:export-tracking": "tsx scripts/diag/exportTrackingSmoke.ts",
     "diag:date-filter": "tsx scripts/diag/dateFilterSmoke.ts",
     "diag:orphan-contacts": "tsx scripts/diag/orphanContactsDiag.ts",
+    "diag:extraction-reliability": "tsx scripts/diag/extractionReliability.ts",
+    "diag:queue-sim": "tsx scripts/diag/queueSim.ts",
     "backfill:contacts": "tsx scripts/backfillContactsFromSaleOrders.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
