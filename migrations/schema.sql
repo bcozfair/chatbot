@@ -236,7 +236,7 @@ base AS (
     public.clean_text(c.customer_payment_terms)  AS customer_payment_terms,
     public.clean_text(c.customer_sale_area)      AS customer_sale_area,
     public.clean_text(c.salesperson)             AS salesperson,
-    public.clean_text(c.sales_team)              AS sales_team,
+    COALESCE(public.clean_text(c.sales_team),           public.clean_text(so.sales_team))          AS sales_team,
     public.clean_text(c.customer_type)           AS customer_type,
     public.clean_text(c.phone)                   AS phone,
     public.clean_text(c.mobile)                  AS mobile,
@@ -296,6 +296,7 @@ base AS (
   WHERE NOT EXISTS (SELECT 1 FROM public.customers c3 WHERE c3.contact_id = s.contact_id)
 ),
 comp AS (
+  -- ⚠️ sales_team ไม่อยู่ในนี้โดยตั้งใจ — ทีมขายไม่ใช่คุณสมบัติของบริษัท ผู้ติดต่อคนละคนอาจคนละทีม
   SELECT company_id,
     (array_remove(array_agg(customer_sale_area), NULL))[1]     AS customer_sale_area,
     (array_remove(array_agg(invoice_district), NULL))[1]       AS invoice_district,
