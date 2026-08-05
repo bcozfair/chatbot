@@ -29,7 +29,7 @@
 //  ⚠️ distribution ของ handler เป็น "สมมติฐาน" (LLM p50 ~2s + DB/PDF) ไม่ใช่ค่าที่วัดจาก prod
 //     พอ C.5 มี log `[queue] processed` จริงแล้ว ให้ป้อนกลับเข้ามาผ่าน --p50/--p95/--p99/--max
 // ─────────────────────────────────────────────────────────────────────────────
-import { KeyedTaskQueue } from '../../services/webhookQueue.js';
+import { KeyedTaskQueue, replyBudget, REPLY_TOKEN_TTL_MS, SAFETY_MARGIN_MS } from '../../services/webhookQueue.js';
 
 const GREEN = '\x1b[32m', RED = '\x1b[31m', DIM = '\x1b[2m', BOLD = '\x1b[1m', YEL = '\x1b[33m', CYAN = '\x1b[36m', RESET = '\x1b[0m';
 
@@ -50,9 +50,9 @@ const cfg = {
   n: arg('n', 100),                        // จำนวน event
   rate: arg('rate', 8),                    // event/วินาที (เฉพาะ poisson)
   users: arg('users', 0),                  // 0 = ทุก event คนละ user
-  concurrency: arg('concurrency', 12),     // index.ts:151 — new KeyedTaskQueue(12)
-  ttl: arg('ttl', 60_000),                 // อายุ replyToken นับจากรับ webhook
-  margin: arg('margin', 12_000),           // SAFETY_MARGIN_MS ของ C.1
+  concurrency: arg('concurrency', 12),     // ต้องตรงกับ new KeyedTaskQueue(12) ใน index.ts
+  ttl: arg('ttl', REPLY_TOKEN_TTL_MS),     // อายุ replyToken นับจากรับ webhook
+  margin: arg('margin', SAFETY_MARGIN_MS), // SAFETY_MARGIN_MS ของ C.1
   legacyTimeout: arg('legacy-timeout', 25_000), // index.ts เดิม
   slow: arg('slow', 1),                    // ตัวคูณความช้าของ handler
   speed: arg('speed', 20),                 // บีบเวลาให้รันจบไว (บัญชีเวลาทั้งหมดเป็น "ms เสมือน")
@@ -123,12 +123,12 @@ async function runMode(mode: 'legacy' | 'deadline', plan: EventPlan[]) {
       q.push(ev.key, async () => {
         if (q.activeCount > maxActive) maxActive = q.activeCount;
         const startedAt = vnow();
-        const waited = startedAt - receivedAt;
+        // ใช้ตัวคำนวณงบ "ตัวเดียวกับ index.ts" ป้อนเวลาเสมือนเข้าไป
+        const { waited, remaining, expired } = replyBudget(receivedAt, startedAt, BUDGET);
 
         let limit: number;
         if (mode === 'deadline') {
-          const remaining = BUDGET - waited;
-          if (remaining <= 0) {
+          if (expired) {
             recs.push({ id: ev.id, waited, processed: 0, total: waited, outcome: 'droppedBeforeStart' });
             return;
           }

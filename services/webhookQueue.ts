@@ -11,6 +11,33 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
+ * งบเวลาตอบกลับ 1 event
+ *
+ * replyToken ของ LINE มีอายุ "1 นาทีนับจากตอนรับ webhook" ไม่ใช่ตอนเริ่มประมวลผล และ LINE
+ * ระบุเองว่าเวลานี้เปลี่ยนได้โดยไม่แจ้งล่วงหน้า + network delay ทำให้สั้นกว่านี้ได้อีก
+ * ⇒ ทุกคำตอบต้องผลิตเสร็จภายในงบนี้ในการยิงครั้งเดียว ไม่มีทางหนี (push ถูกห้ามด้วยเหตุผลโควตา
+ *    และ token ใช้ได้ครั้งเดียว จะ ack ก่อนแล้วตอบทีหลังก็ไม่ได้)
+ */
+export const REPLY_TOKEN_TTL_MS = 60_000;
+export const SAFETY_MARGIN_MS = 12_000;   // เผื่อ network + เวลาที่ replyMessage เองใช้
+export const BUDGET_MS = REPLY_TOKEN_TTL_MS - SAFETY_MARGIN_MS;
+
+/**
+ * คำนวณงบที่เหลือของ event หนึ่ง ณ ตอนที่มันถูกดึงออกจากคิว
+ * อยู่ที่นี่เพื่อให้ index.ts กับ scripts/diag/queueSim.ts ใช้ "ตรรกะตัวเดียวกัน"
+ * ไม่ใช่ของที่ก๊อปกันไว้แล้วค่อย ๆ เพี้ยนออกจากกัน
+ *
+ * @param receivedAt เวลาที่รับ webhook (ไม่ใช่เวลาที่เริ่มประมวลผล)
+ * @param now        เวลาปัจจุบัน (รับเข้ามาเพื่อให้ sim ป้อนเวลาเสมือนได้)
+ * @param budgetMs   งบทั้งหมด (sim ปรับได้เพื่อจูน SAFETY_MARGIN_MS)
+ */
+export function replyBudget(receivedAt: number, now: number, budgetMs: number = BUDGET_MS) {
+  const waited = now - receivedAt;
+  const remaining = budgetMs - waited;
+  return { waited, remaining, expired: remaining <= 0 };
+}
+
+/**
  * คิวประมวลผล event แบบ FIFO ต่อ key (userId) — event ของผู้ใช้คนเดียวกันจะรันทีละตัว
  * ไม่ทับกัน (กันการกดปุ่มยืนยันรัว ๆ ชนกันเอง) ส่วนผู้ใช้คนละคนรันขนานกันได้
  * และจำกัดจำนวน key ที่ทำงานพร้อมกันทั้งระบบด้วย maxConcurrency

@@ -6,7 +6,7 @@ import fs from 'fs';
 dotenv.config();
 
 import { lineConfig, lineClient } from './config/clients.js';
-import { KeyedTaskQueue } from './services/webhookQueue.js';
+import { KeyedTaskQueue, replyBudget, BUDGET_MS } from './services/webhookQueue.js';
 import {
   searchCustomersAdmin,
   getContactsByCustomerId,
@@ -107,8 +107,16 @@ app.get('/api/liff/config', (req: any, res: any) => {
 // (ย้ายออกไปเพื่อให้ scripts/diag/queueSim.ts เรียกคิว "ตัวเดียวกับ prod" มาจำลองโหลดได้)
 const webhookQueue = new KeyedTaskQueue(12);
 
+/** ตัวนับสะสมสำหรับ C.5 — อ่านจาก log ด้วย: docker compose logs app | grep "\[queue\]" */
+const queueMetrics = { replied: 0, timedOut: 0, droppedBeforeStart: 0, failed: 0 };
+
 // --- Webhook สำหรับรับข้อความและเหตุการณ์จาก LINE ---
 app.post('/callback', line.middleware(lineConfig), (req: any, res: any) => {
+  // ◀ นาฬิกางบเวลาเริ่มตรงนี้ ไม่ใช่ตอนถูกดึงออกจากคิว — เวลารอคิวต้องถูกนับด้วย
+  //   ของเดิมตั้ง setTimeout ไว้ "ข้างใน" task callback ทำให้คนที่รอคิวมา 70 วิได้เวลาเต็ม 25 วิ
+  //   ทั้งที่ token ตายไปตั้งแต่ก่อนตัวจับเวลาเริ่มนับแล้ว
+  const receivedAt = Date.now();
+
   res.sendStatus(200);
 
   console.log(">>> Webhook Received! Events:", JSON.stringify(req.body.events, null, 2));
@@ -126,9 +134,25 @@ app.post('/callback', line.middleware(lineConfig), (req: any, res: any) => {
       // key คิวด้วย userId เพื่อให้ event ของคนเดียวกันรันทีละตัว (groupId/anonymous เป็น fallback)
       const queueKey = event?.source?.userId || event?.source?.groupId || 'anonymous';
       webhookQueue.push(queueKey, async () => {
+        const { waited, remaining, expired } = replyBudget(receivedAt, Date.now());
+        const who = `user=${queueKey} type=${event?.type}`;
+
+        // หมดงบตั้งแต่ยังไม่เริ่ม — ทิ้งทันที ตอบไม่ได้อยู่แล้ว แต่ถ้าปล่อยให้รันมันจะกิน CPU/DB
+        // แย่งคนที่ยังตอบทัน ทำให้คนถัดไปพลาดตาม เป็นโดมิโน
+        if (expired) {
+          queueMetrics.droppedBeforeStart++;
+          console.warn(`[queue] DROP ก่อนเริ่ม (รอคิว ${waited}ms > งบ ${BUDGET_MS}ms) ${who} · สะสม ${queueMetrics.droppedBeforeStart}`);
+          return;
+        }
+        if (waited > 5_000) console.warn(`[queue] รอคิวนาน ${waited}ms ${who}`);
+
+        const startedAt = Date.now();
         let timeoutId: NodeJS.Timeout | undefined;
+        // timeout = งบที่เหลือจริงหลังหักเวลารอคิว ไม่ใช่ 25,000 คงที่เหมือนเดิม
+        // (งานที่เข้าคิวได้ทันทีจึงได้เวลามากกว่าเดิม — ตั้งใจ: มีงบก็ควรได้ใช้ ดีกว่าถูกตัดที่ 25 วิ
+        //  ทั้งที่ตอบทันที่ 30 วิ ส่วนเพดานของ LLM คุมด้วย timeout ของ SDK ใน C.2 อีกชั้น)
         const timeoutPromise = new Promise((_, reject) => {
-          timeoutId = setTimeout(() => reject(new Error('Processing timeout')), 25000);
+          timeoutId = setTimeout(() => reject(new Error('Processing timeout')), remaining);
         });
 
         try {
@@ -136,19 +160,30 @@ app.post('/callback', line.middleware(lineConfig), (req: any, res: any) => {
             handleEvent(event),
             timeoutPromise
           ]);
+          queueMetrics.replied++;
         } catch (err: any) {
           if (err.message === 'Processing timeout') {
             // ห้าม replyMessage ที่นี่ — reply token เป็น single-use และ handler เดิม (handleEvent)
             // ยังทำงานต่ออยู่ (Promise.race ไม่ได้ cancel มัน) การยิงซ้ำจะแย่ง token กับ handler
             // ที่กำลังจะตอบสำเร็จ ทำให้ผู้ใช้เห็นข้อความผิด และ Push Message ก็ถูกห้ามอยู่แล้ว
-            console.warn(`[Queue] Timeout (event=${event?.type} user=${queueKey}) — ปล่อยให้ handler เดิมตอบเอง`);
+            queueMetrics.timedOut++;
+            console.warn(`[queue] TIMEOUT ที่ ${remaining}ms ${who} — ปล่อยให้ handler เดิมตอบเอง`);
           } else {
-            console.error('[Queue] Error processing event:', err.message || err);
+            queueMetrics.failed++;
+            console.error(`[queue] ERROR ${who}:`, err.message || err);
           }
         } finally {
           if (timeoutId) {
             clearTimeout(timeoutId);
           }
+          const now = Date.now();
+          const total = now - receivedAt;
+          const m = queueMetrics;
+          console.log(
+            `[queue] ${who} waited=${waited}ms processed=${now - startedAt}ms total=${total}ms` +
+            `${total > BUDGET_MS ? ' ⚠️เกินงบ' : ''}` +
+            ` [replied=${m.replied} timedOut=${m.timedOut} dropped=${m.droppedBeforeStart} failed=${m.failed}]`
+          );
         }
       });
     });
