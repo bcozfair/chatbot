@@ -9,9 +9,11 @@
 //  ครอบคลุม: ลำดับ/จำนวนหัวคอลัมน์ · กติกา one2many ของ Odoo (แถวที่ 2+ ต้องเว้น A–L) ·
 //            ช่องบังคับที่ว่างไม่ได้ · ช่องค่าคงที่ (source_id/uom/tax) · ชนิดข้อมูลของช่องตัวเลข
 //            ส่วนต่างของยอดรวมหลังยุบส่วนลด 2 ชั้นเหลือช่องเดียว · หมายเหตุการรับประกัน
+//            ช่อง Sales Team (I) = ทีมขายของผู้ติดต่อจาก customers_data ไม่ใช่สังกัดของเซลล์
 //  ให้รันซ้ำทุกครั้งที่แตะ services/odooSaleOrderExport.ts หรือ endpoint export
 // ─────────────────────────────────────────────────────────────────────────────
 import { pool } from '../../config/db.js';
+import { ODOO_EXPORT_SALES_TEAM_JOIN } from '../../db/repositories.js';
 import {
   ODOO_SO_HEADERS,
   buildOdooSaleOrderRows,
@@ -56,11 +58,15 @@ const filterSql = status
   : "q.quotation_no IS NOT NULL AND TRIM(q.quotation_no) <> ''";
 const filterParams = status ? [status, limit] : [limit];
 const limitParam = status ? '$2' : '$1';
-const { rows: quotes } = await pool.query<OdooExportQuotationRow & { quotation_no: string; total_sum: string }>(
+const { rows: quotes } = await pool.query<OdooExportQuotationRow & {
+  quotation_no: string; total_sum: string; customer_id: number | null; contact_id: number | null;
+}>(
   `SELECT q.quotation_no, q.total_sum, q.created_at, q.updated_at, q.customer_details, q.item_details, q.employee_details,
-          s.name AS salesperson_name, s.branch AS salesperson_branch
+          q.customer_id, q.contact_id,
+          s.name AS salesperson_name, cust.sales_team AS customer_sales_team
      FROM quotations q
      LEFT JOIN salesperson s ON q.user_id = s.user_id
+     ${ODOO_EXPORT_SALES_TEAM_JOIN}
     WHERE ${filterSql}
     ORDER BY q.created_at DESC
     LIMIT ${limitParam}`,
@@ -93,6 +99,34 @@ const HEADER_KEYS = [
   'source_id', 'note',
 ] as const;
 
+// ตัวเทียบอิสระของช่อง I: อ่าน sales_team จาก customers_data ตรง ๆ ไม่ผ่านท่อน JOIN ที่ export ใช้
+// เรียง company_id ให้ตรงกับลำดับใน ODOO_EXPORT_SALES_TEAM_JOIN เพื่อให้เลือกแถวเดียวกันตอน contact_id ซ้ำ
+const contactIds = Array.from(new Set(
+  quotes.map(q => Number(q.contact_id)).filter(id => Number.isInteger(id) && id > 0)
+));
+const teamByPair = new Map<string, string>();
+const teamByContact = new Map<number, string>();
+if (contactIds.length > 0) {
+  const { rows: cdRows } = await pool.query<{ company_id: number; contact_id: number; sales_team: string | null }>(
+    `SELECT company_id, contact_id, sales_team FROM customers_data
+      WHERE contact_id = ANY($1) ORDER BY contact_id, company_id`,
+    [contactIds]
+  );
+  for (const r of cdRows) {
+    // ให้กติกาเดียวกับ clean() ของ export: '-' และช่องว่างล้วน = ไม่มีข้อมูล
+    const t = String(r.sales_team ?? '').trim();
+    const team = t === '-' ? '' : t;
+    teamByPair.set(`${r.company_id}:${r.contact_id}`, team);
+    if (!teamByContact.has(r.contact_id)) teamByContact.set(r.contact_id, team);
+  }
+}
+/** ทีมขายที่ช่อง I ควรได้ — ใบที่ยังไม่ผูกผู้ติดต่อต้องเป็นเซลล์ว่าง ไม่ใช่สังกัดของเซลล์ */
+const expectedSalesTeam = (q: { customer_id: number | null; contact_id: number | null }): string => {
+  const cid = Number(q.contact_id);
+  if (!Number.isInteger(cid) || cid <= 0) return '';
+  return teamByPair.get(`${q.customer_id}:${cid}`) ?? teamByContact.get(cid) ?? '';
+};
+
 let cursor = 0;
 let firstRowBad = 0;
 let continuationBad = 0;
@@ -102,6 +136,9 @@ let missingPaymentTerm = 0;
 let badContact = 0;
 let badNote = 0;
 let badSuffix = 0;
+let badSalesTeam = 0;
+let emptySalesTeam = 0;
+let noContactId = 0;
 // ชื่อที่มีช่องว่างหัว/ท้ายใน snapshot ต้องไปถึงไฟล์แบบครบตัวอักษร ไม่โดน trim ระหว่างทาง
 let edgeSpaceNames = 0;
 let edgeSpaceTrimmed = 0;
@@ -159,6 +196,16 @@ for (const quote of quotesWithItems) {
     console.log(`   ✗ ${quote.quotation_no}: ชื่อเซลล์ไม่ลงท้าย ${expectedSuffix} (H="${first.salesperson}")`);
   }
 
+  // I: Sales Team ต้องเป็นทีมขายของผู้ติดต่อใน customers_data (join ด้วย contact_id)
+  // ไม่ใช่สังกัดของเซลล์ (salesperson.branch) — ใบที่ผู้ติดต่อไม่มีทีมขายต้องได้เซลล์ว่าง
+  const wantSalesTeam = expectedSalesTeam(quote);
+  if (first.sales_team !== wantSalesTeam) {
+    badSalesTeam++;
+    console.log(`   ✗ ${quote.quotation_no}: Sales Team ไม่ตรง customers_data (ได้ "${first.sales_team}" คาด "${wantSalesTeam}" contact_id=${quote.contact_id})`);
+  }
+  if (!first.sales_team) emptySalesTeam++;
+  if (!(Number(quote.contact_id) > 0)) noContactId++;
+
   // L: note ต้องเป็นหมายเหตุการรับประกันชุดเดียวกับที่ PDF พิมพ์
   const expectedNote = warrantyNoteText(resolveMinWarrantyDisplay(quote.item_details));
   if (first.note !== expectedNote) {
@@ -187,6 +234,13 @@ ok('ชื่อลูกค้า/ผู้ติดต่อคงช่อง
 ok('ช่อง note ตรงกับหมายเหตุการรับประกันของใบ', badNote === 0, badNote ? `(พลาด ${badNote} ใบ)` : '');
 ok('ชื่อเซลล์ (H) มีสังกัด (PM)/(THT) ห้อยท้ายตามเลขที่ใบ', badSuffix === 0,
   badSuffix ? `(พลาด ${badSuffix} ใบ)` : '');
+ok('Sales Team (I) ตรงกับ customers_data ของ contact_id นั้น', badSalesTeam === 0,
+  badSalesTeam ? `(พลาด ${badSalesTeam} ใบ)` : `(ตรวจ ${quotesWithItems.length} ใบ)`);
+if (emptySalesTeam > 0) {
+  console.log(`   ℹ️  ${emptySalesTeam} ใบได้ Sales Team เป็นเซลล์ว่าง` +
+    (noContactId > 0 ? ` (ในนั้น ${noContactId} ใบยังไม่ผูก contact_id)` : '') +
+    ' — ผู้ติดต่อไม่มีทีมขายในฐานข้อมูล ไม่ถอยไปใช้สังกัดของเซลล์ตามที่ตกลงไว้');
+}
 // J ต้องว่างทุกแถวรวมแถวหัวใบ ไม่ใช่แค่แถวต่อเนื่อง — เช็คจาก rows ทั้งก้อนกันหลุด
 const filledEmployeeQuotationId = rows.filter(r => r.employee_quotation_id !== '').length;
 ok('ช่อง employee_quotation_id (J) เป็นเซลล์ว่างทุกแถว', filledEmployeeQuotationId === 0,

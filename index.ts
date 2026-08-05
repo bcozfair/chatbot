@@ -19,6 +19,7 @@ import {
   updateSalespersonByUserId,
   getBranchesByCodes,
   getBranches,
+  ODOO_EXPORT_SALES_TEAM_JOIN,
 } from './db/repositories.js';
 import { confirmQuotationAtomic, enrichQuotationData, buildItemSnapshots } from './services/quotationService.js';
 import {
@@ -2595,9 +2596,10 @@ app.get('/api/admin/quotations/export', adminAuthMiddleware, async (req: any, re
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const result = await pool.query(
       `SELECT q.quotation_no, q.created_at, q.updated_at, q.customer_details, q.item_details, q.employee_details,
-              ${SP_NAME_SQL} AS salesperson_name, s.branch AS salesperson_branch
+              ${SP_NAME_SQL} AS salesperson_name, cust.sales_team AS customer_sales_team
          FROM quotations q
          LEFT JOIN salesperson s ON q.user_id = s.user_id
+         ${ODOO_EXPORT_SALES_TEAM_JOIN}
          ${whereClause}
         ORDER BY ${sortBy} ${sortOrderParam}`,
       params

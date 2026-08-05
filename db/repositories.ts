@@ -312,6 +312,27 @@ export async function deletePendingQuotations(userId: string): Promise<void> {
   } catch (err) { logErr('deletePendingQuotations', err); }
 }
 
+/**
+ * ท่อน JOIN ที่หา "ทีมขายของผู้ติดต่อ" ให้ช่อง Sales Team ของไฟล์นำเข้า Odoo
+ *
+ * ทีมขายเป็นคุณสมบัติของผู้ติดต่อ (customers_data_view.sales_team) ไม่ใช่สังกัดของเซลล์ที่ออกใบ
+ * จึง join ด้วย quotations.contact_id เท่านั้น — ห้ามกลับไปใช้ salesperson.branch
+ *
+ * ⚠️ contact_id ไม่ unique ใน matview (แถวบริษัทที่ไม่มีผู้ติดต่อใช้ contact_id = 0 ซ้ำกันได้)
+ *    จึงกรอง > 0 และเรียงให้แถวที่ company_id ตรงกับใบมาก่อน เพื่อไม่หยิบทีมขายของบริษัทอื่น
+ *
+ * ใช้ร่วมกันระหว่าง endpoint export (index.ts) กับ diag harness (scripts/diag/odooExportSmoke.ts)
+ * ให้ทั้งสองที่เห็นค่าเดียวกันเสมอ — ต้องมี alias ตาราง `q` = quotations อยู่ก่อนหน้าในคำสั่ง
+ */
+export const ODOO_EXPORT_SALES_TEAM_JOIN = `
+  LEFT JOIN LATERAL (
+    SELECT cd.sales_team
+      FROM customers_data_view cd
+     WHERE cd.contact_id = q.contact_id AND q.contact_id > 0
+     ORDER BY (cd.company_id = q.customer_id) DESC NULLS LAST, cd.company_id
+     LIMIT 1
+  ) cust ON TRUE`;
+
 // ═══════════════════════════ products ═══════════════════════════
 
 /**

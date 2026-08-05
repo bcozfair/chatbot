@@ -61,8 +61,11 @@ export interface OdooExportQuotationRow {
   employee_details?: any;
   /** salesperson.name — ใช้เป็น fallback ของช่อง Salesperson */
   salesperson_name?: string | null;
-  /** salesperson.branch — ใช้เป็นช่อง Sales Team */
-  salesperson_branch?: string | null;
+  /**
+   * I: Sales Team — customers_data_view.sales_team ของผู้ติดต่อบนใบ (join ด้วย contact_id)
+   * ไม่ใช่สังกัดของเซลล์ (salesperson.branch) เพราะทีมขายเป็นคุณสมบัติของลูกค้า
+   */
+  customer_sales_team?: string | null;
 }
 
 /** 1 แถวในไฟล์ = 1 รายการสินค้า (ช่องหัวใบเป็นค่าว่างในแถวที่ 2 ขึ้นไปของใบเดียวกัน) */
@@ -211,7 +214,9 @@ export function buildOdooSaleOrderRows(
       // ใบที่ไม่มีเครดิตเทอมปล่อยเป็นเซลล์ว่าง ไม่ยัดค่าตั้งต้นให้ — ให้ Odoo ใช้เทอมของลูกค้าเอง
       payment_term_id: clean(cust.payment_terms),
       salesperson,
-      sales_team: clean(quote.salesperson_branch),
+      // I: ทีมขายของผู้ติดต่อ (มาจาก customers_data ผ่าน contact_id) — ผู้ติดต่อที่ยังไม่มีทีมขาย
+      // ในฐานข้อมูล หรือใบที่ยังไม่ผูก contact_id ปล่อยเป็นเซลล์ว่าง ไม่ถอยไปใช้สังกัดของเซลล์
+      sales_team: clean(quote.customer_sales_team),
       source_id: config.sourceId,
       note: warrantyNoteText(resolveMinWarrantyDisplay(items)),
     };
