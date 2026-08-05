@@ -11,10 +11,17 @@ services:
       options:
         max-size: "10m"
         max-file: "5"
+    # บังคับ TimeZone ของ server เป็นไทย — image postgres ตั้งต้นเป็น UTC (initdb อ่านจาก OS ในคอนเทนเนอร์)
+    # ต้องสั่งผ่าน command เพราะค่า timezone ถูกเขียนลง postgresql.conf ตั้งแต่ initdb แล้ว
+    # การใส่ env TZ ทีหลังไม่เปลี่ยนค่าใน volume เดิม
+    # หมายเหตุ: เงื่อนไข SQL ทุกจุดถูกเขียนให้ไม่ขึ้นกับ TimeZone ของ session อยู่แล้ว บรรทัดนี้เป็นกันเหนียว
+    # + ทำให้ log/psql อ่านเป็นเวลาไทย ไม่ใช่ตัวที่ความถูกต้องไปพึ่งพา
+    command: ["postgres", "-c", "timezone=Asia/Bangkok", "-c", "log_timezone=Asia/Bangkok"]
     environment:
       POSTGRES_DB: ${PG_DATABASE}
       POSTGRES_USER: ${PG_USER}
       POSTGRES_PASSWORD: ${PG_PASSWORD}
+      TZ: Asia/Bangkok
     volumes:
       # postgres:18 เก็บ data ในซับไดเรกทอรีตาม major version → ต้อง mount ที่ /var/lib/postgresql (พาเรนต์) ไม่ใช่ /data
       - pgdata:/var/lib/postgresql
@@ -41,6 +48,10 @@ services:
       PG_PORT: "5432"
       PORT: "3011"
       NODE_ENV: production
+      # เวลาท้องถิ่นของ Node = ไทย → log ของแอปอ่านเป็นเวลาไทย
+      # โค้ดที่ต้องการ "วันไทย" (วันที่บนหัว PDF, งวด yymm ของเลขใบเสนอราคา) ปัก Asia/Bangkok
+      # ไว้ในตัวเองผ่าน utils/thaiTime.ts แล้ว บรรทัดนี้จึงเป็นกันเหนียว ไม่ใช่ตัวที่ความถูกต้องไปพึ่งพา
+      TZ: Asia/Bangkok
     depends_on:
       db:
         condition: service_healthy

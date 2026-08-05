@@ -120,10 +120,13 @@ function formatNumber(num: number) {
   return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+// ปัก Asia/Bangkok ไว้เสมอ ไม่ใช้ TimeZone ของเบราว์เซอร์ — ต้องตรงกับตัวกรองวันที่ฝั่ง SQL
+// ที่ตีความเป็นวันตามเวลาไทย ไม่งั้นเครื่องที่ตั้งโซนอื่นจะเห็น "วันที่ในตารางไม่ตรงกับช่วงที่กรอง"
 function formatDate(dateStr: string) {
   if (!dateStr) return '-';
   const d = new Date(dateStr);
   return d.toLocaleDateString('th-TH', {
+    timeZone: 'Asia/Bangkok',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',

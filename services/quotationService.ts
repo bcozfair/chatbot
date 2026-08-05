@@ -16,6 +16,7 @@ import { expandOptionalProducts, checkStockRules, StockViolation } from './produ
 import { sumLineTotals, calcNetPrice } from '../utils/pricing.js';
 import { validateProductPriceWithPromotions } from '../utils/promotionValidator.js';
 import { buildThaiAddress } from '../utils/address.js';
+import { thaiYearMonth } from '../utils/thaiTime.js';
 import {
   loadQuotationRules,
   resolveQuotationRule,
@@ -130,10 +131,9 @@ export async function allocateQuotationNo(quoteData: any, executor: DbExecutor):
     isThemtech = (await resolveQuoteCompany(quoteData.items[0], executor)) === 'THT';
   }
   const prefix = isThemtech ? 'QT' : 'QP';
-  const dateObj = new Date(quoteData.created_at);
-  const yy = String(dateObj.getFullYear()).slice(-2);
-  const mm = String(dateObj.getMonth() + 1).padStart(2, '0');
-  const period = `${yy}${mm}`;
+  // งวดยึด "เดือนตามวันไทย" ของ created_at ไม่ใช่ TZ ของโปรเซส — ไม่งั้นใบที่ร่างตี 3 ของวันที่ 1
+  // จะได้งวดของเดือนก่อนหน้าบน production (UTC) แล้วเลขนั้นติดไปถาวร
+  const period = thaiYearMonth(new Date(quoteData.created_at));
   const seq = await bumpCounter(`${prefix}:${period}`, executor);
   return `${prefix}-${period}05${String(seq).padStart(3, '0')}`;
 }

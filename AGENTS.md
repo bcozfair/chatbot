@@ -186,6 +186,7 @@ Harness เฉพาะโดเมน (ใช้เมื่อแตะส่�
 ```bash
 tsx scripts/evalCustomerSearch.ts     # gate: รันก่อน/หลังทุกครั้งที่แก้ logic จับคู่ลูกค้า แล้วเทียบผล
 npm run diag:confirm-race             # ตรวจ race ตอนยืนยันใบเสนอราคา
+npm run diag:date-filter              # gate: ตัวกรองช่วงวันที่ต้องให้ผลเท่ากันทุก TimeZone ของ DB
 ```
 
 > ยังไม่มี unit test suite (`npm test` เป็น stub) — typecheck + diag/eval harness คือด่านตรวจหลักของระบบนี้

@@ -22,6 +22,8 @@ import {
   ODOO_EXPORT_SALES_TEAM_JOIN,
   parseExportedFilter,
   exportedFilterCondition,
+  createdAtFromThaiDayCondition,
+  createdAtToThaiDayCondition,
   claimQuotationsForExport,
   insertExportBatch,
   insertExportLogRows,
@@ -2506,13 +2508,13 @@ app.get('/api/admin/quotations', adminAuthMiddleware, async (req: any, res: any)
 
     // ตัวกรองวันที่ตีความตามเวลาไทยและรวมทั้งวันของ dateTo (ใช้เกณฑ์เดียวกับ endpoint export)
     if (dateFrom.trim()) {
-      conditions.push(`q.created_at >= ($${paramIndex}::date AT TIME ZONE 'Asia/Bangkok')`);
+      conditions.push(createdAtFromThaiDayCondition(paramIndex));
       params.push(dateFrom.trim());
       paramIndex++;
     }
 
     if (dateTo.trim()) {
-      conditions.push(`q.created_at < (($${paramIndex}::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Bangkok')`);
+      conditions.push(createdAtToThaiDayCondition(paramIndex));
       params.push(dateTo.trim());
       paramIndex++;
     }
@@ -2611,14 +2613,15 @@ app.get('/api/admin/quotations/export', adminAuthMiddleware, async (req: any, re
     // ตัวกรองวันที่ตีความตามเวลาไทย (created_at เป็น timestamptz) และรวมทั้งวันของ dateTo:
     //   from = 00:00 ของ dateFrom ตามโซนไทย
     //   to   = 00:00 ของวันถัดจาก dateTo → ใช้ '<' เพื่อครอบทั้งวัน (กัน bug ตัดใบหลังเที่ยงคืนทิ้ง)
+    // ใช้ helper ตัวเดียวกับ endpoint list — ห้ามเขียน SQL ซ้ำที่นี่ ไม่งั้นสองหน้าจอกรองไม่ตรงกัน
     if (dateFrom.trim()) {
-      conditions.push(`q.created_at >= ($${paramIndex}::date AT TIME ZONE 'Asia/Bangkok')`);
+      conditions.push(createdAtFromThaiDayCondition(paramIndex));
       params.push(dateFrom.trim());
       paramIndex++;
     }
 
     if (dateTo.trim()) {
-      conditions.push(`q.created_at < (($${paramIndex}::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Bangkok')`);
+      conditions.push(createdAtToThaiDayCondition(paramIndex));
       params.push(dateTo.trim());
       paramIndex++;
     }

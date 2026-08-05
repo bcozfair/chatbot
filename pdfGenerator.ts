@@ -13,6 +13,7 @@ import {
 } from "./services/rules/index.js";
 import { calcNetPrice, calcVat, calcGrandTotal } from "./utils/pricing.js";
 import { DEFAULT_WARRANTY_DISPLAY, resolveMinWarrantyDisplay, warrantyNoteText } from "./utils/warranty.js";
+import { thaiDateDMY } from "./utils/thaiTime.js";
 
 // ใช้ Chrome ตัวเดียวร่วมกันทุก request แทนการ launch ใหม่ทุกครั้ง
 // เดิม: launch ต่อ request และ browser.close() ไม่อยู่ใน finally -> error หนึ่งครั้ง = Chrome ค้าง 1 ตัว สะสมจน RAM หมด
@@ -183,11 +184,8 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
   const vat = calcVat(discountedSubTotal);
   const grandTotal = calcGrandTotal(discountedSubTotal);
 
-  const now = new Date();
-  const dd = String(now.getDate()).padStart(2, '0');
-  const mm = String(now.getMonth() + 1).padStart(2, '0');
-  const yyyy = now.getFullYear();
-  const dateStr = `${dd}/${mm}/${yyyy}`;
+  // วันไทยเสมอ ไม่พึ่ง TZ ของโปรเซส — บน UTC วันที่บนหัวเอกสารจะเลื่อนไปวันก่อนหน้าช่วง 00:00–07:00 น.
+  const dateStr = thaiDateDMY();
 
   const quoteNo = quoteNoInput || (quoteData.quotation_no
     ? quoteData.quotation_no

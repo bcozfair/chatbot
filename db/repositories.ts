@@ -359,6 +359,28 @@ export function exportedFilterCondition(filter: ExportedFilter): string {
 }
 
 /**
+ * เงื่อนไขช่วงวันที่ของหน้าประวัติใบเสนอราคา — ตีความ 'yyyy-mm-dd' ที่แอดมินเลือกเป็น "วันตามเวลาไทย"
+ * (ต้องมี alias ตาราง `q` = quotations อยู่ก่อนหน้าในคำสั่ง เหมือน exportedFilterCondition)
+ *
+ * ⚠️ ห้ามตัด ::timestamp ออก — `$1::date AT TIME ZONE 'Asia/Bangkok'` (ไม่มี cast) ดูเหมือนถูกแต่ผิด:
+ *    AT TIME ZONE มี 2 overload คือ timezone(text, timestamp) และ timezone(text, timestamptz)
+ *    เมื่อ input เป็น `date` PostgreSQL เลือกตัว timestamptz (เป็น preferred type ของหมวด datetime)
+ *    → กลายเป็น "อ่านวันที่เป็นเที่ยงคืนตาม session TimeZone แล้วแปลงเป็นเวลาไทย" ซึ่งกลับทางกับที่ต้องการ
+ *    ผลคือขอบเขตเลื่อนตาม TimeZone ของ DB: ตรงเมื่อ session = Asia/Bangkok (เครื่อง dev) แต่บน
+ *    production ที่เป็น UTC ขอบล่างไปตกที่ 14:00 น. ของวันที่เลือก → ใบช่วงเช้าของวันแรกหายไปเงียบ ๆ
+ *    การ cast เป็น ::timestamp ก่อน บังคับให้เข้า overload ที่ถูกต้อง ผลลัพธ์จึงไม่ขึ้นกับ TimeZone ของ DB
+ *    (เช็คได้ด้วย pg_typeof — ต้องได้ `timestamp with time zone` ทั้งสองฝั่ง)
+ */
+export function createdAtFromThaiDayCondition(paramIndex: number): string {
+  return `q.created_at >= (($${paramIndex}::date)::timestamp AT TIME ZONE 'Asia/Bangkok')`;
+}
+
+/** ขอบบน = เที่ยงคืนของ "วันถัดจาก" dateTo ตามโซนไทย → ใช้คู่กับ '<' เพื่อรวมทั้งวันของ dateTo */
+export function createdAtToThaiDayCondition(paramIndex: number): string {
+  return `q.created_at < ((($${paramIndex}::date)::timestamp + INTERVAL '1 day') AT TIME ZONE 'Asia/Bangkok')`;
+}
+
+/**
  * จอง (claim) ใบที่จะใส่ลงไฟล์ — มาร์ก odoo_exported_at แล้วคืน id ที่ "เป็นของ request นี้"
  *
  * onlyUnexported = true (ตัวกรอง 'ยังไม่ส่งออก') จะใส่ guard `odoo_exported_at IS NULL` ไว้ด้วย

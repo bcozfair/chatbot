@@ -2,6 +2,7 @@ import { pool } from '../config/db.js';
 import { GatewayUnreachableError } from '../scripts/sync/gatewayClient.js';
 import { refreshCustomerDataView } from '../scripts/sync/refreshCustomerDirectory.js';
 import { clearCustomerSearchCache } from './customerService.js';
+import { thaiDateParts } from '../utils/thaiTime.js';
 
 // ============================================================
 // Registry ของ resource ที่ sync ได้
@@ -502,29 +503,13 @@ let schedulerTimer: NodeJS.Timeout | null = null;
 /** ต้องถี่กว่า MIN_INTERVAL_SECONDS พอสมควร ไม่งั้น interval 30 วิ จะเพี้ยนเป็น 60 วิ */
 const TICK_MS = 5000;
 
-const WEEKDAY_INDEX: Record<string, number> = {
-  Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6,
-};
-
 /** เวลาปัจจุบันโซน Asia/Bangkok เป็น { date:'YYYY-MM-DD', time:'HH:MM', day:0-6 } */
 function bangkokNow(): { date: string; time: string; day: number } {
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Asia/Bangkok',
-    hour12: false,
-    weekday: 'short',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).formatToParts(new Date());
-  const get = (t: string) => parts.find((p) => p.type === t)?.value || '';
-  let hh = get('hour');
-  if (hh === '24') hh = '00'; // Intl อาจคืน 24 ตอนเที่ยงคืน
+  const { year, month, day, hour, minute, weekday } = thaiDateParts();
   return {
-    date: `${get('year')}-${get('month')}-${get('day')}`,
-    time: `${hh}:${get('minute')}`,
-    day: WEEKDAY_INDEX[get('weekday')] ?? 0,
+    date: `${year}-${month}-${day}`,
+    time: `${hour}:${minute}`,
+    day: weekday,
   };
 }
 
