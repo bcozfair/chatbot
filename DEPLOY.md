@@ -147,17 +147,113 @@ LINE user id **ผูกกับ provider ไม่ใช่บัญชีผ�
 
 ---
 
-## แก้โค้ดหลัง deploy ต้องทำยังไง
+## อัปเดต server ที่ deploy ไปแล้ว
+
 โค้ดถูกห่อเข้า image ตอน build → **แก้ไฟล์เฉย ๆ กล่องยังไม่เปลี่ยน ต้อง rebuild ทุกครั้ง**
+ถ้าช่วงที่ค้างมี migration ด้วย **ห้ามใช้แค่ `git pull && up -d --build`** — ต้องทำตามลำดับ 6 ขั้นนี้
+
+> ลำดับสำคัญ: **migration ต้องรันก่อน rebuild** เพราะโค้ดใหม่ query คอลัมน์ที่ยังไม่มีใน DB เก่า
+> repo นี้ **ไม่มีตารางบันทึกว่า migration ไหนรันไปแล้ว** → git log บอกไม่ได้ ต้องเช็คจาก DB จริง (ขั้น 4)
+
+### ขั้น 1 — ดูว่า server ค้างอยู่ commit ไหน + มีอะไรค้าง
 ```bash
-# บนเครื่องตัวเอง: แก้โค้ด → git push
-# บน server:
 cd /home/app_sales/salechatbot
-git pull origin main
+git log --oneline -1                        # commit ปัจจุบัน (สมมติเรียกว่า <OLD>)
+git status -sb                              # ต้องสะอาด ไม่งั้น pull ชน
+git fetch origin
+git log --oneline HEAD..origin/main                       # commit ที่ค้าง
+git diff --stat HEAD..origin/main -- migrations/changes    # migration ที่ค้าง
+git diff HEAD..origin/main -- .env.example docker-compose.yml package.json
+```
+
+### ขั้น 2 — สำรอง DB ก่อนเสมอ (ห้ามข้าม)
+```bash
+set -a; source .env; set +a
+docker compose exec -T db pg_dump -U "$PG_USER" -d "$PG_DATABASE" -Fc > backup-$(date +%F-%H%M).dump
+ls -lh backup-*.dump          # ต้องมีขนาดสมเหตุผล ไม่ใช่ 0 ไบต์
+```
+(`*.dump` อยู่ใน `.gitignore` แล้ว วางไว้ในโฟลเดอร์โปรเจคได้ ไม่หลุดขึ้น git)
+
+### ⚠️ ขั้น 3 — เช็ค mount ของ volume `pgdata` (เฉพาะ server ที่เก่ากว่า commit 32751ef)
+commit `32751ef` ย้าย mount จาก `/var/lib/postgresql/data` → `/var/lib/postgresql`
+ถ้า server ยังไม่มี commit นี้ พอ pull แล้ว recreate กล่อง db **Postgres จะเห็น data dir ว่างแล้ว initdb ใหม่ = DB เปล่า**
+```bash
+git merge-base --is-ancestor 32751ef HEAD && echo "มี fix แล้ว ข้ามขั้นนี้ได้" || echo "ยังไม่มี fix — อ่านต่อ"
+docker inspect -f '{{range .Mounts}}{{.Name}} -> {{.Destination}}{{"\n"}}{{end}}' $(docker compose ps -q db)
+```
+ถ้า Destination ยังเป็น `/var/lib/postgresql/data` → หลัง `up -d --build` ให้เช็คว่า DB ว่างไหม (`\dt`)
+ถ้าว่างให้ restore จาก dump ขั้น 2 (ข้อมูลเดิมไม่ได้หาย แต่ค้างอยู่คนละ path ใน volume):
+```bash
+docker compose cp backup-XXXX.dump db:/tmp/restore.dump
+docker compose exec db pg_restore -U "$PG_USER" -d "$PG_DATABASE" --clean --if-exists --no-owner /tmp/restore.dump
+```
+
+### ขั้น 4 — pull แล้วรัน migration ที่ขาด
+```bash
+git pull --ff-only origin main
+```
+เช็คสถานะ DB จริงว่าขาดตัวไหน (คำสั่งเดียวตอบครบ — เพิ่มบรรทัดเองได้เมื่อมี migration ใหม่):
+```bash
+docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" -c "
+SELECT to_regclass('public.customers_data_view') AS matview,
+       to_regproc('public.clean_text(text)')     AS clean_text,
+       EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('public.customers_data_view')
+              AND attname='sales_team' AND NOT attisdropped)                                  AS sales_team,
+       EXISTS(SELECT 1 FROM information_schema.columns
+              WHERE table_name='salesperson' AND column_name='employee_quotation_id')         AS employee_qid,
+       EXISTS(SELECT 1 FROM information_schema.columns
+              WHERE table_name='quotations' AND column_name='odoo_exported_at')               AS exported_at,
+       to_regclass('public.quotation_export_batches')                                         AS export_batches;"
+```
+รันเฉพาะไฟล์ที่ผลข้างบนบอกว่ายังไม่มี เรียงตามชื่อไฟล์ (วันที่):
+```bash
+for f in migrations/changes/<ไฟล์ที่ขาด>.sql ; do
+  echo "== $f"
+  docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" -v ON_ERROR_STOP=1 -f - < "$f" || break
+done
+```
+กฎ 3 ข้อของขั้นนี้:
+- **ใช้ psql ไม่ใช่ `npx tsx scripts/runMigration.ts`** — pool ใน `config/db.ts` ตั้ง `statement_timeout: 15000`
+  แต่สร้าง matview `customers_data_view` ใหม่ใช้เวลานานกว่านั้น (ไฟล์ migration เตือนไว้เองว่า "รันด้วย pg.Client เท่านั้น")
+  และไฟล์ .sql ใหม่ยังไม่อยู่ใน image เก่าที่ยังรันอยู่ (`COPY . .` ตอน build) → exec ในกล่อง app จะหาไฟล์ไม่เจอ
+- **ไฟล์ที่สร้าง matview ทับกัน ให้รันแค่ตัวล่าสุด** — เช่น `2026-08-05_02` `DROP` แล้วสร้างใหม่ทั้งก้อนอยู่แล้ว
+  ไม่ต้องรัน `_01` ก่อน (รันสองรอบ = ค้นหาลูกค้าล่มนานเป็นเท่าตัวเปล่า ๆ)
+- **มีช่วงที่ค้นหาลูกค้าพัง** — ระหว่างสร้าง matview ใหม่ (ราว 1–3 นาที) `customers_data_view` หายชั่วคราว → ทำนอกเวลาใช้งาน
+
+### ขั้น 5 — rebuild + up
+```bash
 docker compose up -d --build          # สร้างกล่องใหม่จากโค้ดล่าสุด แล้วสลับให้อัตโนมัติ
+docker compose ps                     # db ต้อง healthy, app ต้อง running
+docker compose logs -f app            # เห็น listening on 3011 = สำเร็จ
+curl -I http://127.0.0.1:${APP_PORT:-3011}/
 ```
 - ข้อมูลใน database **ไม่หาย** (อยู่ใน volume `pgdata`) และรูปลายเซ็นก็ไม่หาย (volume `sig_*`)
 - แก้เฉพาะหน้า admin (frontend) ก็ต้อง `--build` เหมือนกัน
+- ถ้า `docker-compose.yml` เปลี่ยนในช่วงที่ค้าง **กล่อง db จะถูก recreate ด้วย ไม่ใช่แค่ app** → เช็คขั้น 3 ให้ผ่านก่อนเสมอ
+
+### ขั้น 6 — ตรวจหลังขึ้น
+รัน diag ที่ **อ่านอย่างเดียว** ได้บน prod:
+```bash
+docker compose exec app npx tsx scripts/diag/odooExportSmoke.ts
+docker compose exec app npx tsx scripts/diag/dateFilterSmoke.ts
+docker compose exec app npx tsx scripts/diag/quoteValidationSmoke.ts
+```
+> ❌ ห้ามรันบน prod: `diag:export-tracking`, `diag:shipping-fee`, `diag:confirm-race` — สามตัวนี้เขียนข้อมูลทดสอบลง DB
+
+---
+
+## ให้ Claude บน server ทำแทน
+
+สั่งแบบนี้ (ต้องให้ `git pull` มาก่อน ไม่งั้นมันอ่าน DEPLOY.md ฉบับเก่า):
+```
+cd /home/app_sales/salechatbot
+git pull --ff-only origin main แล้วอัปเดต deployment ตาม DEPLOY.md
+หัวข้อ "อัปเดต server ที่ deploy ไปแล้ว" ทำตามลำดับในนั้นเป๊ะ ๆ ห้ามข้ามขั้น
+ห้ามแก้ไฟล์ใน migrations/ และห้ามคิดคำสั่ง migration เอง
+ก่อนขั้นที่ทำให้ระบบใช้งานไม่ได้ (สร้าง matview ใหม่, recreate กล่อง db) ให้หยุดถามก่อน
+```
+ข้อห้ามถาวรบน server: ห้าม `docker compose down -v` (ลบ volume = ข้อมูลหายจริง),
+ห้ามแก้ไฟล์ใน `migrations/changes/` ที่รันไปแล้ว (เขียนไฟล์ใหม่แทน), ห้ามรัน migration โดยไม่ dump ก่อน
 
 ---
 
