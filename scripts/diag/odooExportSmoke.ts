@@ -3,6 +3,9 @@
 //  รัน:  npm run diag:odoo-export            (ค่าตั้งต้น 20 ใบล่าสุด)
 //        npm run diag:odoo-export -- --limit 100
 //        npm run diag:odoo-export -- --status draft
+//        npm run diag:odoo-export -- --exported no      (เฉพาะใบที่ยังไม่เคยส่งออก)
+//
+//  สคริปต์นี้ตรวจ "รูปแบบไฟล์" เท่านั้น กลไกกันส่งออกซ้ำอยู่ที่ npm run diag:export-tracking
 //
 //  read-only ทั้งหมด — อ่านใบเสนอราคาจริงมา build แถวแล้วตรวจ ไม่เขียนอะไรลง DB
 //
@@ -14,7 +17,11 @@
 //  ให้รันซ้ำทุกครั้งที่แตะ services/odooSaleOrderExport.ts หรือ endpoint export
 // ─────────────────────────────────────────────────────────────────────────────
 import { pool } from '../../config/db.js';
-import { ODOO_EXPORT_SALES_TEAM_JOIN } from '../../db/repositories.js';
+import {
+  ODOO_EXPORT_SALES_TEAM_JOIN,
+  exportedFilterCondition,
+  parseExportedFilter,
+} from '../../db/repositories.js';
 import {
   ODOO_SO_HEADERS,
   buildOdooSaleOrderRows,
@@ -38,6 +45,9 @@ const limit = Math.max(1, Number(argValue('limit', '20')) || 20);
 // ค่าตั้งต้นว่าง = เดินเส้นทางเดียวกับ endpoint (ทุกใบที่มีเลขที่ใบเสนอราคา)
 // ใส่ --status <ค่า> เพื่อเจาะจงสถานะเดียว
 const status = argValue('status', '');
+// ตั้งต้น 'all' ไม่ใช่ 'no' เหมือน endpoint — สคริปต์นี้ตรวจ "รูปแบบไฟล์" จึงต้องเห็นใบชุดเดิม
+// ทุกครั้งที่รัน ผลถึงเทียบย้อนหลังกันได้ ไม่ผันไปตามว่าใครกดส่งออกอะไรไปแล้วบ้าง
+const exported = parseExportedFilter(argValue('exported', 'all'), 'all');
 
 /** หัวคอลัมน์ที่คัดลอกจากชีต "Import " ของ template ต้นฉบับ — ตัวเทียบอิสระจากโค้ด */
 const TEMPLATE_HEADERS = [
@@ -54,9 +64,13 @@ ok('หัวคอลัมน์ตรงกับ template ทั้งชื
 
 // ── 2. ดึงใบจริงมา build ────────────────────────────────────────────────
 // สะท้อนเงื่อนไขของ endpoint: เจาะจงสถานะถ้าส่ง --status มา ไม่งั้นเอาทุกใบที่มีเลขที่ใบ
-const filterSql = status
+// บวกตัวกรองสถานะการส่งออก Odoo (ใช้ฟังก์ชันตัวเดียวกับ endpoint ไม่ให้เงื่อนไขแตกกัน)
+const conditions = [status
   ? 'q.status = $1'
-  : "q.quotation_no IS NOT NULL AND TRIM(q.quotation_no) <> ''";
+  : "q.quotation_no IS NOT NULL AND TRIM(q.quotation_no) <> ''"];
+const exportedCondition = exportedFilterCondition(exported);
+if (exportedCondition) conditions.push(exportedCondition);
+
 const filterParams = status ? [status, limit] : [limit];
 const limitParam = status ? '$2' : '$1';
 const { rows: quotes } = await pool.query<OdooExportQuotationRow & {
@@ -69,12 +83,12 @@ const { rows: quotes } = await pool.query<OdooExportQuotationRow & {
      FROM quotations q
      LEFT JOIN salesperson s ON q.user_id = s.user_id
      ${ODOO_EXPORT_SALES_TEAM_JOIN}
-    WHERE ${filterSql}
+    WHERE ${conditions.join(' AND ')}
     ORDER BY q.created_at DESC
     LIMIT ${limitParam}`,
   filterParams
 );
-console.log(`   ตัวกรอง=${status ? `สถานะ "${status}"` : 'ทุกใบที่มีเลขที่ใบเสนอราคา'} ดึงมา ${quotes.length} ใบ`);
+console.log(`   ตัวกรอง=${status ? `สถานะ "${status}"` : 'ทุกใบที่มีเลขที่ใบเสนอราคา'} · การส่งออก=${exported} ดึงมา ${quotes.length} ใบ`);
 if (quotes.length === 0) {
   console.log('⚠️  ไม่มีใบเสนอราคาให้ตรวจ — ลองเปลี่ยน --status หรือใส่ข้อมูลทดสอบก่อน');
   await pool.end();

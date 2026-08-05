@@ -30,7 +30,10 @@
 |---|---|---|
 | POST | `/api/admin/login` | Login ได้รับ JWT token |
 | GET | `/api/admin/quotations` | ดึงใบเสนอราคาทั้งหมด (pagination, filter, sort) |
-| GET | `/api/admin/quotations/export` | Export CSV ใบเสนอราคา |
+| GET | `/api/admin/quotations/export` | Export ไฟล์นำเข้า Sale Order ของ Odoo (xlsx/csv) — ตั้งต้นเฉพาะใบที่ยังไม่เคยส่ง แล้วมาร์กใบที่ลงไฟล์ว่าส่งออกแล้ว |
+| POST | `/api/admin/quotations/:id/unmark-export` | ยกเลิกเครื่องหมาย "ส่งออกแล้ว" ของใบเดียว |
+| GET | `/api/admin/quotations/export-batches` | ประวัติชุดการส่งออก Odoo |
+| POST | `/api/admin/quotations/export-batches/:batchId/unmark` | ยกเลิกเครื่องหมายส่งออกทั้งชุด |
 | GET | `/api/admin/promotions` | ดึงโปรโมชันทั้งหมด |
 | POST | `/api/admin/promotions` | สร้างโปรโมชันใหม่ |
 | PUT | `/api/admin/promotions/:id` | แก้ไขโปรโมชัน |
@@ -208,7 +211,7 @@ user_id, message_id, type, content, reply_token, reply_content, created_at
 |---|---|---|
 | Login | `Login.tsx` | Form username/password → POST `/api/admin/login` → JWT → localStorage |
 | Dashboard | `AdminApp.tsx` | Welcome card, quick nav ไป tab ต่างๆ |
-| ประวัติใบเสนอราคา | `Quotations.tsx` | ตาราง pagination, filter status/วันที่/search, expand แสดงสินค้า, download PDF, export CSV |
+| ประวัติใบเสนอราคา | `Quotations.tsx` | ตาราง pagination, filter status/วันที่/search/สถานะการส่งออก, expand แสดงสินค้า, download PDF, export Odoo (กันส่งออกซ้ำ + ประวัติชุด + ถอยเครื่องหมาย) |
 | โปรโมชัน | `Promotions.tsx` | CRUD promotion, multi-select product/customer/ref tags, sort, toggle active, import/export CSV |
 | ลายเซ็นพนักงาน | `Salespersons.tsx` | ดู list พนักงาน, upload sale_sig/admin_sig (PNG/JPG ≤5MB), preview, delete, sort |
 | เงื่อนไขใบเสนอราคา | `QuotationRules.tsx` | CRUD rules, ComboBox dropdown ที่ filter brand/series ตาม production ที่เลือก, is_locked toggle, warranty_unit (month/year) |
@@ -300,7 +303,7 @@ user_id, message_id, type, content, reply_token, reply_content, created_at
 | PUT | `/api/quotation/:id` | - | อัปเดตรายการสินค้า |
 | POST | `/api/quotation/:id/confirm` | - | ยืนยันและออกเลขที่ |
 | GET | `/api/admin/quotations` | JWT | ดึงรายการ (pagination + filter) |
-| GET | `/api/admin/quotations/export` | JWT | Export CSV |
+| GET | `/api/admin/quotations/export` | JWT | Export ไฟล์นำเข้า Odoo (กันส่งออกซ้ำด้วย `odoo_exported_at`) |
 | POST | `/api/admin/login` | - | เข้าสู่ระบบแอดมิน |
 | GET | `/download-pdf/:id` | - | ดาวน์โหลด PDF |
 | POST | `/api/admin/signatures/:type` | JWT | อัปโหลดลายเซ็น |
@@ -358,7 +361,7 @@ user_id, message_id, type, content, reply_token, reply_content, created_at
 
 **5 tabs:**
 1. **Dashboard** — welcome card + quick links
-2. **ประวัติใบเสนอราคา** — ตาราง paginate + filter + sort + export CSV + download PDF
+2. **ประวัติใบเสนอราคา** — ตาราง paginate + filter + sort + export Odoo (ตั้งต้นเฉพาะใบที่ยังไม่เคยส่ง) + download PDF
 3. **จัดการโปรโมชัน** — CRUD โปรโมชัน
 4. **จัดการลายเซ็นพนักงาน** — อัปโหลดลายเซ็น sale_sigs + admin_sigs
 5. **เงื่อนไขใบเสนอราคา** — CRUD quotation_rules (warranty, delivery days, is_locked)

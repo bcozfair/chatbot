@@ -51,6 +51,8 @@ export interface OdooExportConfig {
 
 /** แถวใบเสนอราคาที่ endpoint/diag ส่งเข้ามา (มาจาก quotations LEFT JOIN salesperson) */
 export interface OdooExportQuotationRow {
+  /** quotations.id — ไม่ได้ลงในไฟล์ แต่ endpoint ใช้มาร์ก odoo_exported_at ของใบที่อยู่ในไฟล์จริง */
+  id?: string;
   /** A: name — เลขที่ใบเสนอราคา */
   quotation_no?: string | null;
   /** F: date_order — template ใหม่ใช้เวลาที่แก้ไขล่าสุด ไม่ใช่เวลาที่สร้าง */
@@ -178,6 +180,16 @@ export function withCompanySuffix(name: string, quotationNo: string): string {
 }
 
 /**
+ * คัดเฉพาะใบที่จะปรากฏในไฟล์จริง — ใบที่ไม่มีรายการสินค้าถูกข้าม (นำเข้า Odoo ไม่ได้)
+ *
+ * แยกออกมาเป็นฟังก์ชันของตัวเองเพราะ endpoint ต้องใช้กติกาเดียวกันนี้ตอน "ทำเครื่องหมายว่าส่งออกแล้ว"
+ * ถ้ามาร์กใบที่ไม่มีรายการสินค้าไปด้วย ใบนั้นจะหายจาก export ตลอดกาลทั้งที่ไม่เคยอยู่ในไฟล์เลยสักครั้ง
+ */
+export function selectExportableQuotes<T extends OdooExportQuotationRow>(quotes: T[]): T[] {
+  return (quotes || []).filter(q => Array.isArray(q.item_details) && q.item_details.length > 0);
+}
+
+/**
  * แปลงใบเสนอราคาเป็นแถวตาม template — ใบที่ไม่มีรายการสินค้าจะถูกข้าม (นำเข้า Odoo ไม่ได้)
  *
  * ⚠️ อ่านรายการจาก item_details (snapshot ดิบ) ไม่ใช่ items ที่ enrichQuotationData() คืนมา
@@ -189,9 +201,8 @@ export function buildOdooSaleOrderRows(
 ): OdooSoRow[] {
   const rows: OdooSoRow[] = [];
 
-  (quotes || []).forEach(quote => {
-    const items = Array.isArray(quote.item_details) ? quote.item_details : [];
-    if (items.length === 0) return;
+  selectExportableQuotes(quotes || []).forEach(quote => {
+    const items = quote.item_details as any[];
 
     const cust = quote.customer_details || {};
     // snapshot ควรเก็บเฉพาะชื่อบริษัท แต่ข้อมูลเก่าอาจปนเป็น "company | contact" — split แบบเดียวกับ

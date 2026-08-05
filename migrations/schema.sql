@@ -571,11 +571,61 @@ CREATE TABLE public.quotations (
     customer_id integer,
     contact_id integer,
     delivery_days_override integer,
+    odoo_exported_at timestamp with time zone,
     CONSTRAINT quotations_delivery_days_override_check CHECK (
         (delivery_days_override IS NULL)
         OR ((delivery_days_override >= 0) AND (delivery_days_override <= 3650))
     )
 );
+
+
+--
+-- Name: quotation_export_batches; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.quotation_export_batches (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    exported_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    exported_by_id integer,
+    exported_by_username text,
+    format text NOT NULL,
+    quotation_count integer DEFAULT 0 NOT NULL,
+    row_count integer DEFAULT 0 NOT NULL,
+    filters jsonb
+);
+
+
+--
+-- Name: quotation_export_log; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.quotation_export_log (
+    id bigint NOT NULL,
+    batch_id uuid NOT NULL,
+    quotation_id uuid,
+    quotation_no character varying(100),
+    exported_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    reverted_at timestamp with time zone
+);
+
+
+--
+-- Name: quotation_export_log_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.quotation_export_log_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: quotation_export_log_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.quotation_export_log_id_seq OWNED BY public.quotation_export_log.id;
 
 
 --
@@ -662,6 +712,13 @@ ALTER TABLE ONLY public.promotions ALTER COLUMN id SET DEFAULT nextval('public.p
 --
 
 ALTER TABLE ONLY public.quotation_rules ALTER COLUMN id SET DEFAULT nextval('public.quotation_rules_id_seq'::regclass);
+
+
+--
+-- Name: quotation_export_log id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.quotation_export_log ALTER COLUMN id SET DEFAULT nextval('public.quotation_export_log_id_seq'::regclass);
 
 
 --
@@ -769,6 +826,22 @@ ALTER TABLE ONLY public.quotations
 
 
 --
+-- Name: quotation_export_batches quotation_export_batches_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.quotation_export_batches
+    ADD CONSTRAINT quotation_export_batches_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: quotation_export_log quotation_export_log_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.quotation_export_log
+    ADD CONSTRAINT quotation_export_log_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: sale_orders sale_orders_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -850,11 +923,55 @@ CREATE UNIQUE INDEX uq_quotations_quotation_no ON public.quotations USING btree 
 
 
 --
+-- Name: idx_quotations_not_exported; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_quotations_not_exported ON public.quotations USING btree (created_at DESC) WHERE (odoo_exported_at IS NULL);
+
+
+--
+-- Name: idx_quotations_odoo_exported_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_quotations_odoo_exported_at ON public.quotations USING btree (odoo_exported_at);
+
+
+--
+-- Name: idx_quotation_export_log_batch; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_quotation_export_log_batch ON public.quotation_export_log USING btree (batch_id);
+
+
+--
+-- Name: idx_quotation_export_log_quotation; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_quotation_export_log_quotation ON public.quotation_export_log USING btree (quotation_id);
+
+
+--
 -- Name: quotations quotations_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.quotations
     ADD CONSTRAINT quotations_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.salesperson(user_id) ON DELETE SET NULL;
+
+
+--
+-- Name: quotation_export_log quotation_export_log_batch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.quotation_export_log
+    ADD CONSTRAINT quotation_export_log_batch_id_fkey FOREIGN KEY (batch_id) REFERENCES public.quotation_export_batches(id) ON DELETE CASCADE;
+
+
+--
+-- Name: quotation_export_log quotation_export_log_quotation_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.quotation_export_log
+    ADD CONSTRAINT quotation_export_log_quotation_id_fkey FOREIGN KEY (quotation_id) REFERENCES public.quotations(id) ON DELETE SET NULL;
 
 
 --

@@ -8,7 +8,7 @@
  *  - ชื่อคอลัมน์ mapping ที่ dbClient เคยซ่อนไว้ ถูกเขียนตรงๆ ใน SQL:
  *      customers_view.branch → alias เป็น branch_code
  */
-import { pool } from '../config/db.js';
+import { pool, type DbExecutor } from '../config/db.js';
 
 function logErr(fn: string, err: any): void {
   console.error(`[repo.${fn}]`, err?.message || err);
@@ -332,6 +332,134 @@ export const ODOO_EXPORT_SALES_TEAM_JOIN = `
      ORDER BY (cd.company_id = q.customer_id) DESC NULLS LAST, cd.company_id
      LIMIT 1
   ) cust ON TRUE`;
+
+// ────────────── ติดตามการส่งออกไป Odoo (กันส่งออกซ้ำ) ──────────────
+//
+// ⚠️ กลุ่มนี้ "โยน error ออกไป" ต่างจากกติกาหัวไฟล์ที่ให้ log แล้วคืน []/null โดยเจตนา
+//    เพราะทุกตัวถูกเรียกใน withTransaction ของ endpoint export — ถ้ากลืน error ไว้เงียบ ๆ
+//    transaction จะ COMMIT ทั้งที่มาร์กใบไปแล้วแต่ log ไม่ครบ (หรือกลับกัน) แล้วตามแกะทีหลังไม่ได้
+
+export type ExportedFilter = 'no' | 'yes' | 'all';
+
+/** แปลง query param เป็นค่าที่ใช้ได้จริง — ค่าที่ไม่รู้จักตกเป็น fallback ที่ผู้เรียกกำหนด */
+export function parseExportedFilter(raw: any, fallback: ExportedFilter): ExportedFilter {
+  const v = String(raw ?? '').trim().toLowerCase();
+  return v === 'no' || v === 'yes' || v === 'all' ? v : fallback;
+}
+
+/**
+ * เงื่อนไข WHERE ของตัวกรอง "สถานะการส่งออก" — คืน '' เมื่อไม่ต้องกรอง
+ * เป็นค่าคงที่ล้วน ไม่รับ input ผู้ใช้เข้ามาต่อสตริง จึงไม่ต้อง parameterize
+ * (ต้องมี alias ตาราง `q` = quotations อยู่ก่อนหน้าในคำสั่ง เหมือน ODOO_EXPORT_SALES_TEAM_JOIN)
+ */
+export function exportedFilterCondition(filter: ExportedFilter): string {
+  if (filter === 'no') return 'q.odoo_exported_at IS NULL';
+  if (filter === 'yes') return 'q.odoo_exported_at IS NOT NULL';
+  return '';
+}
+
+/**
+ * จอง (claim) ใบที่จะใส่ลงไฟล์ — มาร์ก odoo_exported_at แล้วคืน id ที่ "เป็นของ request นี้"
+ *
+ * onlyUnexported = true (ตัวกรอง 'ยังไม่ส่งออก') จะใส่ guard `odoo_exported_at IS NULL` ไว้ด้วย
+ * ถ้าแอดมินสองคนกดพร้อมกัน UPDATE ที่มาทีหลังจะได้ id กลับมาน้อยลงตามจำนวนที่คนแรกคว้าไปแล้ว
+ * ผู้เรียกจึงสร้างไฟล์จาก "id ที่ RETURNING คืนมา" เท่านั้น ไฟล์สองไฟล์ก็ไม่มีใบซ้ำกัน
+ * — ใช้วิธีนี้แทน SELECT ... FOR UPDATE เพราะ statement_timeout 15 วิ ทำให้การรอล็อกกลายเป็น error แทน
+ */
+export async function claimQuotationsForExport(
+  db: DbExecutor, ids: string[], onlyUnexported: boolean
+): Promise<string[]> {
+  if (!ids.length) return [];
+  const guard = onlyUnexported ? 'AND odoo_exported_at IS NULL' : '';
+  const { rows } = await db.query(
+    `UPDATE quotations SET odoo_exported_at = CURRENT_TIMESTAMP
+      WHERE id = ANY($1::uuid[]) ${guard}
+      RETURNING id`, [ids]);
+  return rows.map((r: any) => String(r.id));
+}
+
+/** บันทึกหัวชุดการส่งออก 1 ครั้ง แล้วคืน batch id */
+export async function insertExportBatch(db: DbExecutor, batch: {
+  adminId: number | null; adminUsername: string | null; format: string;
+  quotationCount: number; rowCount: number; filters: any;
+}): Promise<string> {
+  const { rows } = await db.query(
+    `INSERT INTO quotation_export_batches
+       (exported_by_id, exported_by_username, format, quotation_count, row_count, filters)
+     VALUES ($1, $2, $3, $4, $5, $6::jsonb) RETURNING id`,
+    [batch.adminId, batch.adminUsername, batch.format,
+     batch.quotationCount, batch.rowCount, JSON.stringify(batch.filters ?? {})]);
+  return String(rows[0].id);
+}
+
+/** บันทึกรายใบของชุดนั้น — insert ทีเดียวด้วย UNNEST ไม่วนยิงทีละใบ */
+export async function insertExportLogRows(
+  db: DbExecutor, batchId: string, quotations: { id: string; quotation_no: string | null }[]
+): Promise<void> {
+  if (!quotations.length) return;
+  await db.query(
+    `INSERT INTO quotation_export_log (batch_id, quotation_id, quotation_no)
+     SELECT $1::uuid, x.id, x.no
+       FROM UNNEST($2::uuid[], $3::varchar[]) AS x(id, no)`,
+    [batchId, quotations.map(q => q.id), quotations.map(q => q.quotation_no ?? null)]);
+}
+
+/**
+ * ยกเลิกเครื่องหมาย "ส่งออกแล้ว" ของใบเดียว (ใช้ตอนนำเข้า Odoo ไม่ผ่าน)
+ * คืน false ถ้าไม่มีใบนั้น หรือใบนั้นยังไม่เคยถูกมาร์กอยู่แล้ว
+ */
+export async function unmarkQuotationExport(db: DbExecutor, id: string): Promise<boolean> {
+  const upd = await db.query(
+    `UPDATE quotations SET odoo_exported_at = NULL
+      WHERE id = $1::uuid AND odoo_exported_at IS NOT NULL RETURNING id`, [id]);
+  if (!upd.rowCount) return false;
+  // ไม่ลบแถว log ทิ้ง — ประวัติว่า "เคยส่งแล้วถอย" ต้องตรวจย้อนหลังได้
+  await db.query(
+    `UPDATE quotation_export_log SET reverted_at = CURRENT_TIMESTAMP
+      WHERE quotation_id = $1::uuid AND reverted_at IS NULL`, [id]);
+  return true;
+}
+
+/** ยกเลิกเครื่องหมายทั้งชุด — คืนจำนวนใบที่ถูกถอยจริง (ใบที่ถูกถอยไปแล้วไม่นับซ้ำ) */
+export async function unmarkExportBatch(db: DbExecutor, batchId: string): Promise<number> {
+  const { rows } = await db.query(
+    `UPDATE quotation_export_log SET reverted_at = CURRENT_TIMESTAMP
+      WHERE batch_id = $1::uuid AND reverted_at IS NULL AND quotation_id IS NOT NULL
+      RETURNING quotation_id`, [batchId]);
+  const ids = rows.map((r: any) => String(r.quotation_id));
+  if (!ids.length) return 0;
+  const upd = await db.query(
+    `UPDATE quotations SET odoo_exported_at = NULL
+      WHERE id = ANY($1::uuid[]) AND odoo_exported_at IS NOT NULL`, [ids]);
+  return upd.rowCount || 0;
+}
+
+/**
+ * ประวัติชุดการส่งออก — active_count = จำนวนใบที่ยังนับว่า "ส่งออกแล้ว" (ยังไม่ถูกถอย)
+ * ตัวนี้เป็น SELECT ล้วนนอก transaction จึงคืน [] เมื่อ error ตามกติกาหัวไฟล์
+ */
+export async function getExportBatches(limit: number, offset: number): Promise<any[]> {
+  try {
+    const { rows } = await pool.query(
+      `SELECT b.id, b.exported_at, b.exported_by_id, b.exported_by_username, b.format,
+              b.quotation_count, b.row_count, b.filters,
+              COUNT(l.id) FILTER (WHERE l.reverted_at IS NULL)::int AS active_count
+         FROM quotation_export_batches b
+         LEFT JOIN quotation_export_log l ON l.batch_id = b.id
+        GROUP BY b.id
+        ORDER BY b.exported_at DESC
+        LIMIT $1 OFFSET $2`, [limit, offset]);
+    return rows;
+  } catch (err) { logErr('getExportBatches', err); return []; }
+}
+
+/** จำนวนชุดส่งออกทั้งหมด (ไว้ทำ pagination ของหน้าประวัติ) */
+export async function countExportBatches(): Promise<number> {
+  try {
+    const { rows } = await pool.query(`SELECT COUNT(*)::int AS n FROM quotation_export_batches`);
+    return rows[0]?.n || 0;
+  } catch (err) { logErr('countExportBatches', err); return 0; }
+}
 
 // ═══════════════════════════ products ═══════════════════════════
 

@@ -17,7 +17,9 @@ import {
   X,
   ArrowUpDown,
   ArrowUp,
-  ArrowDown
+  ArrowDown,
+  History,
+  RotateCcw
 } from 'lucide-react';
 
 interface QuotationItem {
@@ -53,6 +55,8 @@ interface Quotation {
   user_id: string;
   created_at: string;
   updated_at: string;
+  /** เวลาที่ใบนี้ถูกส่งออกไฟล์นำเข้า Odoo ครั้งล่าสุด — null = ยังไม่เคยส่งออก */
+  odoo_exported_at?: string | null;
   customer_details?: {
     customer_name: string;
     customer_code: string;
@@ -83,6 +87,21 @@ const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 
 /** รูปแบบไฟล์นำเข้า Sale Order ของ Odoo — ตรงกับ query param `format` ของ endpoint export */
 type ExportFormat = 'xlsx' | 'csv';
+
+/** ตัวกรอง "สถานะการส่งออก Odoo" — ตรงกับ query param `exported` ของ backend */
+type ExportedFilter = 'no' | 'yes' | 'all';
+
+/** 1 ครั้งที่กดปุ่มส่งออก (GET /api/admin/quotations/export-batches) */
+interface ExportBatch {
+  id: string;
+  exported_at: string;
+  exported_by_username: string | null;
+  format: string;
+  quotation_count: number;
+  row_count: number;
+  /** ใบในชุดที่ยังนับว่า "ส่งออกแล้ว" — น้อยกว่า quotation_count แปลว่าถูกถอยไปบางส่วน */
+  active_count: number;
+}
 
 // Status color mapping
 const STATUS_STYLES: Record<string, { bg: string; text: string; label: string }> = {
@@ -128,6 +147,9 @@ export const Quotations: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  // ตั้งต้น 'no' — งานหลักของหน้านี้คือหยิบ "ใบใหม่ที่ยังไม่ได้นำเข้า Odoo" ไปส่งออก
+  // อยากดูใบเก่าให้สลับตัวกรองเป็น "ส่งออกแล้ว" หรือ "ทั้งหมด"
+  const [exportedFilter, setExportedFilter] = useState<ExportedFilter>('no');
   const [sortBy, setSortBy] = useState('created_at');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
 
@@ -139,6 +161,12 @@ export const Quotations: React.FC = () => {
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const exportMenuRef = React.useRef<HTMLDivElement>(null);
+
+  // ประวัติการส่งออก + การถอยเครื่องหมาย
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [batches, setBatches] = useState<ExportBatch[]>([]);
+  const [isLoadingBatches, setIsLoadingBatches] = useState(false);
+  const [unmarkingId, setUnmarkingId] = useState<string | null>(null);
 
   const handleSort = (field: string) => {
     if (sortBy === field) {
@@ -175,6 +203,7 @@ export const Quotations: React.FC = () => {
       if (statusFilter) params.set('status', statusFilter);
       if (dateFrom) params.set('dateFrom', dateFrom);
       if (dateTo) params.set('dateTo', dateTo);
+      params.set('exported', exportedFilter);
       params.set('sortBy', sortBy);
       params.set('sortOrder', sortOrder);
       params.set('limit', String(pageSize));
@@ -196,7 +225,7 @@ export const Quotations: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [token, searchQuery, statusFilter, dateFrom, dateTo, currentPage, pageSize, sortBy, sortOrder]);
+  }, [token, searchQuery, statusFilter, dateFrom, dateTo, exportedFilter, currentPage, pageSize, sortBy, sortOrder]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -217,8 +246,9 @@ export const Quotations: React.FC = () => {
     return () => document.removeEventListener('mousedown', onClickOutside);
   }, [exportMenuOpen]);
 
-  // ส่งออกไฟล์นำเข้า Sale Order ของ Odoo — เมื่อไม่ได้ส่ง status มา backend จะส่งออก
-  // ทุกใบที่มีเลขที่ใบเสนอราคาแล้ว (ตัวกรองสถานะบนหน้าจอเป็นตัว override)
+  // ส่งออกไฟล์นำเข้า Sale Order ของ Odoo — ใช้ตัวกรองชุดเดียวกับที่เห็นบนหน้าจอ
+  // ตัวกรอง "การส่งออก" ตั้งต้นเป็น "ยังไม่ส่งออก" ใบที่ลงไฟล์ไปแล้วจึงไม่ถูกส่งซ้ำ
+  // (backend มาร์ก odoo_exported_at ให้ตอนสร้างไฟล์สำเร็จ)
   const handleExportOdoo = async (format: ExportFormat) => {
     setExportMenuOpen(false);
     setIsExporting(true);
@@ -228,6 +258,7 @@ export const Quotations: React.FC = () => {
       if (statusFilter) params.set('status', statusFilter);
       if (dateFrom) params.set('dateFrom', dateFrom);
       if (dateTo) params.set('dateTo', dateTo);
+      params.set('exported', exportedFilter);
       params.set('sortBy', sortBy);
       params.set('sortOrder', sortOrder);
       params.set('format', format);
@@ -237,6 +268,9 @@ export const Quotations: React.FC = () => {
       });
 
       if (!response.ok) throw new Error('ไม่สามารถส่งออกข้อมูลได้');
+
+      // จำนวนใบนับจากไฟล์เองไม่ได้ (1 ใบ = หลายแถว) backend จึงส่งมาทาง header
+      const exportedCount = Number(response.headers.get('X-Export-Quotation-Count') ?? '0');
 
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
@@ -251,12 +285,81 @@ export const Quotations: React.FC = () => {
       document.body.removeChild(a);
       window.URL.revokeObjectURL(url);
 
-      showToast(`ส่งออกไฟล์ ${format === 'xlsx' ? 'Excel' : 'CSV'} สำหรับนำเข้า Odoo สำเร็จ`);
+      showToast(exportedCount > 0
+        ? `ส่งออก ${exportedCount} ใบเป็นไฟล์ ${format === 'xlsx' ? 'Excel' : 'CSV'} สำเร็จ — ใบเหล่านี้ถูกทำเครื่องหมายว่าส่งออกแล้ว`
+        : 'ไม่มีใบใหม่ให้ส่งออก (ทุกใบตามตัวกรองนี้ถูกส่งออกไปแล้ว)');
+
+      // ใบที่เพิ่งดาวน์โหลดถูกมาร์กไปแล้ว ถ้าไม่โหลดใหม่หน้าจอจะแสดงสถานะเก่าที่ไม่จริง
+      fetchQuotations();
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการส่งออกข้อมูล';
       setError(errorMessage);
     } finally {
       setIsExporting(false);
+    }
+  };
+
+  // ถอยเครื่องหมาย "ส่งออกแล้ว" ของใบเดียว — ใช้ตอนนำเข้า Odoo ไม่ผ่าน ใบจะกลับเข้าคิวรอบถัดไป
+  const handleUnmarkExport = async (quote: Quotation) => {
+    if (!window.confirm(`ยกเลิกเครื่องหมาย "ส่งออกแล้ว" ของใบ ${quote.quotation_no || quote.id}?\nใบนี้จะกลับมาอยู่ในชุดที่ส่งออกครั้งถัดไป`)) return;
+    setUnmarkingId(quote.id);
+    setError(null);
+    try {
+      const response = await fetch(`/api/admin/quotations/${quote.id}/unmark-export`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!response.ok) throw new Error('ไม่สามารถยกเลิกเครื่องหมายส่งออกได้');
+      showToast('ยกเลิกเครื่องหมายส่งออกแล้ว');
+      fetchQuotations();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการยกเลิกเครื่องหมายส่งออก');
+    } finally {
+      setUnmarkingId(null);
+    }
+  };
+
+  const fetchBatches = useCallback(async () => {
+    setIsLoadingBatches(true);
+    try {
+      const response = await fetch('/api/admin/quotations/export-batches?limit=50', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!response.ok) throw new Error('ไม่สามารถดึงประวัติการส่งออกได้');
+      const result: { data: ExportBatch[] } = await response.json();
+      setBatches(result.data || []);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการโหลดประวัติการส่งออก');
+    } finally {
+      setIsLoadingBatches(false);
+    }
+  }, [token]);
+
+  const openHistory = () => {
+    setExportMenuOpen(false);
+    setHistoryOpen(true);
+    fetchBatches();
+  };
+
+  // ถอยทั้งชุด — ใช้ตอนไฟล์ทั้งไฟล์นำเข้า Odoo ไม่ผ่าน
+  const handleUnmarkBatch = async (batch: ExportBatch) => {
+    if (!window.confirm(`ยกเลิกเครื่องหมายส่งออกของทั้งชุด (${batch.active_count} ใบ)?\nใบทั้งหมดในชุดนี้จะกลับมาอยู่ในชุดที่ส่งออกครั้งถัดไป`)) return;
+    setUnmarkingId(batch.id);
+    setError(null);
+    try {
+      const response = await fetch(`/api/admin/quotations/export-batches/${batch.id}/unmark`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!response.ok) throw new Error('ไม่สามารถยกเลิกเครื่องหมายส่งออกของชุดนี้ได้');
+      const result: { reverted: number } = await response.json();
+      showToast(`ยกเลิกเครื่องหมายส่งออกแล้ว ${result.reverted} ใบ`);
+      fetchBatches();
+      fetchQuotations();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการยกเลิกเครื่องหมายส่งออก');
+    } finally {
+      setUnmarkingId(null);
     }
   };
 
@@ -341,8 +444,16 @@ export const Quotations: React.FC = () => {
                     <FileText className="w-4 h-4 text-slate-400" />
                     CSV
                   </button>
+                  <button
+                    onClick={openHistory}
+                    className="w-full flex items-center gap-2 px-3.5 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50 transition-colors border-t border-slate-100"
+                  >
+                    <History className="w-4 h-4 text-slate-400" />
+                    ประวัติการส่งออก
+                  </button>
                   <p className="px-3.5 py-2.5 text-[11px] leading-snug text-slate-500 border-t border-slate-100 bg-slate-50">
-                    ค่าตั้งต้นส่งออกทุกใบที่มีเลขที่ใบเสนอราคา — จำกัดสถานะได้ที่ตัวกรอง
+                    ส่งออกตามตัวกรองบนหน้าจอ — ค่าตั้งต้นคือเฉพาะใบที่ยังไม่เคยส่ง
+                    และใบที่ลงไฟล์แล้วจะถูกทำเครื่องหมายว่าส่งออกแล้วทันที
                   </p>
                 </div>
               )}
@@ -351,7 +462,7 @@ export const Quotations: React.FC = () => {
         </div>
 
         {/* Filters */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-4 border-t border-slate-100">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 pt-4 border-t border-slate-100">
           {/* Search */}
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
@@ -383,6 +494,21 @@ export const Quotations: React.FC = () => {
             <Filter className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
           </div>
 
+          {/* Export Status Filter — ตั้งต้น "ยังไม่ส่งออก" เพื่อให้กดส่งออกได้เลยโดยไม่ซ้ำ */}
+          <div className="relative">
+            <select
+              id="quotation-exported-filter"
+              value={exportedFilter}
+              onChange={(e) => { setExportedFilter(e.target.value as ExportedFilter); setCurrentPage(1); }}
+              className="w-full bg-white border border-slate-200 focus:border-[#009032] focus:ring-2 focus:ring-[#009032]/10 focus:outline-none rounded-xl px-4 py-2.5 text-sm text-slate-800 transition-all appearance-none cursor-pointer"
+            >
+              <option value="no">ยังไม่ส่งออก Odoo</option>
+              <option value="yes">ส่งออก Odoo แล้ว</option>
+              <option value="all">การส่งออกทั้งหมด</option>
+            </select>
+            <FileSpreadsheet className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+          </div>
+
           {/* Date From */}
           <div className="relative">
             <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 z-10 pointer-events-none" />
@@ -407,13 +533,15 @@ export const Quotations: React.FC = () => {
         </div>
 
         {/* Clear Filters */}
-        {(searchQuery || statusFilter || dateFrom || dateTo) && (
+        {(searchQuery || statusFilter || dateFrom || dateTo || exportedFilter !== 'no') && (
           <button
             onClick={() => {
               setSearchQuery('');
               setStatusFilter('');
               setDateFrom('');
               setDateTo('');
+              // กลับไปค่าตั้งต้น 'no' ไม่ใช่ 'all' — "ล้างตัวกรอง" ต้องได้สภาพเดียวกับตอนเปิดหน้า
+              setExportedFilter('no');
               setCurrentPage(1);
             }}
             className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-red-600 transition-colors font-semibold"
@@ -486,6 +614,12 @@ export const Quotations: React.FC = () => {
                   >
                     สถานะ {renderSortIcon('status')}
                   </th>
+                  <th
+                    onClick={() => handleSort('odoo_exported_at')}
+                    className="px-4 py-3 text-center cursor-pointer hover:bg-slate-100 transition-colors"
+                  >
+                    ส่งออก Odoo {renderSortIcon('odoo_exported_at')}
+                  </th>
                   <th className="px-4 py-3 text-center">จัดการ</th>
                 </tr>
               </thead>
@@ -547,6 +681,22 @@ export const Quotations: React.FC = () => {
                           </span>
                         </td>
 
+                        {/* Odoo export status */}
+                        <td className="px-4 py-2.5 text-center">
+                          {quote.odoo_exported_at ? (
+                            <div className="flex flex-col items-center gap-0.5">
+                              <span className="inline-flex items-center px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border bg-emerald-50 border-emerald-200 text-emerald-700">
+                                ส่งออกแล้ว
+                              </span>
+                              <span className="text-[10px] text-slate-400">{formatDate(quote.odoo_exported_at)}</span>
+                            </div>
+                          ) : (
+                            <span className="inline-flex items-center px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border bg-slate-50 border-slate-200 text-slate-500">
+                              ยังไม่ส่งออก
+                            </span>
+                          )}
+                        </td>
+
                         {/* Actions */}
                         <td className="px-4 py-2.5 text-center">
                           <div className="flex items-center justify-center gap-2">
@@ -562,6 +712,19 @@ export const Quotations: React.FC = () => {
                                 <Download className="w-4 h-4" />
                               </a>
                             )}
+                            {quote.odoo_exported_at && (
+                              <button
+                                type="button"
+                                disabled={unmarkingId === quote.id}
+                                className="p-2 bg-white hover:bg-amber-50 text-slate-500 hover:text-amber-600 border border-slate-200 hover:border-amber-200 rounded-xl transition-all active:scale-95 shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
+                                title="ยกเลิกเครื่องหมายส่งออก (ให้ส่งออกใหม่ได้)"
+                                onClick={(e) => { e.stopPropagation(); handleUnmarkExport(quote); }}
+                              >
+                                {unmarkingId === quote.id
+                                  ? <Loader2 className="w-4 h-4 animate-spin" />
+                                  : <RotateCcw className="w-4 h-4" />}
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -569,7 +732,7 @@ export const Quotations: React.FC = () => {
                       {/* Expanded Row: Items Detail */}
                       {isExpanded && (
                         <tr className="bg-slate-50/70">
-                          <td colSpan={6} className="px-4 py-3">
+                          <td colSpan={7} className="px-4 py-3">
                             <div className="text-xs space-y-3">
                               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                                 <div>
@@ -702,6 +865,101 @@ export const Quotations: React.FC = () => {
                 <ChevronRight className="w-3.5 h-3.5" />
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Export History Modal ── */}
+      {historyOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-slate-900/40 flex items-start justify-center p-4 sm:p-8 overflow-y-auto"
+          onClick={() => setHistoryOpen(false)}
+        >
+          <div
+            className="bg-white border border-slate-200 rounded-2xl shadow-xl w-full max-w-3xl my-8"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2 px-5 py-4 border-b border-slate-100">
+              <History className="w-5 h-5 text-[#009032]" />
+              <h3 className="text-base font-bold text-slate-900">ประวัติการส่งออก Odoo</h3>
+              <div className="flex-1" />
+              <button
+                onClick={() => setHistoryOpen(false)}
+                className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
+                title="ปิด"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {isLoadingBatches && (
+              <div className="p-10 flex flex-col items-center justify-center gap-3">
+                <Loader2 className="w-7 h-7 text-[#009032] animate-spin" />
+                <p className="text-slate-500 text-sm font-medium">กำลังโหลดประวัติ...</p>
+              </div>
+            )}
+
+            {!isLoadingBatches && batches.length === 0 && (
+              <div className="p-10 text-center text-slate-500 flex flex-col items-center gap-2">
+                <FileSpreadsheet className="w-9 h-9 text-slate-300" />
+                <p className="font-bold">ยังไม่มีประวัติการส่งออก</p>
+              </div>
+            )}
+
+            {!isLoadingBatches && batches.length > 0 && (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 text-[11px] font-semibold uppercase tracking-wider">
+                      <th className="px-4 py-3">เวลา</th>
+                      <th className="px-4 py-3">ผู้ส่งออก</th>
+                      <th className="px-4 py-3 text-center">ไฟล์</th>
+                      <th className="px-4 py-3 text-right">จำนวนใบ</th>
+                      <th className="px-4 py-3 text-center">จัดการ</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {batches.map((batch) => (
+                      <tr key={batch.id} className="hover:bg-slate-50/40 transition-colors">
+                        <td className="px-4 py-2.5 text-slate-700">{formatDate(batch.exported_at)}</td>
+                        <td className="px-4 py-2.5 text-slate-700">{batch.exported_by_username || '-'}</td>
+                        <td className="px-4 py-2.5 text-center">
+                          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border bg-slate-50 border-slate-200 text-slate-600">
+                            {batch.format}
+                          </span>
+                        </td>
+                        <td className="px-4 py-2.5 text-right font-mono text-slate-800">
+                          {batch.active_count}
+                          {/* ต่างจาก quotation_count แปลว่าบางใบถูกถอยเครื่องหมายไปแล้ว */}
+                          {batch.active_count !== batch.quotation_count && (
+                            <span className="text-slate-400"> / {batch.quotation_count}</span>
+                          )}
+                          <span className="block text-[10px] text-slate-400">{batch.row_count} แถว</span>
+                        </td>
+                        <td className="px-4 py-2.5 text-center">
+                          <button
+                            type="button"
+                            disabled={batch.active_count === 0 || unmarkingId === batch.id}
+                            onClick={() => handleUnmarkBatch(batch)}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-white hover:bg-amber-50 text-slate-600 hover:text-amber-700 border border-slate-200 hover:border-amber-200 rounded-xl text-xs font-semibold transition-all active:scale-95 shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                            title="ยกเลิกเครื่องหมายส่งออกของทั้งชุด"
+                          >
+                            {unmarkingId === batch.id
+                              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              : <RotateCcw className="w-3.5 h-3.5" />}
+                            ยกเลิกทั้งชุด
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <p className="px-5 py-3 text-[11px] leading-snug text-slate-500 border-t border-slate-100 bg-slate-50 rounded-b-2xl">
+              "ยกเลิกทั้งชุด" ใช้ตอนไฟล์ทั้งไฟล์นำเข้า Odoo ไม่ผ่าน — ใบทั้งหมดในชุดจะกลับมาอยู่ในชุดที่ส่งออกครั้งถัดไป
+            </p>
           </div>
         </div>
       )}

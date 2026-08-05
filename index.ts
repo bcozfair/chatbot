@@ -20,10 +20,20 @@ import {
   getBranchesByCodes,
   getBranches,
   ODOO_EXPORT_SALES_TEAM_JOIN,
+  parseExportedFilter,
+  exportedFilterCondition,
+  claimQuotationsForExport,
+  insertExportBatch,
+  insertExportLogRows,
+  unmarkQuotationExport,
+  unmarkExportBatch,
+  getExportBatches,
+  countExportBatches,
 } from './db/repositories.js';
 import { confirmQuotationAtomic, enrichQuotationData, buildItemSnapshots } from './services/quotationService.js';
 import {
   buildOdooSaleOrderRows,
+  selectExportableQuotes,
   loadOdooExportConfig,
   serializeOdooRowsToCsv,
   serializeOdooRowsToXlsx,
@@ -43,7 +53,7 @@ import { generateQuotationPDF, closePdfBrowser } from './pdfGenerator.js';
 import { Parser } from 'json2csv';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { pool } from './config/db.js';
+import { pool, withTransaction } from './config/db.js';
 import { getJwtSecret } from './config/jwt.js';
 import { adminAuthMiddleware } from './config/auth.js';
 import { sumLineTotals } from './utils/pricing.js';
@@ -2448,6 +2458,9 @@ const SP_NAME_SQL = `COALESCE(s.name, q.employee_details->>'saleperson')`;
 const SP_PHONE_SQL = `COALESCE(s.phone, q.employee_details->>'sale_phone')`;
 const SP_CODE_SQL = `COALESCE(s.salesperson_id, q.employee_details->>'salesperson_id', q.salesperson_id)`;
 
+// กัน path param ที่ไม่ใช่ uuid ยิงเข้า query แล้วได้ error 500 จาก Postgres แทน 400 ที่อ่านรู้เรื่อง
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // --- API Endpoint: Admin Quotations List (with search, filter, pagination) ---
 app.get('/api/admin/quotations', adminAuthMiddleware, async (req: any, res: any) => {
   try {
@@ -2455,6 +2468,8 @@ app.get('/api/admin/quotations', adminAuthMiddleware, async (req: any, res: any)
     const status = req.query.status || '';
     const dateFrom = req.query.dateFrom || '';
     const dateTo = req.query.dateTo || '';
+    // สถานะการส่งออก Odoo — หน้าจอส่ง param มาเสมอ; ไม่ส่งมา = 'all' เพื่อไม่เปลี่ยนพฤติกรรมผู้เรียกเดิม
+    const exported = parseExportedFilter(req.query.exported, 'all');
     const limit = Math.min(parseInt(req.query.limit) || 50, 200);
     const offset = parseInt(req.query.offset) || 0;
 
@@ -2465,7 +2480,8 @@ app.get('/api/admin/quotations', adminAuthMiddleware, async (req: any, res: any)
       customer_name: "(q.customer_details->>'customer_name')",
       salesperson_name: SP_NAME_SQL,
       total_sum: 'q.total_sum',
-      status: 'q.status'
+      status: 'q.status',
+      odoo_exported_at: 'q.odoo_exported_at'
     };
 
     const sortByParam = req.query.sortBy || 'created_at';
@@ -2500,6 +2516,9 @@ app.get('/api/admin/quotations', adminAuthMiddleware, async (req: any, res: any)
       params.push(dateTo.trim());
       paramIndex++;
     }
+
+    const exportedCondition = exportedFilterCondition(exported);
+    if (exportedCondition) conditions.push(exportedCondition);
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
@@ -2537,6 +2556,9 @@ app.get('/api/admin/quotations', adminAuthMiddleware, async (req: any, res: any)
 //
 // 1 แถว = 1 รายการสินค้า ตาม template "24.Sale order.xlsx" — ดูรายละเอียดการ map
 // ที่ services/odooSaleOrderExport.ts (จุดเดียวที่รู้เรื่อง format นี้)
+//
+// กันส่งออกซ้ำ: ใบที่ลงไฟล์แล้วจะถูกมาร์ก quotations.odoo_exported_at ใน transaction เดียวกับที่ดึงข้อมูล
+// และตัวกรอง exported ตั้งต้นเป็น 'no' ครั้งถัดไปจึงได้เฉพาะใบใหม่ (แอดมินถอยเครื่องหมายได้ถ้านำเข้าไม่ผ่าน)
 app.get('/api/admin/quotations/export', adminAuthMiddleware, async (req: any, res: any) => {
   try {
     const search = req.query.search || '';
@@ -2546,6 +2568,9 @@ app.get('/api/admin/quotations/export', adminAuthMiddleware, async (req: any, re
     const status = req.query.status || '';
     const dateFrom = req.query.dateFrom || '';
     const dateTo = req.query.dateTo || '';
+    // ตั้งต้น 'no' (ไม่ใช่ 'all' เหมือน endpoint list) — ผู้เรียกที่ไม่รู้จัก param นี้จะได้ค่าที่ปลอดภัย
+    // คือไม่ส่งใบเดิมซ้ำ ซึ่งเป็นเหตุผลทั้งหมดที่ฟีเจอร์นี้มีอยู่
+    const exported = parseExportedFilter(req.query.exported, 'no');
     const format: OdooExportFormat = req.query.format === 'csv' ? 'csv' : 'xlsx';
 
     // Validate sort fields and direction to prevent SQL injection
@@ -2555,7 +2580,8 @@ app.get('/api/admin/quotations/export', adminAuthMiddleware, async (req: any, re
       customer_name: "(q.customer_details->>'customer_name')",
       salesperson_name: SP_NAME_SQL,
       total_sum: 'q.total_sum',
-      status: 'q.status'
+      status: 'q.status',
+      odoo_exported_at: 'q.odoo_exported_at'
     };
 
     const sortByParam = req.query.sortBy || 'created_at';
@@ -2597,39 +2623,132 @@ app.get('/api/admin/quotations/export', adminAuthMiddleware, async (req: any, re
       paramIndex++;
     }
 
-    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-    const result = await pool.query(
-      `SELECT q.quotation_no, q.created_at, q.updated_at, q.customer_details, q.item_details, q.employee_details,
-              ${SP_NAME_SQL} AS salesperson_name, cust.sales_team AS customer_sales_team,
-              s.employee_quotation_id AS salesperson_employee_quotation_id
-         FROM quotations q
-         LEFT JOIN salesperson s ON q.user_id = s.user_id
-         ${ODOO_EXPORT_SALES_TEAM_JOIN}
-         ${whereClause}
-        ORDER BY ${sortBy} ${sortOrderParam}`,
-      params
-    );
+    const exportedCondition = exportedFilterCondition(exported);
+    if (exportedCondition) conditions.push(exportedCondition);
 
-    // ไม่เรียก enrichQuotationData() ที่นี่ — format นี้ไม่ใช้สต๊อกสด/วันจัดส่ง/กฎโปรโมชัน
-    // และ enrich ยิง query หลายครั้งต่อใบ ทำให้ export หลายร้อยใบช้าโดยไม่จำเป็น
-    const quotes = result.rows || [];
-    const rows = buildOdooSaleOrderRows(quotes, loadOdooExportConfig());
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    // ทั้งก้อนอยู่ใน transaction เดียว: อ่าน → จองใบ (มาร์ก) → บันทึก log → สร้างไฟล์
+    // ถ้าขั้นไหนพัง ROLLBACK ทั้งหมด แอดมินจึงไม่มีทางเจอ "ใบถูกมาร์กแต่ไม่ได้ไฟล์"
+    // ตามข้อห้ามของ withTransaction: ห้าม res.send() ข้างใน — ส่งออกไปตอบหลัง COMMIT
+    const built = await withTransaction(async (client) => {
+      const result = await client.query(
+        `SELECT q.id, q.quotation_no, q.created_at, q.updated_at, q.customer_details, q.item_details, q.employee_details,
+                ${SP_NAME_SQL} AS salesperson_name, cust.sales_team AS customer_sales_team,
+                s.employee_quotation_id AS salesperson_employee_quotation_id
+           FROM quotations q
+           LEFT JOIN salesperson s ON q.user_id = s.user_id
+           ${ODOO_EXPORT_SALES_TEAM_JOIN}
+           ${whereClause}
+          ORDER BY ${sortBy} ${sortOrderParam}`,
+        params
+      );
+
+      // ใบที่ไม่มีรายการสินค้าไม่เคยลงไฟล์อยู่แล้ว จึงห้ามมาร์ก — ไม่งั้นมันจะหายจาก export ตลอดกาล
+      const exportable = selectExportableQuotes(result.rows || []);
+
+      // จองใบด้วย UPDATE ... RETURNING: id ที่ได้กลับมาคือใบที่ "เป็นของ request นี้" เท่านั้น
+      // แอดมินสองคนกดพร้อมกันจึงแบ่งใบกันไป ไม่ได้ใบซ้ำกันทั้งสองไฟล์
+      const claimedIds = new Set(
+        await claimQuotationsForExport(client, exportable.map((q: any) => String(q.id)), exported === 'no')
+      );
+      const emitted = exportable.filter((q: any) => claimedIds.has(String(q.id)));
+
+      // ไม่เรียก enrichQuotationData() ที่นี่ — format นี้ไม่ใช้สต๊อกสด/วันจัดส่ง/กฎโปรโมชัน
+      // และ enrich ยิง query หลายครั้งต่อใบ ทำให้ export หลายร้อยใบช้าโดยไม่จำเป็น
+      const rows = buildOdooSaleOrderRows(emitted, loadOdooExportConfig());
+
+      // ไม่มีใบใหม่ = ไม่สร้าง batch เปล่าให้รกประวัติ (ยังตอบไฟล์หัวคอลัมน์เปล่ากลับไปตามปกติ)
+      let batchId: string | null = null;
+      if (emitted.length > 0) {
+        batchId = await insertExportBatch(client, {
+          adminId: req.admin?.id ?? null,
+          adminUsername: req.admin?.username ?? null,
+          format,
+          quotationCount: emitted.length,
+          rowCount: rows.length,
+          filters: { search, status, dateFrom, dateTo, exported, sortBy: sortByParam, sortOrder: sortOrderParam },
+        });
+        await insertExportLogRows(client, batchId, emitted.map((q: any) => ({
+          id: String(q.id), quotation_no: q.quotation_no ?? null,
+        })));
+      }
+
+      // serialize ให้เสร็จในนี้ (เป็น CPU ล้วน ไม่ยิง network/DB) เพื่อให้ error ตอนสร้างไฟล์
+      // ย้อน ROLLBACK การมาร์กได้ด้วย
+      const body = format === 'csv' ? serializeOdooRowsToCsv(rows) : await serializeOdooRowsToXlsx(rows);
+      return { body, quotationCount: emitted.length, rowCount: rows.length, batchId };
+    });
 
     // วันที่ในชื่อไฟล์ตามเวลาไทย — toISOString() ให้วัน UTC ซึ่งจะเป็นวันก่อนหน้าถ้ากดก่อน 07:00
     const stamp = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date());
+    // header เสริมให้หน้าจอบอกจำนวนใบจริงได้ (ตัวไฟล์นับใบไม่ได้เพราะ 1 ใบ = หลายแถว)
+    res.setHeader('X-Export-Quotation-Count', String(built.quotationCount));
+    res.setHeader('X-Export-Row-Count', String(built.rowCount));
+    if (built.batchId) res.setHeader('X-Export-Batch-Id', built.batchId);
+
     if (format === 'csv') {
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename="salechatbot_quotation_${stamp}.csv"`);
-      res.send(serializeOdooRowsToCsv(rows));
+      res.send(built.body);
       return;
     }
 
-    const xlsx = await serializeOdooRowsToXlsx(rows);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="salechatbot_quotation_${stamp}.xlsx"`);
-    res.send(xlsx);
+    res.send(built.body);
   } catch (err: any) {
     console.error("GET /api/admin/quotations/export error:", err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// --- API Endpoint: ยกเลิกเครื่องหมาย "ส่งออกแล้ว" ของใบเดียว ---
+//
+// ใช้ตอนนำเข้า Odoo ไม่ผ่าน หรือไฟล์หายระหว่างดาวน์โหลด — ใบจะกลับเข้าคิว export รอบถัดไป
+app.post('/api/admin/quotations/:id/unmark-export', adminAuthMiddleware, async (req: any, res: any) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!UUID_RE.test(id)) {
+      return res.status(400).json({ error: 'รหัสใบเสนอราคาไม่ถูกต้อง' });
+    }
+
+    const ok = await withTransaction(client => unmarkQuotationExport(client, id));
+    if (!ok) {
+      return res.status(404).json({ error: 'ไม่พบใบเสนอราคานี้ หรือใบนี้ยังไม่ถูกทำเครื่องหมายว่าส่งออกแล้ว' });
+    }
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error("POST /api/admin/quotations/:id/unmark-export error:", err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// --- API Endpoint: ประวัติชุดการส่งออก Odoo ---
+app.get('/api/admin/quotations/export-batches', adminAuthMiddleware, async (req: any, res: any) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+    const offset = parseInt(req.query.offset) || 0;
+    const [data, total] = await Promise.all([getExportBatches(limit, offset), countExportBatches()]);
+    res.json({ data, total });
+  } catch (err: any) {
+    console.error("GET /api/admin/quotations/export-batches error:", err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// --- API Endpoint: ยกเลิกเครื่องหมายทั้งชุด (ไฟล์ทั้งไฟล์นำเข้า Odoo ไม่ผ่าน) ---
+app.post('/api/admin/quotations/export-batches/:batchId/unmark', adminAuthMiddleware, async (req: any, res: any) => {
+  try {
+    const batchId = String(req.params.batchId || '').trim();
+    if (!UUID_RE.test(batchId)) {
+      return res.status(400).json({ error: 'รหัสชุดการส่งออกไม่ถูกต้อง' });
+    }
+
+    const reverted = await withTransaction(client => unmarkExportBatch(client, batchId));
+    res.json({ success: true, reverted });
+  } catch (err: any) {
+    console.error("POST /api/admin/quotations/export-batches/:batchId/unmark error:", err);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
