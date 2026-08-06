@@ -95,12 +95,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!token) return;
     const exp = getTokenExpiryMs(token);
     if (exp === null) return; // อ่าน exp ไม่ได้ → พึ่ง 401 interceptor แทน
-    const ms = exp - Date.now();
-    if (ms <= 0) {
-      logout(true);
-      return;
-    }
-    const id = window.setTimeout(() => logout(true), ms);
+    // token ที่หมดอายุไปแล้วได้ค่า 0 → timer ยิงในรอบถัดไป ไม่เรียก logout ตรง ๆ ในตัว effect
+    // (เรียกตรง ๆ = setState ระหว่าง effect ทำให้ render ซ้อนรอบ และผิดกฎ react-hooks/set-state-in-effect)
+    const id = window.setTimeout(() => logout(true), Math.max(0, exp - Date.now()));
     return () => window.clearTimeout(id);
   }, [token, logout]);
 

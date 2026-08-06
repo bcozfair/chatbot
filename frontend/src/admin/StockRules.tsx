@@ -127,13 +127,10 @@ const ProductMultiSelect: React.FC<ProductMultiSelectProps> = ({
     return () => { cancelled = true; };
   }, [token, authHeaders]);
 
+  // ช่องค้นหาว่าง = ไม่ต้องยิง API — การล้างผลลัพธ์ทิ้งย้ายไปทำที่ onChange ของ input แทน
+  // (ล้างในตัว effect = setState ระหว่าง effect ทำให้ render ซ้อนรอบ และผิดกฎ react-hooks/set-state-in-effect)
   useEffect(() => {
-    if (!query.trim()) {
-      setResults([]);
-      setTotalFound(0);
-      setIsTruncated(false);
-      return;
-    }
+    if (!query.trim()) return;
 
     const delayDebounceFn = setTimeout(async () => {
       setIsLoading(true);
@@ -332,8 +329,15 @@ const ProductMultiSelect: React.FC<ProductMultiSelectProps> = ({
             type="text"
             value={query}
             onChange={(e) => {
-              setQuery(e.target.value);
+              const next = e.target.value;
+              setQuery(next);
               setIsOpen(true);
+              // ลบข้อความในช่องจนว่าง → ล้างผลค้นหาเดิมทิ้งทันที ไม่ต้องรอ debounce
+              if (!next.trim()) {
+                setResults([]);
+                setTotalFound(0);
+                setIsTruncated(false);
+              }
             }}
             onClick={(e) => {
               e.stopPropagation();

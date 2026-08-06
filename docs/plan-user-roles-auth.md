@@ -324,5 +324,6 @@ docker build --target frontend -t primus-frontend-check .
 docker run --rm -w /app/frontend primus-frontend-check npx eslint .
 ```
 
-> `npm --prefix frontend run lint` มี error ค้างอยู่ก่อนแล้ว 2 จุด (`AuthContext.tsx:100`, `StockRules.tsx:132`)
-> ทั้งคู่เป็นกฎ `react-hooks/set-state-in-effect` ของโค้ดเดิม ไม่เกี่ยวกับงานชุดนี้ — ใช้เป็น baseline ตอนเทียบผล lint
+> lint ผ่านสะอาด (exit 0) ตั้งแต่ 2026-08-06 — ใช้เป็นด่านตรวจแบบผ่าน/ไม่ผ่านได้เลย
+> ก่อนหน้านั้นมี error ค้าง 2 จุด (`AuthContext.tsx`, `StockRules.tsx`) จากกฎ `react-hooks/set-state-in-effect`
+> ที่มากับ `eslint-plugin-react-hooks` v7 ซึ่งใหม่กว่าโค้ดสองจุดนั้น — แก้ไปแล้วพร้อมงานชุดนี้
