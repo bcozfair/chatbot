@@ -7,7 +7,7 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "start": "tsx index.ts",
+    "start": "node --import tsx index.ts",
     "dev": "tsx watch index.ts",
     "dev:web": "npm --prefix frontend run dev",
     "dev:ngrok": "ngrok http 3011 --log=stdout",
@@ -32,6 +32,7 @@
     "diag:queue-sim": "tsx scripts/diag/queueSim.ts",
     "diag:load-probe": "tsx scripts/diag/loadProbe.ts",
     "diag:abort-check": "tsx scripts/diag/abortCheck.ts",
+    "diag:shutdown-check": "tsx scripts/diag/shutdownCheck.ts",
     "backfill:contacts": "tsx scripts/backfillContactsFromSaleOrders.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },

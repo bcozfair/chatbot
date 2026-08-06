@@ -56,4 +56,12 @@ COPY . .
 COPY --from=frontend /app/public ./public
 
 EXPOSE 3011
-CMD ["npm", "run", "start"]
+
+# C.4 — รัน node ตรง ๆ ไม่ผ่าน npm
+#
+# ของเดิม `npm run start` ทำให้ process tree เป็น npm(PID 1) → sh -c → tsx → node(PID 30)
+# docker ส่ง SIGTERM ให้ PID 1 เท่านั้น ⇒ ตัว handler ปิดอย่างสุภาพที่อยู่ใน node ไม่เคยได้รับสัญญาณ
+# (ยืนยันจากของจริง: `docker compose exec app ps -ef` เห็น node อยู่ลึก 4 ชั้น + มี esbuild
+#  เป็น zombie ค้างเพราะ npm ไม่ได้ทำหน้าที่ init) ⇒ ต่อให้เขียน graceful shutdown ดีแค่ไหน
+# ก็ไม่ทำงาน · คู่กับ init: true ใน docker-compose.yml (tini เป็น PID 1 → ส่งต่อสัญญาณ + เก็บ zombie)
+CMD ["node", "--import", "tsx", "index.ts"]

@@ -36,6 +36,14 @@ services:
   app:
     build: .
     restart: unless-stopped
+    # C.4 — tini เป็น PID 1: ส่งต่อ SIGTERM ให้ node (ลูกตรง) + เก็บ zombie process
+    # ที่ esbuild ของ tsx ทิ้งไว้ (ของเดิมค้างสะสมเพราะ npm ไม่ได้ทำหน้าที่ init)
+    init: true
+    # C.4 — docker ให้เวลาหลัง SIGTERM แค่ 10 วิเป็น default แล้ว SIGKILL ทิ้ง
+    # ซึ่งสั้นกว่าเวลาที่ข้อความ 1 ตัวใช้ตอบ (งบ 48 วิ) ⇒ ทุก deploy = ข้อความในคิวหายเงียบยกชุด
+    # 60 วิ = งบ 48 วิ + เวลาปิด Chrome + เผื่อ · แอปมี hard exit ที่ 55 วิ ตัดหน้าอยู่แล้ว
+    # ปกติ restart จะเร็วเหมือนเดิม เพราะ drain คืนค่าทันทีถ้าคิวว่าง — 60 วิคือเพดาน ไม่ใช่เวลาที่รอทุกครั้ง
+    stop_grace_period: 60s
     # จำกัดขนาด log ไม่ให้โตไม่จำกัด: เก็บ 5 ไฟล์ ไฟล์ละ 10MB (รวมสูงสุด ~50MB) แล้ว rotate ทับของเก่า
     logging:
       driver: json-file

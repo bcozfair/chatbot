@@ -69,6 +69,7 @@ import {
   isValidResource,
   RESOURCE_IDS,
   initScheduler,
+  stopScheduler,
 } from './services/syncService.js';
 
 // ตรวจ JWT_SECRET ตั้งแต่ boot — ถ้าขาด ให้ล้มทันทีแทนที่จะไปพังตอนแอดมิน login ครั้งแรก
@@ -3154,11 +3155,61 @@ const server = app.listen(port, () => {
   initScheduler().catch((err) => console.error('[scheduler] init ล้มเหลว:', err));
 });
 
-// ปิด Chrome ที่ pdfGenerator ใช้ร่วมกัน ไม่งั้นจะค้างเป็น process กำพร้าทุกครั้งที่ restart
+// ─────────────────────────────────────────────────────────────────────────────
+//  C.4 — Graceful shutdown: หยุดรับของใหม่ → รอคิวที่ค้างตอบให้จบ → ค่อยปิด
+//
+//  ของเดิมปิดทันทีที่ได้สัญญาณ ⇒ ทุก event ที่ยังอยู่ในคิว (ทั้งที่ token ยังไม่ตาย)
+//  หายเงียบพร้อมกันหมด และมันเกิด "ทุกครั้งที่ deploy" — เป็นแหล่งของอาการแชทหายแบบเป็นชุด
+//  ที่ไม่เกี่ยวกับโหลดเลย คิวอยู่ใน memory จึงกู้ได้เฉพาะตอนปิดอย่างสุภาพเท่านั้น
+//  (ถ้าโดน SIGKILL / OOM ยังหายอยู่ดี — ต้องใช้ persistent queue ถึงจะจบ อยู่นอกขอบเขตแผนนี้)
+// ─────────────────────────────────────────────────────────────────────────────
+let shuttingDown = false;
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-  process.once(signal, () => {
-    console.log(`\n[shutdown] ได้รับ ${signal} — กำลังปิดอย่างสุภาพ`);
+  process.once(signal, async () => {
+    // กันสัญญาณซ้อน: docker ยิง SIGTERM แล้วคนกด Ctrl-C ตามได้ ถ้ารันซ้ำจะ drain ซ้อนกัน
+    if (shuttingDown) return;
+    shuttingDown = true;
+    const t0 = Date.now();
+    console.log(
+      `\n[shutdown] ได้รับ ${signal} — หยุดรับ event ใหม่ รอคิวที่ค้างอยู่ ` +
+      `(active=${webhookQueue.activeCount} pending=${webhookQueue.pendingCount})`
+    );
+
+    // กันเหนียว: ถ้ามีอะไรค้างจนออกไม่ได้ ต้องยิงตัวเองทิ้ง "ก่อน" โดน SIGKILL จะได้เห็นใน log
+    // ว่าค้างที่ไหน (SIGKILL ไม่เหลือร่องรอยอะไรเลย) — 55 วิ ต่ำกว่า stop_grace_period 60 วิ
+    const hardExit = setTimeout(() => {
+      console.error('[shutdown] ⚠️ ปิดไม่ลงใน 55 วิ — บังคับออก');
+      process.exit(1);
+    }, 55_000);
+    hardExit.unref();
+
+    // 1. หยุดรับ webhook ใหม่ (connection ที่เปิดค้างอยู่ยังยิงเข้ามาได้ ตัวที่เข้ามาทันจะได้ตอบด้วย)
     server.close();
-    closePdfBrowser().finally(() => process.exit(0));
+
+    // 2. หยุดตัวตั้งเวลา sync — ห้ามให้รอบใหม่เริ่มตอนนี้ มันกิน CPU 10-18 วิ แย่งงานที่กำลังจะตอบ
+    stopScheduler();
+    if (isRunning()) {
+      console.warn('[shutdown] มี sync ค้างอยู่ — ยกเลิกกลางคันไม่ได้ ต้องปล่อยให้ drain แข่งกับมัน');
+    }
+
+    // 3. รอคิวจนว่าง — เพดานคือ "งบตอบกลับ 1 event" ไม่ใช่เลขที่ตั้งลอย ๆ
+    //    รอนานกว่า BUDGET_MS ไม่มีประโยชน์ (token ตายหมดแล้ว) · รอสั้นกว่านี้ก็ทิ้งงานที่ยังตอบทัน
+    const drained = await webhookQueue.drain(BUDGET_MS);
+    if (drained) {
+      console.log(`[shutdown] คิวว่างแล้วใน ${Date.now() - t0}ms — ไม่มีข้อความค้าง`);
+    } else {
+      console.error(
+        `[shutdown] ⚠️ drain ไม่ทันใน ${BUDGET_MS}ms — ยังเหลือ active=${webhookQueue.activeCount} ` +
+        `pending=${webhookQueue.pendingCount} · ข้อความเหล่านี้จะหายเงียบ`
+      );
+    }
+
+    // 4. ปิด Chrome ที่ pdfGenerator ใช้ร่วมกัน ไม่งั้นจะค้างเป็น process กำพร้าทุกครั้งที่ restart
+    //    (ต้องทำ "หลัง" drain — งานที่กำลังออก PDF อยู่ยังต้องใช้ browser ตัวนี้)
+    await closePdfBrowser().catch((e: any) =>
+      console.error('[shutdown] ปิด Chrome ไม่สำเร็จ:', e?.message || e)
+    );
+    console.log(`[shutdown] ปิดเรียบร้อยใน ${Date.now() - t0}ms`);
+    process.exit(0);
   });
 }

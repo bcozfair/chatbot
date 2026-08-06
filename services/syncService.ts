@@ -566,3 +566,18 @@ export async function initScheduler() {
   schedulerTimer = setInterval(schedulerTick, TICK_MS);
   console.log(`[scheduler] เริ่มทำงาน (เช็คทุก ${TICK_MS / 1000} วินาที)`);
 }
+
+/**
+ * หยุดตัวตั้งเวลา — ใช้ตอน graceful shutdown (C.4)
+ *
+ * เหตุผลที่ต้องหยุด: sync 1 รอบกิน CPU 10-18 วิ ถ้ามันดันเริ่มตอนที่เรากำลัง drain คิวอยู่
+ * มันจะแย่ง CPU จากข้อความที่กำลังจะตอบทัน = ทำให้คนที่เรากำลังพยายามช่วยพลาดแทน
+ *
+ * หยุดได้แค่ "รอบใหม่" — รอบที่รันค้างอยู่แล้วยกเลิกกลางคันไม่ได้ (ดู isRunning())
+ */
+export function stopScheduler() {
+  if (!schedulerTimer) return;
+  clearInterval(schedulerTimer);
+  schedulerTimer = null;
+  console.log('[scheduler] หยุดแล้ว — จะไม่เริ่ม sync รอบใหม่');
+}
