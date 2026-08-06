@@ -760,39 +760,41 @@ export const Quotations: React.FC = () => {
                       {/* Expanded Row: Items Detail */}
                       {isExpanded && (
                         <tr className="bg-slate-50/70">
-                          <td colSpan={7} className="px-4 py-3">
-                            <div className="text-xs space-y-3">
-                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                          <td colSpan={7} className="px-4 py-2.5">
+                            <div className="text-[11px] space-y-2 border-l-2 border-[#009032]/30 pl-3">
+                              {/* label กับค่าอยู่บรรทัดเดียวกันและตัดขึ้นบรรทัดใหม่เองเมื่อจอแคบ — ข้อมูลครบเท่าเดิมแต่เตี้ยลงครึ่งหนึ่ง */}
+                              <div className="flex flex-wrap gap-x-5 gap-y-1">
                                 <div>
-                                  <span className="text-slate-400 font-semibold">รหัสลูกค้า:</span>
-                                  <p className="text-slate-700">{quote.customer_code || '-'}</p>
+                                  <span className="text-slate-400 font-semibold mr-1.5">รหัสลูกค้า:</span>
+                                  <p className="text-slate-700 inline font-medium">{quote.customer_code || '-'}</p>
                                 </div>
                                 <div>
-                                  <span className="text-slate-400 font-semibold">เลขภาษี:</span>
-                                  <p className="text-slate-700">{quote.customer_tax_id || '-'}</p>
+                                  <span className="text-slate-400 font-semibold mr-1.5">เลขภาษี:</span>
+                                  <p className="text-slate-700 inline font-medium">{quote.customer_tax_id || '-'}</p>
                                 </div>
                                 <div>
-                                  <span className="text-slate-400 font-semibold">โทรศัพท์:</span>
-                                  <p className="text-slate-700">{quote.contact_phone || '-'}</p>
+                                  <span className="text-slate-400 font-semibold mr-1.5">โทรศัพท์:</span>
+                                  <p className="text-slate-700 inline font-medium">{quote.contact_phone || '-'}</p>
                                 </div>
                                 <div>
-                                  <span className="text-slate-400 font-semibold">อีเมล:</span>
-                                  <p className="text-slate-700">{quote.contact_email || '-'}</p>
+                                  <span className="text-slate-400 font-semibold mr-1.5">อีเมล:</span>
+                                  <p className="text-slate-700 inline font-medium">{quote.contact_email || '-'}</p>
                                 </div>
                               </div>
 
                               {quote.items && quote.items.length > 0 && (
                                 <div>
-                                  <span className="text-slate-400 font-semibold block mb-1">รายการสินค้า:</span>
-                                  <table className="w-full text-left text-[11px] border-collapse">
+                                  {/* หัวคอลัมน์ของตารางบอกอยู่แล้วว่าเป็นรายการสินค้า — ซ่อนหัวข้อซ้ำเพื่อประหยัดบรรทัด */}
+                                  <span className="text-slate-400 font-semibold hidden mb-1">รายการสินค้า:</span>
+                                  <table className="w-full text-left text-[11px] tabular-nums border-collapse">
                                     <thead>
                                       <tr className="text-slate-400 border-b border-slate-200">
-                                        <th className="py-1 pr-2">รุ่น</th>
-                                        <th className="py-1 pr-2">ชื่อ</th>
-                                        <th className="py-1 pr-2 text-right">จำนวน</th>
-                                        <th className="py-1 pr-2 text-right">ราคา</th>
-                                        <th className="py-1 pr-2 text-right">ส่วนลด</th>
-                                        <th className="py-1 text-right">รวม</th>
+                                        <th className="pb-1 pr-3">รุ่น</th>
+                                        <th className="pb-1 pr-3">ชื่อ</th>
+                                        <th className="pb-1 pr-3 text-right">จำนวน</th>
+                                        <th className="pb-1 pr-3 text-right">ราคา</th>
+                                        <th className="pb-1 pr-3 text-right">ส่วนลด</th>
+                                        <th className="pb-1 text-right">รวม</th>
                                       </tr>
                                     </thead>
                                     <tbody>
@@ -812,13 +814,16 @@ export const Quotations: React.FC = () => {
                                         }
 
                                         return (
-                                          <tr key={idx} className="border-b border-slate-100">
-                                            <td className="py-1 pr-2 font-mono text-slate-700">{item.model || item.product_code || '-'}</td>
-                                            <td className="py-1 pr-2 text-slate-600">{item.name || '-'}</td>
-                                            <td className="py-1 pr-2 text-right text-slate-700">{qty}</td>
-                                            <td className="py-1 pr-2 text-right text-slate-700">฿{formatNumber(price)}</td>
-                                            <td className="py-1 pr-2 text-right text-slate-700">{discountDisplay}</td>
-                                            <td className="py-1 text-right text-slate-700 font-semibold">฿{formatNumber(itemTotal)}</td>
+                                          <tr key={idx} className="border-b border-slate-100/70 hover:bg-white/70 transition-colors">
+                                            <td className="py-0.5 pr-3 font-mono text-slate-700">{item.model || item.product_code || '-'}</td>
+                                            {/* ตัดชื่อยาวด้วย … กันดันแถวเป็น 2 บรรทัด — ชื่อเต็มยังอ่านได้จาก tooltip */}
+                                            <td className="py-0.5 pr-3 text-slate-600">
+                                              <span className="block max-w-[24rem] truncate" title={item.name || ''}>{item.name || '-'}</span>
+                                            </td>
+                                            <td className="py-0.5 pr-3 text-right text-slate-700">{qty}</td>
+                                            <td className="py-0.5 pr-3 text-right text-slate-700">฿{formatNumber(price)}</td>
+                                            <td className="py-0.5 pr-3 text-right text-slate-700">{discountDisplay}</td>
+                                            <td className="py-0.5 text-right text-slate-700 font-semibold">฿{formatNumber(itemTotal)}</td>
                                           </tr>
                                         );
                                       })}
