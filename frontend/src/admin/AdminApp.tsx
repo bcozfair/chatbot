@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { AuthProvider, useAuth } from '../context/AuthContext';
+import { AuthProvider, useAuth, type Role } from '../context/AuthContext';
 import { Login } from './Login';
+import { Users } from './Users';
+import { ChangePasswordModal } from './ChangePasswordModal';
 import { Promotions } from './Promotions';
 import { Salespersons } from './Salespersons';
 import { Quotations } from './Quotations';
@@ -27,9 +29,12 @@ import {
   Menu,
   X,
   AlertCircle,
+  Users as UsersIcon,
+  KeyRound,
+  Lock,
 } from 'lucide-react';
 
-type MainTab = 'dashboard' | 'quotations' | 'salespersons' | 'promotions' | 'settings';
+type MainTab = 'dashboard' | 'quotations' | 'salespersons' | 'promotions' | 'users' | 'settings';
 type SubTab = 'quotation' | 'optional' | 'stock' | 'moq' | 'shipping';
 
 interface AdminStats {
@@ -47,11 +52,13 @@ const BRAND_SOFT = 'rgba(0, 144, 50, 0.10)';
 const BRAND_SOFT_STRONG = 'rgba(0, 144, 50, 0.16)';
 const BRAND_BORDER = 'rgba(0, 144, 50, 0.24)';
 
-const NAV_ITEMS: { key: MainTab; label: string; icon: typeof LayoutDashboard }[] = [
-  { key: 'dashboard', label: 'แผงควบคุม', icon: LayoutDashboard },
-  { key: 'quotations', label: 'ประวัติใบเสนอราคา', icon: FileText },
-  { key: 'promotions', label: 'จัดการโปรโมชันส่วนลด', icon: Tag },
-  { key: 'salespersons', label: 'จัดการข้อมูลพนักงาน', icon: UserCheck },
+// roles = สิทธิ์ที่เห็นเมนูนี้ — เป็นแค่การซ่อน UI เท่านั้น ตัวบังคับจริงคือ requireRole ฝั่ง backend
+const NAV_ITEMS: { key: MainTab; label: string; icon: typeof LayoutDashboard; roles: Role[] }[] = [
+  { key: 'dashboard', label: 'แผงควบคุม', icon: LayoutDashboard, roles: ['admin'] },
+  { key: 'quotations', label: 'ประวัติใบเสนอราคา', icon: FileText, roles: ['admin'] },
+  { key: 'promotions', label: 'จัดการโปรโมชันส่วนลด', icon: Tag, roles: ['admin'] },
+  { key: 'salespersons', label: 'จัดการข้อมูลพนักงาน', icon: UserCheck, roles: ['admin'] },
+  { key: 'users', label: 'จัดการผู้ใช้งานระบบ', icon: UsersIcon, roles: ['admin'] },
 ];
 
 const SETTINGS_SUBITEMS: { key: SubTab; label: string }[] = [
@@ -67,6 +74,7 @@ const PAGE_TITLES: Record<MainTab, string> = {
   quotations: 'ประวัติใบเสนอราคา',
   promotions: 'จัดการโปรโมชันส่วนลด',
   salespersons: 'จัดการข้อมูลพนักงาน',
+  users: 'จัดการผู้ใช้งานระบบ',
   settings: 'ตั้งค่าเงื่อนไข & กฎ',
 };
 
@@ -84,9 +92,14 @@ function AdminContent() {
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
   const [statsError, setStatsError] = useState<string | null>(null);
+  const [changePasswordOpen, setChangePasswordOpen] = useState(false);
+
+  const isAdmin = user?.role === 'admin';
+  const visibleNavItems = NAV_ITEMS.filter((item) => !!user && item.roles.includes(user.role));
 
   useEffect(() => {
-    if (activeTab !== 'dashboard' || !token) return;
+    // /api/admin/stats เปิดให้เฉพาะ admin — ยิงด้วย role อื่นจะได้ 403 แล้วขึ้น error ให้เปล่า ๆ
+    if (activeTab !== 'dashboard' || !token || !isAdmin) return;
     let cancelled = false;
     const fetchStats = async () => {
       setStatsLoading(true);
@@ -108,7 +121,7 @@ function AdminContent() {
     return () => {
       cancelled = true;
     };
-  }, [activeTab, token]);
+  }, [activeTab, token, isAdmin]);
 
   const closeSettingsFlyout = useCallback(() => setSettingsFlyoutTop(null), []);
 
@@ -223,7 +236,7 @@ function AdminContent() {
 
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto py-3 px-2.5 space-y-0.5">
-        {NAV_ITEMS.map(({ key, label, icon: Icon }) => {
+        {visibleNavItems.map(({ key, label, icon: Icon }) => {
           const active = activeTab === key;
           return (
             <button
@@ -241,6 +254,8 @@ function AdminContent() {
           );
         })}
 
+        {isAdmin && (
+          <>
         <div className="h-px bg-slate-100 my-2.5 mx-1.5" />
 
         {/* Settings group */}
@@ -287,6 +302,8 @@ function AdminContent() {
             })}
           </div>
         )}
+          </>
+        )}
       </nav>
 
       {/* User / logout — single row */}
@@ -311,6 +328,15 @@ function AdminContent() {
               </p>
             </div>
           )}
+          <button
+            id="admin-change-password-btn"
+            onClick={() => setChangePasswordOpen(true)}
+            title="เปลี่ยนรหัสผ่าน"
+            aria-label="เปลี่ยนรหัสผ่าน"
+            className="flex items-center justify-center w-8 h-8 rounded-lg text-slate-400 hover:text-[#009032] hover:bg-[#009032]/10 transition-all active:scale-[0.95] shrink-0"
+          >
+            <KeyRound className="w-4 h-4" />
+          </button>
           <button
             id="admin-logout-btn"
             onClick={() => logout()}
@@ -396,12 +422,38 @@ function AdminContent() {
           </button>
           <div>
             <p className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">Primus Admin</p>
-            <h2 className="text-base font-bold text-slate-900 leading-tight">{PAGE_TITLES[activeTab]}</h2>
+            <h2 className="text-base font-bold text-slate-900 leading-tight">
+              {isAdmin ? PAGE_TITLES[activeTab] : 'บัญชีผู้ใช้งาน'}
+            </h2>
           </div>
         </header>
 
         <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
-          {activeTab === 'quotations' ? (
+          {!isAdmin ? (
+            /* role 'user' ยังไม่มีเมนูของตัวเอง จนกว่าหน้าบัญชีห้ามเสนอราคาจะเปิดใช้
+               — บอกตรง ๆ ดีกว่าปล่อยให้เจอหน้าเปล่าหรือ error 403 */
+            <div className="animate-fade-in bg-white border border-slate-200 rounded-2xl p-10 text-center shadow-sm flex flex-col items-center justify-center gap-3">
+              <div
+                className="w-12 h-12 rounded-2xl flex items-center justify-center"
+                style={{ backgroundColor: BRAND_SOFT, color: BRAND }}
+              >
+                <Lock className="w-6 h-6" />
+              </div>
+              <p className="font-bold text-slate-900">ยังไม่มีเมนูสำหรับสิทธิ์ของคุณ</p>
+              <p className="text-sm text-slate-500 max-w-md">
+                บัญชีนี้เป็นสิทธิ์ผู้ใช้ทั่วไป เมนูตั้งค่าบัญชีห้ามเสนอราคายังไม่เปิดใช้งาน
+                หากต้องการสิทธิ์เพิ่มเติมกรุณาติดต่อผู้ดูแลระบบ
+              </p>
+              <button
+                onClick={() => setChangePasswordOpen(true)}
+                className="mt-1 flex items-center gap-1.5 px-3.5 py-2 text-white text-sm font-bold rounded-xl shadow-sm transition-all active:scale-95"
+                style={{ backgroundColor: BRAND }}
+              >
+                <KeyRound className="w-4 h-4" />
+                เปลี่ยนรหัสผ่าน
+              </button>
+            </div>
+          ) : activeTab === 'quotations' ? (
             <div className="animate-fade-in">
               <Quotations />
             </div>
@@ -501,6 +553,10 @@ function AdminContent() {
             <div className="animate-fade-in">
               <Salespersons />
             </div>
+          ) : activeTab === 'users' ? (
+            <div className="animate-fade-in">
+              <Users />
+            </div>
           ) : (
             <div className="animate-fade-in">
               {subTab === 'quotation' && <QuotationRules />}
@@ -513,6 +569,8 @@ function AdminContent() {
 
         </main>
       </div>
+
+      {changePasswordOpen && <ChangePasswordModal onClose={() => setChangePasswordOpen(false)} />}
     </div>
   );
 }

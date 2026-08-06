@@ -1,11 +1,14 @@
 /* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 
+/** ต้องตรงกับ Role ฝั่ง backend (config/auth.ts) และ CHECK constraint admin_users_role_check */
+export type Role = 'admin' | 'user';
+
 export interface AdminUser {
   id: number;
   username: string;
   name: string;
-  role: string;
+  role: Role;
 }
 
 interface AuthContextType {

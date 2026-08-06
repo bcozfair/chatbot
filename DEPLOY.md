@@ -283,6 +283,39 @@ docker compose up -d              # เปิดใหม่
 
 ---
 
+## ตั้ง / กู้รหัสผ่านผู้ใช้ Admin Portal ด้วย SQL
+
+ปกติจัดการผู้ใช้ผ่านหน้าเว็บ (เมนู **จัดการผู้ใช้งานระบบ** — เห็นเฉพาะสิทธิ์ผู้ดูแลระบบ) และเปลี่ยนรหัสผ่านตัวเองด้วยปุ่มรูปกุญแจข้างปุ่มออกจากระบบ
+ใช้วิธีด้านล่างเมื่อ **เข้าหน้าเว็บไม่ได้แล้ว** เท่านั้น เช่น ลืมรหัสผ่านผู้ดูแลระบบ หรือตั้ง DB ใหม่จนยังไม่มีผู้ใช้สักคน
+
+> **พิมพ์รหัสผ่านลงคอลัมน์ `password_hash` ตรง ๆ ไม่ได้** — ระบบเทียบด้วย bcrypt ใส่ค่าดิบไปจะล็อกอินไม่ผ่านตลอด
+> ต้องให้ `crypt()` ของ pgcrypto แปลงให้ (extension ติดตั้งมากับ `migrations/schema.sql` แล้ว)
+
+```bash
+set -a; source .env; set +a
+
+# เปลี่ยนรหัสผ่านของผู้ใช้ที่มีอยู่
+docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" -c "
+UPDATE admin_users
+SET password_hash = crypt('รหัสใหม่ที่ต้องการ', gen_salt('bf', 10)),
+    updated_at = CURRENT_TIMESTAMP
+WHERE username = 'admin';"
+
+# สร้างผู้ดูแลระบบคนแรก (ใช้ตอนตาราง admin_users ยังว่าง)
+docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" -c "
+INSERT INTO admin_users (username, password_hash, name, role)
+VALUES ('admin', crypt('รหัสใหม่ที่ต้องการ', gen_salt('bf', 10)), 'ผู้ดูแลระบบ', 'admin');"
+
+# ดูรายชื่อผู้ใช้และสิทธิ์ (ไม่ดึง hash ออกมา)
+docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" -c "
+SELECT id, username, name, role FROM admin_users ORDER BY id;"
+```
+
+`role` มีได้แค่ `admin` (จัดการได้ทุกอย่าง) กับ `user` (สิทธิ์จำกัด) — ใส่ค่าอื่น DB จะปฏิเสธ
+รหัสผ่านโผล่เป็นข้อความธรรมดาในคำสั่งที่พิมพ์ ทำเสร็จแล้วอย่าเก็บไฟล์ที่มีคำสั่งนี้ไว้ และล้าง history ของ shell ถ้าจำเป็น
+
+---
+
 ## แก้ปัญหาเบื้องต้น
 - **PDF ภาษาไทย** → template ใช้ฟอนต์ **Sarabun จาก Google Fonts** (ต้องมีเน็ต ซึ่ง server ต่อได้อยู่แล้ว) ถ้าเน็ตบล็อก จะ fallback ไปฟอนต์ไทยที่ติดตั้งใน image (`fonts-thai-tlwg`) — ยังอ่านออกไม่เป็นกล่อง ทดสอบจริงได้หลัง restore DB โดยสร้าง PDF (`/download-pdf/...`)
   - ทดสอบแล้วบนเครื่อง dev: Chromium 150 + ฟอนต์ไทย 13 ตระกูลติดตั้งครบในกล่อง ✓
