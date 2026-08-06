@@ -40,6 +40,7 @@ import {
   buildOdooSaleOrderRows,
   selectExportableQuotes,
   loadOdooExportConfig,
+  parseExportCompany,
   serializeOdooRowsToCsv,
   serializeOdooRowsToXlsx,
   type OdooExportFormat,
@@ -2557,8 +2558,18 @@ app.get('/api/admin/quotations', adminAuthMiddleware, async (req: any, res: any)
 //
 // กันส่งออกซ้ำ: ใบที่ลงไฟล์แล้วจะถูกมาร์ก quotations.odoo_exported_at ใน transaction เดียวกับที่ดึงข้อมูล
 // และตัวกรอง exported ตั้งต้นเป็น 'no' ครั้งถัดไปจึงได้เฉพาะใบใหม่ (แอดมินถอยเครื่องหมายได้ถ้านำเข้าไม่ผ่าน)
+//
+// 1 ครั้ง = 1 บริษัท (company=qp|qt) เพราะ Odoo ของ PM กับ THT เป็นคนละระบบและใช้ชื่อภาษีคนละค่า
 app.get('/api/admin/quotations/export', adminAuthMiddleware, async (req: any, res: any) => {
   try {
+    // บริษัทต้องส่งมาเสมอ ไม่มีค่าตั้งต้น — เดาผิดแปลว่าไฟล์ได้ชื่อภาษีของอีกบริษัท
+    // แล้วใบชุดนั้นถูกมาร์ก "ส่งออกแล้ว" ไปเรียบร้อย กว่าจะรู้ตัวก็ตอนนำเข้า Odoo ไม่ผ่าน
+    const company = parseExportCompany(req.query.company);
+    if (!company) {
+      res.status(400).json({ error: 'ต้องระบุบริษัทที่จะส่งออก (company=qp หรือ qt)' });
+      return;
+    }
+
     const search = req.query.search || '';
     // ค่าตั้งต้น: ส่งออกทุกใบที่มีเลขที่ใบเสนอราคาแล้ว (ไม่จำกัดเฉพาะ confirmed)
     // ใบร่างที่ยังไม่มีเลข (draft/pending) ยังไม่ใช่เอกสารจริง จึงคัดออกด้วยเงื่อนไข quotation_no
@@ -2645,8 +2656,9 @@ app.get('/api/admin/quotations/export', adminAuthMiddleware, async (req: any, re
         params
       );
 
-      // ใบที่ไม่มีรายการสินค้าไม่เคยลงไฟล์อยู่แล้ว จึงห้ามมาร์ก — ไม่งั้นมันจะหายจาก export ตลอดกาล
-      const exportable = selectExportableQuotes(result.rows || []);
+      // ใบที่ไม่ลงไฟล์ (ไม่มีรายการสินค้า / คนละบริษัท / เลขที่ใบไม่ขึ้นต้นด้วย QP-QT) ห้ามมาร์ก
+      // ไม่งั้นมันจะหายจาก export ตลอดกาลทั้งที่ไม่เคยอยู่ในไฟล์ของใครเลย
+      const exportable = selectExportableQuotes(result.rows || [], company);
 
       // จองใบด้วย UPDATE ... RETURNING: id ที่ได้กลับมาคือใบที่ "เป็นของ request นี้" เท่านั้น
       // แอดมินสองคนกดพร้อมกันจึงแบ่งใบกันไป ไม่ได้ใบซ้ำกันทั้งสองไฟล์
@@ -2657,7 +2669,7 @@ app.get('/api/admin/quotations/export', adminAuthMiddleware, async (req: any, re
 
       // ไม่เรียก enrichQuotationData() ที่นี่ — format นี้ไม่ใช้สต๊อกสด/วันจัดส่ง/กฎโปรโมชัน
       // และ enrich ยิง query หลายครั้งต่อใบ ทำให้ export หลายร้อยใบช้าโดยไม่จำเป็น
-      const rows = buildOdooSaleOrderRows(emitted, loadOdooExportConfig());
+      const rows = buildOdooSaleOrderRows(emitted, loadOdooExportConfig(), company);
 
       // ไม่มีใบใหม่ = ไม่สร้าง batch เปล่าให้รกประวัติ (ยังตอบไฟล์หัวคอลัมน์เปล่ากลับไปตามปกติ)
       let batchId: string | null = null;
@@ -2668,7 +2680,7 @@ app.get('/api/admin/quotations/export', adminAuthMiddleware, async (req: any, re
           format,
           quotationCount: emitted.length,
           rowCount: rows.length,
-          filters: { search, status, dateFrom, dateTo, exported, sortBy: sortByParam, sortOrder: sortOrderParam },
+          filters: { company, search, status, dateFrom, dateTo, exported, sortBy: sortByParam, sortOrder: sortOrderParam },
         });
         await insertExportLogRows(client, batchId, emitted.map((q: any) => ({
           id: String(q.id), quotation_no: q.quotation_no ?? null,
@@ -2683,20 +2695,23 @@ app.get('/api/admin/quotations/export', adminAuthMiddleware, async (req: any, re
 
     // วันที่ในชื่อไฟล์ตามเวลาไทย — toISOString() ให้วัน UTC ซึ่งจะเป็นวันก่อนหน้าถ้ากดก่อน 07:00
     const stamp = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date());
+    // ชื่อไฟล์ต้องบอกบริษัทด้วย — สองไฟล์ของวันเดียวกันหน้าตาเหมือนกันทุกอย่างจากภายนอก
+    const baseName = `salechatbot_quotation_${company}_${stamp}`;
     // header เสริมให้หน้าจอบอกจำนวนใบจริงได้ (ตัวไฟล์นับใบไม่ได้เพราะ 1 ใบ = หลายแถว)
     res.setHeader('X-Export-Quotation-Count', String(built.quotationCount));
     res.setHeader('X-Export-Row-Count', String(built.rowCount));
+    res.setHeader('X-Export-Company', company);
     if (built.batchId) res.setHeader('X-Export-Batch-Id', built.batchId);
 
     if (format === 'csv') {
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-      res.setHeader('Content-Disposition', `attachment; filename="salechatbot_quotation_${stamp}.csv"`);
+      res.setHeader('Content-Disposition', `attachment; filename="${baseName}.csv"`);
       res.send(built.body);
       return;
     }
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="salechatbot_quotation_${stamp}.xlsx"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${baseName}.xlsx"`);
     res.send(built.body);
   } catch (err: any) {
     console.error("GET /api/admin/quotations/export error:", err);

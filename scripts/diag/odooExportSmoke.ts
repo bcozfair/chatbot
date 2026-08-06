@@ -1,6 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  Smoke test ของไฟล์นำเข้า Sale Order สำหรับ Odoo (template "import odoo template.xlsx")
-//  รัน:  npm run diag:odoo-export            (ค่าตั้งต้น 20 ใบล่าสุด)
+//  รัน:  npm run diag:odoo-export            (ค่าตั้งต้น QP 20 ใบล่าสุด)
+//        npm run diag:odoo-export -- --company qt       (⚠️ ต้องรันทั้ง qp และ qt ถึงจะครบ)
 //        npm run diag:odoo-export -- --limit 100
 //        npm run diag:odoo-export -- --status draft
 //        npm run diag:odoo-export -- --exported no      (เฉพาะใบที่ยังไม่เคยส่งออก)
@@ -11,6 +12,8 @@
 //
 //  ครอบคลุม: ลำดับ/จำนวนหัวคอลัมน์ · กติกา one2many ของ Odoo (แถวที่ 2+ ต้องเว้น A–L) ·
 //            ช่องบังคับที่ว่างไม่ได้ · ช่องค่าคงที่ (source_id/uom/tax) · ชนิดข้อมูลของช่องตัวเลข
+//            การแยกบริษัท: ไฟล์มีเฉพาะใบของบริษัทที่เลือก ใบที่เลขไม่ขึ้นต้น QP/QT ไม่ลงไฟล์
+//            และชื่อภาษีเป็นค่าของบริษัทนั้น (QP กับ QT ต่างกันแค่เว้นวรรค แต่ต่างกันจริง)
 //            ส่วนต่างของยอดรวมหลังยุบส่วนลด 2 ชั้นเหลือช่องเดียว · หมายเหตุการรับประกัน
 //            ช่อง Sales Team (I) = ทีมขายของผู้ติดต่อจาก customers_data ไม่ใช่สังกัดของเซลล์
 //            ช่อง employee_quotation_id (J) = ชื่อจริงของเซลล์จากตาราง salesperson + สังกัดห้อยท้าย
@@ -28,6 +31,8 @@ import {
   ODOO_SO_HEADERS,
   buildOdooSaleOrderRows,
   loadOdooExportConfig,
+  parseExportCompany,
+  selectExportableQuotes,
   serializeOdooRowsToCsv,
   serializeOdooRowsToXlsx,
   type OdooExportQuotationRow,
@@ -50,6 +55,13 @@ const status = argValue('status', '');
 // ตั้งต้น 'all' ไม่ใช่ 'no' เหมือน endpoint — สคริปต์นี้ตรวจ "รูปแบบไฟล์" จึงต้องเห็นใบชุดเดิม
 // ทุกครั้งที่รัน ผลถึงเทียบย้อนหลังกันได้ ไม่ผันไปตามว่าใครกดส่งออกอะไรไปแล้วบ้าง
 const exported = parseExportedFilter(argValue('exported', 'all'), 'all');
+// 1 ไฟล์ = 1 บริษัทเหมือน endpoint — ต้องรันทั้ง --company qp และ --company qt ถึงจะครบ
+const company = parseExportCompany(argValue('company', 'qp'));
+if (!company) {
+  console.log('✗ FAIL  --company รับได้แค่ qp หรือ qt');
+  await pool.end();
+  process.exit(1);
+}
 
 /** หัวคอลัมน์ที่คัดลอกจากชีต "Import " ของ template ต้นฉบับ — ตัวเทียบอิสระจากโค้ด */
 const TEMPLATE_HEADERS = [
@@ -72,6 +84,10 @@ const conditions = [status
   : "q.quotation_no IS NOT NULL AND TRIM(q.quotation_no) <> ''"];
 const exportedCondition = exportedFilterCondition(exported);
 if (exportedCondition) conditions.push(exportedCondition);
+// endpoint กรองบริษัทฝั่ง TS (selectExportableQuotes) แต่ที่นี่กรองใน SQL ด้วยเพื่อให้ --limit N
+// ได้ตัวอย่าง N ใบของบริษัทที่ตรวจจริง ๆ ไม่ใช่ N ใบล่าสุดที่บังเอิญเป็นอีกบริษัทเสียครึ่ง
+// (ค่า company ผ่าน parseExportCompany มาแล้ว เป็น 'QP'/'QT' เท่านั้น ต่อสตริงได้ปลอดภัย)
+conditions.push(`q.quotation_no ILIKE '${company}%'`);
 
 const filterParams = status ? [status, limit] : [limit];
 const limitParam = status ? '$2' : '$1';
@@ -92,25 +108,46 @@ const { rows: quotes } = await pool.query<OdooExportQuotationRow & {
     LIMIT ${limitParam}`,
   filterParams
 );
-console.log(`   ตัวกรอง=${status ? `สถานะ "${status}"` : 'ทุกใบที่มีเลขที่ใบเสนอราคา'} · การส่งออก=${exported} ดึงมา ${quotes.length} ใบ`);
+console.log(`   บริษัท=${company} · ตัวกรอง=${status ? `สถานะ "${status}"` : 'ทุกใบที่มีเลขที่ใบเสนอราคา'} · การส่งออก=${exported} ดึงมา ${quotes.length} ใบ`);
 if (quotes.length === 0) {
-  console.log('⚠️  ไม่มีใบเสนอราคาให้ตรวจ — ลองเปลี่ยน --status หรือใส่ข้อมูลทดสอบก่อน');
+  console.log('⚠️  ไม่มีใบเสนอราคาให้ตรวจ — ลองเปลี่ยน --company/--status หรือใส่ข้อมูลทดสอบก่อน');
   await pool.end();
   process.exit(0);
 }
 
 const config = loadOdooExportConfig();
-console.log(`   config: tax="${config.tax}" sourceId="${config.sourceId}" uom="${config.uom}"`);
+const tax = config.taxByCompany[company];
+console.log(`   config: tax(${company})="${tax}" sourceId="${config.sourceId}" uom="${config.uom}"`);
 
-const rows = buildOdooSaleOrderRows(quotes, config);
+const rows = buildOdooSaleOrderRows(quotes, config, company);
 
-const quotesWithItems = quotes.filter(q => Array.isArray(q.item_details) && q.item_details.length > 0);
+const quotesWithItems = selectExportableQuotes(quotes, company);
 const expectedRowCount = quotesWithItems.reduce((sum, q) => sum + q.item_details.length, 0);
 ok('จำนวนแถวรวม = ผลรวมจำนวนรายการของทุกใบ', rows.length === expectedRowCount,
   `(ได้ ${rows.length} / คาด ${expectedRowCount})`);
 if (quotesWithItems.length !== quotes.length) {
   console.log(`   ℹ️  ข้าม ${quotes.length - quotesWithItems.length} ใบที่ไม่มีรายการสินค้า (นำเข้า Odoo ไม่ได้)`);
 }
+
+// ── 2.1 แยกบริษัท: ไฟล์มีเฉพาะใบของบริษัทที่เลือก และภาษีเป็นค่าของบริษัทนั้น ──
+// ตรวจแบบ pure ด้วยใบสมมติ ไม่ต้องรอให้ DB มีใบครบทุกแบบ
+const mixed: OdooExportQuotationRow[] = [
+  { quotation_no: 'QP-999999001', item_details: [{ model: 'A', quantity: 1, price: 100 }] },
+  { quotation_no: 'QT-999999002', item_details: [{ model: 'B', quantity: 1, price: 100 }] },
+  { quotation_no: '', item_details: [{ model: 'C', quantity: 1, price: 100 }] },
+  { quotation_no: 'XX-999999003', item_details: [{ model: 'D', quantity: 1, price: 100 }] },
+];
+const picked = selectExportableQuotes(mixed, company);
+ok(`เลือกบริษัท ${company} แล้วได้เฉพาะใบของบริษัทนั้น 1 ใบ`,
+  picked.length === 1 && String(picked[0].quotation_no ?? '').startsWith(company),
+  `(ได้ ${picked.map(q => q.quotation_no || '(ไม่มีเลข)').join(', ') || 'ไม่ได้ใบเลย'})`);
+ok('ใบที่เลขที่ไม่ขึ้นต้นด้วย QP/QT ไม่ลงไฟล์ของทั้งสองบริษัท',
+  selectExportableQuotes(mixed, 'QP').length === 1 && selectExportableQuotes(mixed, 'QT').length === 1);
+ok('ชื่อภาษีของ QP กับ QT ต่างกันจริง (ต่างกันแค่เว้นวรรค — ห้ามแก้ให้เหมือนกัน)',
+  config.taxByCompany.QP !== config.taxByCompany.QT,
+  `QP="${config.taxByCompany.QP}" QT="${config.taxByCompany.QT}"`);
+ok('ทุกแถวในไฟล์เป็นใบของบริษัทที่เลือก',
+  quotesWithItems.every(q => String(q.quotation_no ?? '').toUpperCase().startsWith(company)));
 
 // ── 3. กติกา one2many: แถวแรกของใบมีหัวใบครบ แถวถัดไปต้องว่าง ───────────
 const HEADER_KEYS = [
@@ -362,13 +399,13 @@ const noProduct = rows.filter(r => !r.product).length;
 const badNumber = rows.filter(r => !Number.isFinite(r.quantity) || !Number.isFinite(r.price_unit)).length;
 const badDiscount = rows.filter(r => !(r.discount >= 0 && r.discount <= 100)).length;
 const badUom = rows.filter(r => r.uom !== config.uom).length;
-const badTax = rows.filter(r => r.tax_id !== config.tax).length;
+const badTax = rows.filter(r => r.tax_id !== tax).length;
 
 ok('ทุกแถวมีรหัสสินค้า (order_line/product)', noProduct === 0, noProduct ? `(ว่าง ${noProduct} แถว)` : '');
 ok('จำนวนและราคาเป็นตัวเลขทุกแถว', badNumber === 0, badNumber ? `(พลาด ${badNumber} แถว)` : '');
 ok('ส่วนลดอยู่ในช่วง 0–100%', badDiscount === 0, badDiscount ? `(นอกช่วง ${badDiscount} แถว)` : '');
 ok(`หน่วยนับเป็น "${config.uom}" ทุกแถวตาม template`, badUom === 0, badUom ? `(พลาด ${badUom} แถว)` : '');
-ok(`ภาษีเป็น "${config.tax}" ทุกแถวตาม template`, badTax === 0, badTax ? `(พลาด ${badTax} แถว)` : '');
+ok(`ภาษีเป็น "${tax}" ทุกแถวตามบริษัท ${company}`, badTax === 0, badTax ? `(พลาด ${badTax} แถว)` : '');
 
 // ── 5. ส่วนต่างของยอดหลังยุบส่วนลด 2 ชั้นเหลือช่องเดียว ─────────────────
 //  ยอดที่ Odoo จะได้ = Σ qty × price × (1 − discount/100) ต้องเท่ากับยอดที่ระบบคิดไว้
@@ -418,5 +455,5 @@ if (outDir) {
   console.log(`   เขียนไฟล์ตัวอย่างไว้ที่ ${outDir}`);
 }
 
-console.log(`\nสรุป: ${quotes.length} ใบ → ${rows.length} แถว`);
+console.log(`\nสรุป: ${company} ${quotes.length} ใบ → ${rows.length} แถว`);
 await pool.end();

@@ -91,6 +91,17 @@ type ExportFormat = 'xlsx' | 'csv';
 /** ตัวกรอง "สถานะการส่งออก Odoo" — ตรงกับ query param `exported` ของ backend */
 type ExportedFilter = 'no' | 'yes' | 'all';
 
+/**
+ * บริษัทที่ส่งออก — ตรงกับ query param `company` ของ backend (ดูจากคำนำหน้าเลขที่ใบ)
+ * 1 ครั้ง = 1 บริษัท เพราะ Odoo ของ PM กับ THT เป็นคนละระบบและใช้ชื่อภาษีคนละค่า
+ */
+type ExportCompany = 'QP' | 'QT';
+
+const EXPORT_COMPANIES: { value: ExportCompany; label: string }[] = [
+  { value: 'QP', label: 'QP (PM)' },
+  { value: 'QT', label: 'QT (THT)' },
+];
+
 /** 1 ครั้งที่กดปุ่มส่งออก (GET /api/admin/quotations/export-batches) */
 interface ExportBatch {
   id: string;
@@ -101,6 +112,8 @@ interface ExportBatch {
   row_count: number;
   /** ใบในชุดที่ยังนับว่า "ส่งออกแล้ว" — น้อยกว่า quotation_count แปลว่าถูกถอยไปบางส่วน */
   active_count: number;
+  /** ตัวกรองที่ใช้ตอนกดส่งออก — ชุดที่ส่งออกก่อนแยก QP/QT จะไม่มีคีย์ company */
+  filters?: { company?: string } | null;
 }
 
 // Status color mapping
@@ -252,11 +265,15 @@ export const Quotations: React.FC = () => {
   // ส่งออกไฟล์นำเข้า Sale Order ของ Odoo — ใช้ตัวกรองชุดเดียวกับที่เห็นบนหน้าจอ
   // ตัวกรอง "การส่งออก" ตั้งต้นเป็น "ยังไม่ส่งออก" ใบที่ลงไฟล์ไปแล้วจึงไม่ถูกส่งซ้ำ
   // (backend มาร์ก odoo_exported_at ให้ตอนสร้างไฟล์สำเร็จ)
-  const handleExportOdoo = async (format: ExportFormat) => {
+  //
+  // ได้ทีละบริษัท: ไฟล์มีเฉพาะใบที่เลขที่ขึ้นต้นด้วย company ที่เลือก ใบของอีกบริษัท
+  // และใบที่เลขที่ไม่ขึ้นต้นด้วย QP/QT จะไม่ลงไฟล์และไม่ถูกมาร์กว่าส่งออกแล้ว
+  const handleExportOdoo = async (format: ExportFormat, company: ExportCompany) => {
     setExportMenuOpen(false);
     setIsExporting(true);
     try {
       const params = new URLSearchParams();
+      params.set('company', company);
       if (searchQuery.trim()) params.set('search', searchQuery.trim());
       if (statusFilter) params.set('status', statusFilter);
       if (dateFrom) params.set('dateFrom', dateFrom);
@@ -282,15 +299,15 @@ export const Quotations: React.FC = () => {
       // ต้องได้ชื่อเดียวกับ Content-Disposition ฝั่ง backend — attribute นี้เป็นตัวชนะเวลาเบราว์เซอร์เซฟไฟล์
       // ล็อกโซนไทยไว้ ไม่งั้นเครื่องที่ตั้งโซนอื่นจะได้วันที่คนละวันกับชื่อไฟล์ฝั่ง server
       const stamp = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date());
-      a.download = `salechatbot_quotation_${stamp}.${format}`;
+      a.download = `salechatbot_quotation_${company}_${stamp}.${format}`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       window.URL.revokeObjectURL(url);
 
       showToast(exportedCount > 0
-        ? `ส่งออก ${exportedCount} ใบเป็นไฟล์ ${format === 'xlsx' ? 'Excel' : 'CSV'} สำเร็จ — ใบเหล่านี้ถูกทำเครื่องหมายว่าส่งออกแล้ว`
-        : 'ไม่มีใบใหม่ให้ส่งออก (ทุกใบตามตัวกรองนี้ถูกส่งออกไปแล้ว)');
+        ? `ส่งออก ${company} ${exportedCount} ใบเป็นไฟล์ ${format === 'xlsx' ? 'Excel' : 'CSV'} สำเร็จ — ใบเหล่านี้ถูกทำเครื่องหมายว่าส่งออกแล้ว`
+        : `ไม่มีใบ ${company} ใหม่ให้ส่งออก (ทุกใบตามตัวกรองนี้ถูกส่งออกไปแล้ว)`);
 
       // ใบที่เพิ่งดาวน์โหลดถูกมาร์กไปแล้ว ถ้าไม่โหลดใหม่หน้าจอจะแสดงสถานะเก่าที่ไม่จริง
       fetchQuotations();
@@ -433,23 +450,29 @@ export const Quotations: React.FC = () => {
 
               {exportMenuOpen && (
                 <div className="absolute right-0 top-full mt-2 z-30 w-72 bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden">
-                  <button
-                    onClick={() => handleExportOdoo('xlsx')}
-                    className="w-full flex items-center gap-2 px-3.5 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50 transition-colors"
-                  >
-                    <FileSpreadsheet className="w-4 h-4 text-[#009032]" />
-                    Excel (.xlsx)
-                  </button>
-                  <button
-                    onClick={() => handleExportOdoo('csv')}
-                    className="w-full flex items-center gap-2 px-3.5 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50 transition-colors border-t border-slate-100"
-                  >
-                    <FileText className="w-4 h-4 text-slate-400" />
-                    CSV
-                  </button>
+                  {/* 1 ครั้ง = 1 บริษัท — Odoo ของ PM กับ THT เป็นคนละระบบ ไฟล์จึงรวมกันไม่ได้ */}
+                  {EXPORT_COMPANIES.map(({ value, label }) => (
+                    <div key={value} className="border-b border-slate-100">
+                      <p className="px-3.5 pt-2.5 pb-1 text-[11px] font-bold text-slate-400 tracking-wide">{label}</p>
+                      <button
+                        onClick={() => handleExportOdoo('xlsx', value)}
+                        className="w-full flex items-center gap-2 px-3.5 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 transition-colors"
+                      >
+                        <FileSpreadsheet className="w-4 h-4 text-[#009032]" />
+                        Excel (.xlsx)
+                      </button>
+                      <button
+                        onClick={() => handleExportOdoo('csv', value)}
+                        className="w-full flex items-center gap-2 px-3.5 py-2 pb-2.5 text-left text-sm text-slate-700 hover:bg-slate-50 transition-colors"
+                      >
+                        <FileText className="w-4 h-4 text-slate-400" />
+                        CSV
+                      </button>
+                    </div>
+                  ))}
                   <button
                     onClick={openHistory}
-                    className="w-full flex items-center gap-2 px-3.5 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50 transition-colors border-t border-slate-100"
+                    className="w-full flex items-center gap-2 px-3.5 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50 transition-colors"
                   >
                     <History className="w-4 h-4 text-slate-400" />
                     ประวัติการส่งออก
@@ -457,6 +480,8 @@ export const Quotations: React.FC = () => {
                   <p className="px-3.5 py-2.5 text-[11px] leading-snug text-slate-500 border-t border-slate-100 bg-slate-50">
                     ส่งออกตามตัวกรองบนหน้าจอ — ค่าตั้งต้นคือเฉพาะใบที่ยังไม่เคยส่ง
                     และใบที่ลงไฟล์แล้วจะถูกทำเครื่องหมายว่าส่งออกแล้วทันที
+                    <br />
+                    ใบที่เลขที่ไม่ขึ้นต้นด้วย QP/QT จะไม่อยู่ในไฟล์ของทั้งสองบริษัท
                   </p>
                 </div>
               )}
@@ -916,6 +941,7 @@ export const Quotations: React.FC = () => {
                     <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 text-[11px] font-semibold uppercase tracking-wider">
                       <th className="px-4 py-3">เวลา</th>
                       <th className="px-4 py-3">ผู้ส่งออก</th>
+                      <th className="px-4 py-3 text-center">บริษัท</th>
                       <th className="px-4 py-3 text-center">ไฟล์</th>
                       <th className="px-4 py-3 text-right">จำนวนใบ</th>
                       <th className="px-4 py-3 text-center">จัดการ</th>
@@ -926,6 +952,10 @@ export const Quotations: React.FC = () => {
                       <tr key={batch.id} className="hover:bg-slate-50/40 transition-colors">
                         <td className="px-4 py-2.5 text-slate-700">{formatDate(batch.exported_at)}</td>
                         <td className="px-4 py-2.5 text-slate-700">{batch.exported_by_username || '-'}</td>
+                        {/* ชุดที่ส่งออกก่อนแยก QP/QT ไม่มีคีย์นี้ — ตอนนั้นไฟล์เดียวมีทั้งสองบริษัทปนกัน */}
+                        <td className="px-4 py-2.5 text-center text-slate-700 font-semibold">
+                          {batch.filters?.company || '-'}
+                        </td>
                         <td className="px-4 py-2.5 text-center">
                           <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border bg-slate-50 border-slate-200 text-slate-600">
                             {batch.format}

@@ -40,9 +40,21 @@ export const ODOO_SO_SHEET_NAME = 'Import ';
 
 export type OdooExportFormat = 'xlsx' | 'csv';
 
+/**
+ * บริษัทเจ้าของใบ — ดูจากคำนำหน้าเลขที่ใบ (QP = PM, QT = THT)
+ *
+ * 1 ไฟล์ = 1 บริษัทเสมอ เพราะ Odoo ของ PM กับ THT เป็นคนละระบบ และชื่อภาษีคนละค่ากัน
+ */
+export type OdooExportCompany = 'QP' | 'QT';
+
 export interface OdooExportConfig {
-  /** Q: order_line/tax_id — template กำหนดให้ใส่ค่าเดียวกันทุกแถว */
-  tax: string;
+  /**
+   * Q: order_line/tax_id — ค่าเดียวกันทุกแถวในไฟล์ แต่คนละค่าระหว่าง QP กับ QT
+   *
+   * ⚠️ สองค่านี้ต่างกันแค่ "เว้นวรรคหน้าวงเล็บ" และมันต่างกันจริงตามที่ Odoo แต่ละระบบตั้งชื่อไว้
+   *    ห้ามแก้ให้เหมือนกันเพราะเห็นว่าน่าจะพิมพ์ตก — Odoo จับคู่ภาษีด้วยชื่อแบบตรงตัวทุกอักขระ
+   */
+  taxByCompany: Record<OdooExportCompany, string>;
   /** K: source_id — template กำหนดให้ใส่ "Sales" เสมอ */
   sourceId: string;
   /** O: order_line/product_uom — template กำหนดให้เป็น Pcs ทุกแถว ไม่ดูหน่วยจริงของสินค้า */
@@ -114,7 +126,11 @@ export interface OdooSoRow {
 
 export function loadOdooExportConfig(): OdooExportConfig {
   return {
-    tax: process.env.ODOO_EXPORT_TAX || 'Output VAT 7% (Exc)',
+    taxByCompany: {
+      QP: process.env.ODOO_EXPORT_TAX_QP || 'Output VAT 7% (Exc)',
+      // ไม่มีเว้นวรรคหน้าวงเล็บ — ตั้งใจ ดูคำเตือนที่ OdooExportConfig.taxByCompany
+      QT: process.env.ODOO_EXPORT_TAX_QT || 'Output VAT 7%(Exc)',
+    },
     sourceId: process.env.ODOO_EXPORT_SOURCE || 'Sales',
     uom: process.env.ODOO_EXPORT_UOM || 'Pcs',
   };
@@ -176,41 +192,76 @@ function combinedDiscountPercent(price: number, disc1: number, disc2: number): n
 }
 
 /**
+ * บริษัทเจ้าของใบจากคำนำหน้าเลขที่ใบ — คืน null เมื่อเดาไม่ได้ (ใบร่างที่ยังไม่มีเลข หรือเลขรูปแบบอื่น)
+ *
+ * เป็นจุดเดียวในโมดูลนี้ที่รู้ว่าคำนำหน้าไหนคือบริษัทไหน — ทั้งสังกัดห้อยท้ายชื่อเซลล์ (H/J),
+ * การคัดใบเข้าไฟล์ และการเลือกชื่อภาษี ใช้ตัวนี้ตัวเดียวกันหมด
+ */
+export function resolveExportCompany(quotationNo: any): OdooExportCompany | null {
+  const no = String(quotationNo ?? '').trim().toUpperCase();
+  if (no.startsWith('QT')) return 'QT';
+  if (no.startsWith('QP')) return 'QP';
+  return null;
+}
+
+/** แปลง query param เป็นบริษัทที่ใช้ได้จริง — คืน null เมื่อไม่ได้ส่งมาหรือค่าไม่รู้จัก */
+export function parseExportCompany(raw: any): OdooExportCompany | null {
+  const v = String(raw ?? '').trim().toUpperCase();
+  return v === 'QP' || v === 'QT' ? v : null;
+}
+
+/** สังกัดที่ห้อยท้ายชื่อเซลล์ในช่อง H/J ของไฟล์ */
+const COMPANY_SUFFIX: Record<OdooExportCompany, string> = { QP: '(PM)', QT: '(THT)' };
+
+/**
  * ต่อท้ายชื่อเซลล์ด้วยสังกัดของใบ เช่น "คุณนฤเบศร์" → "คุณนฤเบศร์(PM)"
  *
  * สังกัดดูจากคำนำหน้าเลขที่ใบ (QP=PM, QT=THT) — กติกาเดียวกับที่ pdfGenerator และ
  * enrichQuotationData ใช้ ใบที่ยังไม่มีเลขที่จะไม่เดาสังกัดให้ (ปล่อยชื่อเปล่า)
  */
 export function withCompanySuffix(name: string, quotationNo: string): string {
-  const no = String(quotationNo ?? '').trim().toUpperCase();
-  const suffix = no.startsWith('QT') ? '(THT)' : no.startsWith('QP') ? '(PM)' : '';
+  const company = resolveExportCompany(quotationNo);
+  const suffix = company ? COMPANY_SUFFIX[company] : '';
   if (!name || !suffix || name.endsWith(suffix)) return name;
   return `${name}${suffix}`;
 }
 
 /**
- * คัดเฉพาะใบที่จะปรากฏในไฟล์จริง — ใบที่ไม่มีรายการสินค้าถูกข้าม (นำเข้า Odoo ไม่ได้)
+ * คัดเฉพาะใบที่จะปรากฏในไฟล์จริง — ข้ามใบที่ไม่มีรายการสินค้า (นำเข้า Odoo ไม่ได้)
+ * และใบที่ไม่ใช่บริษัทที่กำลังส่งออก (รวมถึงใบที่เดาบริษัทจากเลขที่ใบไม่ได้)
  *
  * แยกออกมาเป็นฟังก์ชันของตัวเองเพราะ endpoint ต้องใช้กติกาเดียวกันนี้ตอน "ทำเครื่องหมายว่าส่งออกแล้ว"
- * ถ้ามาร์กใบที่ไม่มีรายการสินค้าไปด้วย ใบนั้นจะหายจาก export ตลอดกาลทั้งที่ไม่เคยอยู่ในไฟล์เลยสักครั้ง
+ * ถ้ามาร์กใบที่ไม่ได้อยู่ในไฟล์ไปด้วย ใบนั้นจะหายจาก export ตลอดกาลทั้งที่ไม่เคยอยู่ในไฟล์เลยสักครั้ง
+ *
+ * ⚠️ ตัวกรองบริษัทต้องอยู่ที่นี่เท่านั้น ห้ามย้ายไปเป็นเงื่อนไข WHERE ใน SQL ของ endpoint —
+ *    ฟังก์ชันนี้คือตัวตัดสินร่วมของ "ใบที่ลงไฟล์" กับ "ใบที่ถูกมาร์ก" ถ้ากติกาอยู่คนละที่
+ *    วันหลังแก้ที่เดียวจะได้ไฟล์กับเครื่องหมายที่ไม่ตรงกันทันที
  */
-export function selectExportableQuotes<T extends OdooExportQuotationRow>(quotes: T[]): T[] {
-  return (quotes || []).filter(q => Array.isArray(q.item_details) && q.item_details.length > 0);
+export function selectExportableQuotes<T extends OdooExportQuotationRow>(
+  quotes: T[], company: OdooExportCompany
+): T[] {
+  return (quotes || []).filter(q =>
+    Array.isArray(q.item_details) && q.item_details.length > 0 &&
+    resolveExportCompany(q.quotation_no) === company);
 }
 
 /**
- * แปลงใบเสนอราคาเป็นแถวตาม template — ใบที่ไม่มีรายการสินค้าจะถูกข้าม (นำเข้า Odoo ไม่ได้)
+ * แปลงใบเสนอราคาเป็นแถวตาม template ของบริษัทที่เลือก — ใบที่ selectExportableQuotes() คัดออก
+ * (ไม่มีรายการสินค้า หรือคนละบริษัท) จะไม่อยู่ในผลลัพธ์
  *
  * ⚠️ อ่านรายการจาก item_details (snapshot ดิบ) ไม่ใช่ items ที่ enrichQuotationData() คืนมา
  *    เพราะ whitelist ที่นั่นตัด internal_reference ทิ้ง ซึ่งเป็นค่าที่ช่อง order_line/product ต้องใช้
  */
 export function buildOdooSaleOrderRows(
   quotes: OdooExportQuotationRow[],
-  config: OdooExportConfig
+  config: OdooExportConfig,
+  company: OdooExportCompany
 ): OdooSoRow[] {
   const rows: OdooSoRow[] = [];
+  // ทุกใบในไฟล์เป็นบริษัทเดียวกันแล้ว (selectExportableQuotes กรองไว้) ชื่อภาษีจึงคงที่ทั้งไฟล์
+  const tax = config.taxByCompany[company];
 
-  selectExportableQuotes(quotes || []).forEach(quote => {
+  selectExportableQuotes(quotes || [], company).forEach(quote => {
     const items = quote.item_details as any[];
 
     const cust = quote.customer_details || {};
@@ -281,7 +332,7 @@ export function buildOdooSaleOrderRows(
         quantity: Number(item?.quantity) || 0,
         uom: config.uom,
         price_unit: price,
-        tax_id: config.tax,
+        tax_id: tax,
         discount: combinedDiscountPercent(price, Number(item?.discount_1) || 0, Number(item?.discount_2) || 0),
       });
     });

@@ -2,6 +2,7 @@
 //  Smoke test ของกลไก "กันส่งออกซ้ำ" ของ export Odoo
 //  รัน:  npm run diag:export-tracking
 //        npm run diag:export-tracking -- --limit 50
+//        npm run diag:export-tracking -- --company qt   (ตั้งต้น qp)
 //
 //  ⚠️ สคริปต์นี้ "เขียน" DB จริง (ต่างจาก diag:odoo-export ที่ read-only ล้วน) แต่ทำงานทั้งหมด
 //     ในทรานแซกชันเดียวแล้ว ROLLBACK ตอนจบเสมอ — รวมถึงตอน assert ไม่ผ่านหรือ throw
@@ -9,6 +10,7 @@
 //
 //  ครอบคลุม: จองใบ (claim) ได้เฉพาะใบที่ยังไม่ถูกมาร์ก · จองซ้ำครั้งที่สองได้ 0 ใบ (= กันส่งออกซ้ำ)
 //            ใบไม่มีรายการสินค้าไม่ถูกมาร์กและไม่ลงไฟล์ · exported=yes/all ยังส่งซ้ำได้
+//            ใบของอีกบริษัท/เลขไม่ขึ้นต้น QP-QT ไม่ถูกมาร์กและไม่ลงไฟล์
 //            จำนวนใน log/batch ตรงกับใบที่ลงไฟล์จริง · un-mark รายใบและทั้งชุดคืนสถานะครบ
 //  ให้รันซ้ำทุกครั้งที่แตะ endpoint export, ตัวกรอง exported หรือฟังก์ชัน claim/unmark ใน repositories
 // ─────────────────────────────────────────────────────────────────────────────
@@ -26,6 +28,8 @@ import {
   buildOdooSaleOrderRows,
   selectExportableQuotes,
   loadOdooExportConfig,
+  parseExportCompany,
+  resolveExportCompany,
 } from '../../services/odooSaleOrderExport.js';
 
 let failures = 0;
@@ -40,6 +44,13 @@ function argValue(name: string, fallback: string): string {
 }
 
 const limit = Math.max(1, Number(argValue('limit', '30')) || 30);
+// บริษัทที่จำลองการกดส่งออก — ชุดทดสอบยังดึงใบมาปนทั้ง QP/QT เพื่อพิสูจน์ว่าใบของอีกบริษัทไม่ถูกมาร์ก
+const company = parseExportCompany(argValue('company', 'qp'));
+if (!company) {
+  console.log('✗ FAIL  --company รับได้แค่ qp หรือ qt');
+  await pool.end();
+  process.exit(1);
+}
 
 // ── 0. เงื่อนไข WHERE ของตัวกรอง (ตรวจแบบ pure ไม่แตะ DB) ────────────────
 ok('exported=no  → กรองเฉพาะใบที่ยังไม่มี odoo_exported_at',
@@ -80,12 +91,16 @@ try {
   await client.query(
     `UPDATE quotations SET odoo_exported_at = NULL WHERE id = ANY($1::uuid[])`, [sampleIds]);
 
-  const exportable = selectExportableQuotes(sample);
-  const withoutItems = sample.length - exportable.length;
-  console.log(`   ชุดทดสอบ ${sample.length} ใบ (ลงไฟล์ได้ ${exportable.length} ใบ, ไม่มีรายการสินค้า ${withoutItems} ใบ)`);
+  const exportable = selectExportableQuotes(sample, company);
+  // ใบที่ตกรอบมี 2 เหตุ: ไม่มีรายการสินค้า กับเป็นของอีกบริษัท/เลขไม่ขึ้นต้นด้วย QP-QT
+  const withoutItems = sample.filter((q: any) =>
+    !Array.isArray(q.item_details) || q.item_details.length === 0).length;
+  const otherCompany = sample.length - exportable.length - withoutItems;
+  console.log(`   ชุดทดสอบ ${sample.length} ใบ (บริษัท ${company} ที่ลงไฟล์ได้ ${exportable.length} ใบ, ` +
+    `ไม่มีรายการสินค้า ${withoutItems} ใบ, คนละบริษัท/ไม่มีคำนำหน้า ${otherCompany} ใบ)`);
 
   if (exportable.length === 0) {
-    console.log('⚠️  ใบในชุดทดสอบไม่มีรายการสินค้าเลย — เพิ่ม --limit ให้มากขึ้น');
+    console.log(`⚠️  ไม่มีใบ ${company} ที่มีรายการสินค้าในชุดทดสอบ — เพิ่ม --limit หรือสลับ --company`);
     await client.query('ROLLBACK');
     client.release();
     await pool.end();
@@ -99,9 +114,30 @@ try {
 
   const claimedSet = new Set(claimed1);
   const emitted = exportable.filter((q: any) => claimedSet.has(String(q.id)));
-  const rows = buildOdooSaleOrderRows(emitted, config);
+  const rows = buildOdooSaleOrderRows(emitted, config, company);
   ok('ทุกใบที่จองได้ลงไฟล์จริง (มีอย่างน้อย 1 แถวต่อใบ)', rows.length >= emitted.length,
     `(${rows.length} แถว / ${emitted.length} ใบ)`);
+  ok(`ทุกใบที่จองได้เป็นบริษัท ${company}`,
+    emitted.every((q: any) => resolveExportCompany(q.quotation_no) === company));
+  ok(`ทุกแถวใช้ชื่อภาษีของบริษัท ${company}`,
+    rows.every(r => r.tax_id === config.taxByCompany[company]),
+    `("${config.taxByCompany[company]}")`);
+
+  // ── 2.1 ใบของอีกบริษัท/ไม่มีคำนำหน้าต้องไม่ถูกมาร์ก ───────────────────
+  // เหตุผลเดียวกับใบที่ไม่มีรายการสินค้า: มาร์กใบที่ไม่ได้อยู่ในไฟล์ = ใบนั้นหายจาก export ตลอดกาล
+  const foreignIds = sample
+    .filter((q: any) => Array.isArray(q.item_details) && q.item_details.length > 0
+      && resolveExportCompany(q.quotation_no) !== company)
+    .map((q: any) => String(q.id));
+  if (foreignIds.length > 0) {
+    const { rows: foreignNull } = await client.query(
+      `SELECT COUNT(*)::int AS n FROM quotations WHERE id = ANY($1::uuid[]) AND odoo_exported_at IS NULL`,
+      [foreignIds]);
+    ok('ใบของอีกบริษัท/ไม่มีคำนำหน้า ไม่ถูกมาร์กว่าส่งออกแล้ว', foreignNull[0].n === foreignIds.length,
+      `(ยังไม่ถูกมาร์ก ${foreignNull[0].n} / ${foreignIds.length})`);
+  } else {
+    console.log('   ℹ️  ชุดทดสอบไม่มีใบของอีกบริษัท — ข้ามการตรวจข้อนี้ (เพิ่ม --limit ให้เห็นทั้งสองบริษัท)');
+  }
 
   // ── 3. ใบไม่มีรายการสินค้าต้องไม่ถูกมาร์ก ─────────────────────────────
   // ถ้าเผลอมาร์ก ใบพวกนี้จะหายจาก export ตลอดกาลทั้งที่ไม่เคยอยู่ในไฟล์เลยสักครั้ง
@@ -122,7 +158,7 @@ try {
   const batchId = await insertExportBatch(client, {
     adminId: null, adminUsername: 'diag:export-tracking', format: 'xlsx',
     quotationCount: emitted.length, rowCount: rows.length,
-    filters: { exported: 'no', source: 'diag' },
+    filters: { company, exported: 'no', source: 'diag' },
   });
   await insertExportLogRows(client, batchId, emitted.map((q: any) => ({
     id: String(q.id), quotation_no: q.quotation_no ?? null,
@@ -144,7 +180,7 @@ try {
   ok('จองรอบสองด้วย exported=no ได้ 0 ใบ (กันส่งออกซ้ำ)', claimed2.length === 0,
     `(ได้ ${claimed2.length} ใบ)`);
   ok('ไฟล์รอบสองว่างเปล่า', buildOdooSaleOrderRows(
-    exportable.filter((q: any) => new Set(claimed2).has(String(q.id))), config).length === 0);
+    exportable.filter((q: any) => new Set(claimed2).has(String(q.id))), config, company).length === 0);
 
   // ── 6. exported=yes/all ยังส่งซ้ำได้ (ทางออกฉุกเฉินต้องใช้งานได้จริง) ──
   const claimed3 = await claimQuotationsForExport(client, exportable.map((q: any) => String(q.id)), false);

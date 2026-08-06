@@ -220,6 +220,19 @@ done
   ไม่ต้องรัน `_01` ก่อน (รันสองรอบ = ค้นหาลูกค้าล่มนานเป็นเท่าตัวเปล่า ๆ)
 - **มีช่วงที่ค้นหาลูกค้าพัง** — ระหว่างสร้าง matview ใหม่ (ราว 1–3 นาที) `customers_data_view` หายชั่วคราว → ทำนอกเวลาใช้งาน
 
+### ขั้น 4.5 — เปลี่ยนชื่อค่าภาษีใน `.env` (ครั้งเดียว ตอนขึ้น export แยก QP/QT)
+export แยกไฟล์ตามบริษัทแล้ว ชื่อภาษีจึงแยกเป็น 2 คีย์ — คีย์เดิม `ODOO_EXPORT_TAX` ไม่ถูกอ่านอีกต่อไป
+```bash
+grep -n ODOO_EXPORT_TAX .env      # มีคีย์เดิมอยู่ไหม
+```
+ถ้ามี ให้แก้เป็น 2 บรรทัดนี้แทน (ค่าตรงกับที่ Odoo แต่ละระบบตั้งชื่อไว้):
+```
+ODOO_EXPORT_TAX_QP="Output VAT 7% (Exc)"
+ODOO_EXPORT_TAX_QT="Output VAT 7%(Exc)"
+```
+- ⚠️ QT **ไม่มีเว้นวรรค** หน้าวงเล็บ ส่วน QP มี — ต่างกันจริง ห้ามแก้ให้เหมือนกัน
+- ไม่แก้ก็ไม่พัง โค้ดมีค่าตั้งต้นสองตัวนี้อยู่แล้ว แต่คีย์เดิมที่ค้างใน `.env` จะกลายเป็นค่าที่ไม่มีใครอ่าน
+
 ### ขั้น 5 — rebuild + up
 ```bash
 docker compose up -d --build          # สร้างกล่องใหม่จากโค้ดล่าสุด แล้วสลับให้อัตโนมัติ
@@ -234,7 +247,8 @@ curl -I http://127.0.0.1:${APP_PORT:-3011}/
 ### ขั้น 6 — ตรวจหลังขึ้น
 รัน diag ที่ **อ่านอย่างเดียว** ได้บน prod:
 ```bash
-docker compose exec app npx tsx scripts/diag/odooExportSmoke.ts
+docker compose exec app npx tsx scripts/diag/odooExportSmoke.ts --company qp
+docker compose exec app npx tsx scripts/diag/odooExportSmoke.ts --company qt
 docker compose exec app npx tsx scripts/diag/dateFilterSmoke.ts
 docker compose exec app npx tsx scripts/diag/quoteValidationSmoke.ts
 ```
