@@ -653,6 +653,34 @@ CREATE TABLE public.quotations (
 
 
 --
+-- Name: quotation_blacklist; Type: TABLE; Schema: public; Owner: -
+--
+-- บัญชีห้ามเสนอราคา — contact_id NULL = ทั้งบริษัท / มีค่า = เฉพาะผู้ติดต่อรายนั้น
+-- เก็บ id ดิบของ customers_data_view ไม่มี FK ไป customers เพราะตารางนั้นถูก sync ทับจาก Odoo
+-- ค่า 0 ห้ามเข้า contact_id (ใน view แปลว่า "บริษัทที่ไม่มีผู้ติดต่อ" — จะซ้ำความหมายกับ NULL)
+--
+
+CREATE TABLE public.quotation_blacklist (
+    id          serial PRIMARY KEY,
+    company_id  integer NOT NULL,
+    contact_id  integer,
+    reason      text,
+    created_by  integer REFERENCES public.admin_users(id) ON DELETE SET NULL,
+    created_at  timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at  timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    CONSTRAINT quotation_blacklist_company_id_check CHECK (company_id > 0),
+    CONSTRAINT quotation_blacklist_contact_id_check CHECK (contact_id IS NULL OR contact_id > 0)
+);
+
+-- แยก 2 index เพราะ NULL ไม่ชนกันเองใน unique index ปกติ
+CREATE UNIQUE INDEX quotation_blacklist_company_uniq
+    ON public.quotation_blacklist (company_id) WHERE contact_id IS NULL;
+
+CREATE UNIQUE INDEX quotation_blacklist_contact_uniq
+    ON public.quotation_blacklist (company_id, contact_id) WHERE contact_id IS NOT NULL;
+
+
+--
 -- Name: quotation_export_batches; Type: TABLE; Schema: public; Owner: -
 --
 

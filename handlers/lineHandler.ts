@@ -576,7 +576,8 @@ export async function handleEvent(
           try {
             const { validateQuotationItems } = await import('../services/quotationService.js');
             const r = await validateQuotationItems(currentQuote.items, {
-              customerName: currentQuote.customer_name, stage: 'confirm'
+              customerName: currentQuote.customer_name, stage: 'confirm',
+              customerId: currentQuote.customer_id, contactId: currentQuote.contact_id
             });
             confirmViolations = r.violations;
           } catch (valErr) {
@@ -806,6 +807,31 @@ export async function handleEvent(
         const parts = pendingQuotes[0].customer_name.split('|');
         const companyName = parts[0] ? parts[0].trim() : '';
         const finalCustomerName = `${companyName} | ${contactName}`;
+
+        // ด่าน blacklist — จุดเดียวในระบบที่เรียก updateQuotationCustomerSnapshot โดยไม่ผ่าน
+        // resolveContactFlow จึงต้องมีด่านของตัวเอง (ดู docs/plan-user-roles-auth.md §4.4)
+        // ต้องเช็ค "ก่อน" เรียก ไม่ใช่ให้ snapshot โยน error ออกมา ไม่งั้นจะตกไป catch ด้านล่าง
+        // แล้วตอบ "อัปเดตข้อมูลไม่สำเร็จ" ซึ่งเป็นข้อความคนละเรื่อง
+        {
+          const { isBlacklisted } = await import('../services/blacklistService.js');
+          const { buildViolationText, blacklistViolation, systemErrorViolation } =
+            await import('../services/quotationService.js');
+          let blockText: string | null = null;
+          try {
+            if (await isBlacklisted(resolvedCustomerId, contactId)) {
+              blockText = buildViolationText([blacklistViolation()]);
+            }
+          } catch (err) {
+            console.error('[select_contact] blacklist check failed (fail-closed):', err);
+            blockText = buildViolationText([systemErrorViolation()]);
+          }
+          if (blockText) {
+            return lineClient.replyMessage({
+              replyToken: event.replyToken,
+              messages: [{ type: 'text', text: blockText }]
+            });
+          }
+        }
 
         // Update all quotations to draft and update customer_details Snapshot
         let updatedQuotes: any[] = [];
@@ -1413,7 +1439,9 @@ export async function handleEvent(
           let revExpandedItems = quote.items;
           {
             const { validateQuotationItems, buildViolationText } = await import('../services/quotationService.js');
-            const { items: revExpanded, violations: revV } = await validateQuotationItems(quote.items, { stage: 'draft' });
+            const { items: revExpanded, violations: revV } = await validateQuotationItems(quote.items, {
+              stage: 'draft', customerId: quote.customer_id, contactId: quote.contact_id
+            });
             if (revV.length > 0) {
               return lineClient.replyMessage({
                 replyToken: replyToken,

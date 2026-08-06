@@ -97,7 +97,9 @@ export async function handleQuotationEditRequest(params: {
   // ตรวจกฎก่อนสร้างร่าง revision (เดิมข้ามการตรวจ — สินค้าที่ติดกฎหลุดเข้าร่างได้)
   // ตรวจ "ก่อน" ยกเลิกใบร่างเดิม — ถ้าติดกฎจะได้ไม่เผลอทิ้งร่างที่ค้างอยู่ (ให้ตรงกับเส้น revise ใน lineHandler)
   const { validateQuotationItems } = await import('./quotationService.js');
-  const { items: revExpanded, violations: revViolations } = await validateQuotationItems(activeQuote.items, { stage: 'draft' });
+  const { items: revExpanded, violations: revViolations } = await validateQuotationItems(activeQuote.items, {
+    stage: 'draft', customerId: activeQuote.customer_id, contactId: activeQuote.contact_id
+  });
   if (revViolations.length > 0) {
     const { buildViolationText } = await import('./quotationService.js');
     const t = buildViolationText(revViolations);

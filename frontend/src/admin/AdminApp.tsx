@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { AuthProvider, useAuth, type Role } from '../context/AuthContext';
 import { Login } from './Login';
 import { Users } from './Users';
+import { Blacklist } from './Blacklist';
 import { ChangePasswordModal } from './ChangePasswordModal';
 import { Promotions } from './Promotions';
 import { Salespersons } from './Salespersons';
@@ -31,10 +32,10 @@ import {
   AlertCircle,
   Users as UsersIcon,
   KeyRound,
-  Lock,
+  Ban,
 } from 'lucide-react';
 
-type MainTab = 'dashboard' | 'quotations' | 'salespersons' | 'promotions' | 'users' | 'settings';
+type MainTab = 'dashboard' | 'quotations' | 'salespersons' | 'promotions' | 'users' | 'blacklist' | 'settings';
 type SubTab = 'quotation' | 'optional' | 'stock' | 'moq' | 'shipping';
 
 interface AdminStats {
@@ -59,6 +60,7 @@ const NAV_ITEMS: { key: MainTab; label: string; icon: typeof LayoutDashboard; ro
   { key: 'promotions', label: 'จัดการโปรโมชันส่วนลด', icon: Tag, roles: ['admin'] },
   { key: 'salespersons', label: 'จัดการข้อมูลพนักงาน', icon: UserCheck, roles: ['admin'] },
   { key: 'users', label: 'จัดการผู้ใช้งานระบบ', icon: UsersIcon, roles: ['admin'] },
+  { key: 'blacklist', label: 'บัญชีห้ามเสนอราคา', icon: Ban, roles: ['admin', 'user'] },
 ];
 
 const SETTINGS_SUBITEMS: { key: SubTab; label: string }[] = [
@@ -75,6 +77,7 @@ const PAGE_TITLES: Record<MainTab, string> = {
   promotions: 'จัดการโปรโมชันส่วนลด',
   salespersons: 'จัดการข้อมูลพนักงาน',
   users: 'จัดการผู้ใช้งานระบบ',
+  blacklist: 'บัญชีห้ามเสนอราคา',
   settings: 'ตั้งค่าเงื่อนไข & กฎ',
 };
 
@@ -96,6 +99,14 @@ function AdminContent() {
 
   const isAdmin = user?.role === 'admin';
   const visibleNavItems = NAV_ITEMS.filter((item) => !!user && item.roles.includes(user.role));
+
+  // แท็บที่แสดงจริง — activeTab ตั้งต้นเป็น 'dashboard' ซึ่ง role 'user' ไม่มีสิทธิ์เห็น
+  // คำนวณตอน render แทนการ setState ใน effect: ไม่มี re-render รอบพิเศษ และครอบเคสถูกลดสิทธิ์
+  // ระหว่างเปิดหน้าค้างไว้ด้วย (adminAuthMiddleware อ่าน role สดจาก DB ทุก request)
+  const effectiveTab: MainTab =
+    visibleNavItems.some((item) => item.key === activeTab) || (activeTab === 'settings' && isAdmin)
+      ? activeTab
+      : (visibleNavItems[0]?.key ?? 'blacklist');
 
   useEffect(() => {
     // /api/admin/stats เปิดให้เฉพาะ admin — ยิงด้วย role อื่นจะได้ 403 แล้วขึ้น error ให้เปล่า ๆ
@@ -237,7 +248,7 @@ function AdminContent() {
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto py-3 px-2.5 space-y-0.5">
         {visibleNavItems.map(({ key, label, icon: Icon }) => {
-          const active = activeTab === key;
+          const active = effectiveTab === key;
           return (
             <button
               key={key}
@@ -423,41 +434,22 @@ function AdminContent() {
           <div>
             <p className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">Primus Admin</p>
             <h2 className="text-base font-bold text-slate-900 leading-tight">
-              {isAdmin ? PAGE_TITLES[activeTab] : 'บัญชีผู้ใช้งาน'}
+              {PAGE_TITLES[effectiveTab]}
             </h2>
           </div>
         </header>
 
         <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
-          {!isAdmin ? (
-            /* role 'user' ยังไม่มีเมนูของตัวเอง จนกว่าหน้าบัญชีห้ามเสนอราคาจะเปิดใช้
-               — บอกตรง ๆ ดีกว่าปล่อยให้เจอหน้าเปล่าหรือ error 403 */
-            <div className="animate-fade-in bg-white border border-slate-200 rounded-2xl p-10 text-center shadow-sm flex flex-col items-center justify-center gap-3">
-              <div
-                className="w-12 h-12 rounded-2xl flex items-center justify-center"
-                style={{ backgroundColor: BRAND_SOFT, color: BRAND }}
-              >
-                <Lock className="w-6 h-6" />
-              </div>
-              <p className="font-bold text-slate-900">ยังไม่มีเมนูสำหรับสิทธิ์ของคุณ</p>
-              <p className="text-sm text-slate-500 max-w-md">
-                บัญชีนี้เป็นสิทธิ์ผู้ใช้ทั่วไป เมนูตั้งค่าบัญชีห้ามเสนอราคายังไม่เปิดใช้งาน
-                หากต้องการสิทธิ์เพิ่มเติมกรุณาติดต่อผู้ดูแลระบบ
-              </p>
-              <button
-                onClick={() => setChangePasswordOpen(true)}
-                className="mt-1 flex items-center gap-1.5 px-3.5 py-2 text-white text-sm font-bold rounded-xl shadow-sm transition-all active:scale-95"
-                style={{ backgroundColor: BRAND }}
-              >
-                <KeyRound className="w-4 h-4" />
-                เปลี่ยนรหัสผ่าน
-              </button>
+          {effectiveTab === 'blacklist' ? (
+            /* เมนูเดียวที่ role 'user' เข้าถึงได้ — admin ก็เข้าได้เหมือนกัน */
+            <div className="animate-fade-in">
+              <Blacklist />
             </div>
-          ) : activeTab === 'quotations' ? (
+          ) : effectiveTab === 'quotations' ? (
             <div className="animate-fade-in">
               <Quotations />
             </div>
-          ) : activeTab === 'dashboard' ? (
+          ) : effectiveTab === 'dashboard' ? (
             <div className="grid grid-cols-1 gap-6">
               {/* Welcome Card */}
               <div className="relative bg-gradient-to-br from-[#009032]/5 via-white to-white border border-slate-200 rounded-2xl p-4 sm:p-5 overflow-hidden shadow-sm">
@@ -545,15 +537,15 @@ function AdminContent() {
                 </div>
               </div>
             </div>
-          ) : activeTab === 'promotions' ? (
+          ) : effectiveTab === 'promotions' ? (
             <div className="animate-fade-in">
               <Promotions />
             </div>
-          ) : activeTab === 'salespersons' ? (
+          ) : effectiveTab === 'salespersons' ? (
             <div className="animate-fade-in">
               <Salespersons />
             </div>
-          ) : activeTab === 'users' ? (
+          ) : effectiveTab === 'users' ? (
             <div className="animate-fade-in">
               <Users />
             </div>

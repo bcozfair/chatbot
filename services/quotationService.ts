@@ -16,6 +16,7 @@ import { expandOptionalProducts, checkStockRules, StockViolation } from './produ
 import { sumLineTotals, calcNetPrice } from '../utils/pricing.js';
 import { validateProductPriceWithPromotions } from '../utils/promotionValidator.js';
 import { buildThaiAddress } from '../utils/address.js';
+import { isBlacklisted } from './blacklistService.js';
 import { thaiYearMonth } from '../utils/thaiTime.js';
 import {
   loadQuotationRules,
@@ -30,7 +31,7 @@ import {
 export type ValidationStage = 'draft' | 'save' | 'confirm';
 
 export interface Violation {
-  type: 'BLOCKED' | 'OUT_OF_STOCK' | 'MOQ_VIOLATION' | 'MIN_PRICE_VIOLATION' | 'SYSTEM_ERROR';
+  type: 'BLOCKED' | 'OUT_OF_STOCK' | 'MOQ_VIOLATION' | 'MIN_PRICE_VIOLATION' | 'CUSTOMER_BLACKLISTED' | 'SYSTEM_ERROR';
   model: string;
   display_message: string;
   warn_msg?: string;
@@ -66,12 +67,26 @@ export function buildViolationDisplay(v: Omit<Violation, 'display_message'>): st
       const minPrice = Number(v.min_price ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
       return `💰 ห้ามขายต่ำกว่าราคาขั้นต่ำ รายการ ${model} (ราคาหลังลด ฿${price} < ขั้นต่ำ ฿${minPrice})`;
     }
+    // ไม่บอกเหตุผลที่แอดมินกรอกไว้ และไม่บอกว่าติดระดับบริษัทหรือระดับผู้ติดต่อ — เซลล์ต้องไปถามแอดมิน
+    case 'CUSTOMER_BLACKLISTED':
+      return '🚫 บริษัท/ผู้ติดต่อ รายนี้ถูกระงับการเสนอราคา กรุณาติดต่อแอดมิน';
     case 'SYSTEM_ERROR':
       return '⚠️ ตรวจสอบกฎไม่สำเร็จ กรุณาลองใหม่หรือติดต่อแอดมิน';
     default:
       return v.warn_msg || '';
   }
 }
+
+/** violation สำเร็จรูปสำหรับด่านที่อยู่นอก validateQuotationItems — ถ้อยคำต้องมาจากที่เดียวกัน */
+export const blacklistViolation = (): Violation => {
+  const v: Omit<Violation, 'display_message'> = { type: 'CUSTOMER_BLACKLISTED', model: '-' };
+  return { ...v, display_message: buildViolationDisplay(v) };
+};
+
+export const systemErrorViolation = (): Violation => {
+  const v: Omit<Violation, 'display_message'> = { type: 'SYSTEM_ERROR', model: '-' };
+  return { ...v, display_message: buildViolationDisplay(v) };
+};
 
 /** ประกอบหลาย violation เป็นข้อความเดียวสำหรับ LINE (หัวข้อ + รายการ) */
 export function buildViolationText(violations: Violation[]): string {
@@ -964,17 +979,42 @@ export async function validateAndPrepareItems(items: any[] | null): Promise<{
 
 /**
  * ด่านตรวจกฎเดียวของทั้งระบบ — ทุกเส้นทาง draft/save/confirm/revision เรียกตัวนี้
- * ลำดับ: expand optional → blocked → stock → MOQ → min-price เหนือ "ทุกบรรทัด"
+ * ลำดับ: blacklist ลูกค้า → expand optional → blocked → stock → MOQ → min-price เหนือ "ทุกบรรทัด"
  * fail-closed: check ใด throw → คืน SYSTEM_ERROR violation ให้ผู้เรียก reject เสมอ
  * stage เป็น metadata สำหรับ log เท่านั้น (ชุดกฎเท่ากันทุก stage)
+ *
+ * เงื่อนไขใหม่ของการออกใบเสนอราคาให้เพิ่มที่นี่ที่เดียว — ทุก call site ได้ผลทันทีทั้ง 3 stage
+ * (ดู docs/plan-user-roles-auth.md §4.4 สำหรับผังว่าใครเรียกจากตรงไหนบ้าง)
+ *
+ * customerId/contactId ไม่ใส่มาก็ได้ — เส้นทางที่ยังไม่รู้ว่าลูกค้าคือใคร (สถานะ pending_company)
+ * จะข้ามการตรวจ blacklist ไปเอง ส่วนเส้นทางที่รู้แล้วต้องส่งมาเสมอ
  */
 export async function validateQuotationItems(
   items: any[] | null,
-  opts: { customerName?: string | null; stage: ValidationStage }
+  opts: {
+    customerName?: string | null;
+    customerId?: unknown;
+    contactId?: unknown;
+    stage: ValidationStage;
+  }
 ): Promise<{ items: any[]; violations: Violation[] }> {
-  if (!items || items.length === 0) return { items: [], violations: [] };
   const violations: Violation[] = [];
-  let expanded: any[] = items;
+  let expanded: any[] = items ?? [];
+
+  // เงื่อนไขระดับ "ลูกค้า" — ตรวจก่อนรายการสินค้าเสมอ และตรวจแม้ใบยังไม่มีสินค้าสักบรรทัด
+  try {
+    if (await isBlacklisted(opts.customerId, opts.contactId)) {
+      const v: Omit<Violation, 'display_message'> = { type: 'CUSTOMER_BLACKLISTED', model: '-' };
+      violations.push({ ...v, display_message: buildViolationDisplay(v) });
+    }
+  } catch (err) {
+    console.error(`[validateQuotationItems] stage=${opts.stage} blacklist check failed (fail-closed):`, err);
+    const v: Omit<Violation, 'display_message'> = { type: 'SYSTEM_ERROR', model: '-' };
+    return { items: expanded, violations: [{ ...v, display_message: buildViolationDisplay(v) }] };
+  }
+
+  if (!items || items.length === 0) return { items: expanded, violations };
+
   try {
     expanded = await expandOptionalProducts(items);
 
@@ -1146,6 +1186,26 @@ export async function resolveContactFlow(
   itemsForDb: any[] | null,
   salesperson: any
 ): Promise<any> {
+  // ด่าน blacklist ระดับบริษัท — ต้องอยู่บนสุด "ก่อน" เขียน DB ทุกบรรทัดในฟังก์ชันนี้
+  //
+  // ทำไมต้องมีด่านแยกตรงนี้ ทั้งที่ validateQuotationItems เป็นด่านกลาง: ใน flow ของ LINE
+  // ด่านกลางทำงานตั้งแต่ตอนที่ยังไม่รู้ว่าลูกค้าคือใคร (processQuotationRequest ตรวจสินค้า
+  // แล้วค่อยไปค้นหาบริษัท) — เงื่อนไขระดับลูกค้าจึงตรวจได้ก็ต่อเมื่อมาถึงจุดนี้
+  //
+  // ฟังก์ชันนี้ถูกเรียกเฉพาะตอนใบอยู่สถานะ pending_company/pending_contact ซึ่งยังไม่เคยผูก
+  // ลูกค้ามาก่อน = เป็นการ "ผูกใหม่" เสมอ จึงบล็อกได้เต็มที่โดยไม่ไปโดนร่างที่ค้างอยู่
+  //
+  // คืน { text } แทนการ throw เพราะเป็น shape ที่ caller ทุกที่รองรับอยู่แล้ว (reply ผ่าน
+  // replyToken เดิม ไม่ต้องแก้ caller สักจุด และไม่มีทางเผา replyToken ทิ้งด้วย error ที่ไม่ได้ดัก)
+  try {
+    if (await isBlacklisted(customerId, null)) {
+      return { text: buildViolationText([blacklistViolation()]) };
+    }
+  } catch (err) {
+    console.error('[resolveContactFlow] blacklist check failed (fail-closed):', err);
+    return { text: buildViolationText([systemErrorViolation()]) };
+  }
+
   const contactCandidates = await findContactCandidates(customerId, contactQuery);
 
   // ค้นหาผู้ติดต่อที่ชื่อตรงเป๊ะ (Exact Match) หลังทำความสะอาดชื่อ (ตัดคำนำหน้าออก)
@@ -1168,6 +1228,17 @@ export async function resolveContactFlow(
     const matchedContactName = finalCandidates[0].item.name;
     const contactId = finalCandidates[0].item.id;
     const finalCustomerName = `${companyName} | ${matchedContactName}`;
+
+    // เพิ่งรู้ตัวผู้ติดต่อตรงนี้ — ด่านบนสุดตรวจได้แค่ระดับบริษัท ต้องตรวจระดับผู้ติดต่อซ้ำ
+    // ก่อนเขียน DB (ครอบทั้ง updateQuotationCustomerSnapshot และ insertDraftQuotations ด้านล่าง)
+    try {
+      if (await isBlacklisted(customerId, contactId)) {
+        return { text: buildViolationText([blacklistViolation()]) };
+      }
+    } catch (err) {
+      console.error('[resolveContactFlow] blacklist check (contact) failed (fail-closed):', err);
+      return { text: buildViolationText([systemErrorViolation()]) };
+    }
 
     let quotes;
     if (existingQuoteIdsStr) {

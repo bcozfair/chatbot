@@ -1,6 +1,6 @@
 # แผนงาน: ระบบผู้ใช้และสิทธิ์ (Auth & Roles) — Admin Portal
 
-> สถานะ: **เฟส 1-3 และ 5 เสร็จแล้ว (2026-08-06)** · เฟส 4 (blacklist) ออกแบบจบแล้ว รอลงมือ
+> สถานะ: **ทุกเฟสเขียนโค้ดเสร็จแล้ว (2026-08-06)** — เฟส 4 รอ deploy ขึ้น production (migration รันบน DB จริงไปแล้ว)
 > §4.3-4.4 ถูกเขียนใหม่ 2026-08-06 หลังสำรวจโค้ดรอบสอง — เดิมออกแบบเป็น "3 ด่านใหม่ + throw" ซึ่ง**กันไม่ครบและตอบข้อความผิด** เปลี่ยนเป็นต่อยอด `validateQuotationItems` ที่มีอยู่แล้ว
 > อ่านไฟล์นี้ก่อนเริ่มงานทุกครั้ง แล้วอัปเดตช่อง "สถานะ" ของแต่ละเฟสเมื่อทำเสร็จ
 
@@ -206,7 +206,7 @@ ALTER TABLE admin_users
 
 ### เฟส 4 — Blacklist บริษัท/ผู้ติดต่อ
 
-**สถานะ:** ☐ ออกแบบจบแล้ว 2026-08-06 รอลงมือ
+**สถานะ:** ✅ เขียนโค้ดครบทุกขั้นแล้ว 2026-08-06 · migration รันบน DB จริงแล้ว · **ยังไม่ deploy** (โค้ดในคอนเทนเนอร์ที่รันอยู่ยังเป็นตัวเก่า)
 **ความเสี่ยง:** ปานกลาง — แตะ flow ใบเสนอราคาที่ใช้งานจริงอยู่ จึงออกแบบให้ "เพิ่มด่าน" ไม่ใช่ "แก้ของเดิม"
 
 #### 4.0 ข้อสรุปที่เคาะแล้ว
@@ -222,13 +222,21 @@ ALTER TABLE admin_users
 
 #### 4.1 หลักการออกแบบ — แยกส่วน ไม่แตะของเดิม
 
-**ห้ามแตะ `customers_data_view`** — เป็น MATERIALIZED VIEW ([`schema.sql:219`](../migrations/schema.sql#L219)) ที่ถูก `REFRESH ... CONCURRENTLY` ทุกรอบ sync ([`refreshCustomerDirectory.ts:25`](../scripts/sync/refreshCustomerDirectory.ts#L25))
-ถ้าใส่ `is_blocked` เข้าไปใน matview จะเจอ:
-* **ค่าที่กดบล็อกไม่มีผลจนกว่า sync รอบถัดไปจะ refresh** ← ข้อนี้ข้อเดียวก็ตัดทิ้งได้แล้ว
-* matview ไม่มี `CREATE OR REPLACE` ต้อง DROP แล้วสร้างใหม่ พร้อม index 2 ตัวและ plain view `customers_data` ที่ครอบอยู่
-* กระทบ `syncCustomers.ts` / `syncSaleorders.ts` / `syncService.ts` ที่เรียก refresh ตัวนี้
+**ห้ามใส่ `is_blocked` ลง `customers_data_view`**
 
-**ห้ามแปลง matview เป็นตารางจริงแล้วใส่คอลัมน์** — ข้อมูลใน matview เกิดจากการ blend `customers` + `sale_orders` ที่ sync ทับใหม่จาก Odoo ทุกรอบ ค่า `is_blocked` จะถูกทับหายทุกรอบ sync
+> ⚠️ แก้ข้อมูลผิด 2026-08-06: หัวข้อนี้เคยเขียนว่า `customers_data_view` เป็น MATERIALIZED VIEW ที่ถูก `REFRESH ... CONCURRENTLY`
+> **ไม่จริงแล้ว** — ตั้งแต่ [`2026-08-06_01_customers_data_fast_refresh.sql`](../migrations/changes/2026-08-06_01_customers_data_fast_refresh.sql) มันเป็น **ตารางจริง** ที่ sync สร้างใหม่ทั้งก้อนแบบ build+swap
+> (`CREATE TABLE ..._new AS SELECT * FROM customers_data_build` → `DROP TABLE` ตัวเก่า → `RENAME` ใน transaction เดียว — [`refreshCustomerDirectory.ts`](../scripts/sync/refreshCustomerDirectory.ts))
+> และ plain view `customers_data` ที่เคยครอบอยู่ถูกลบทิ้งแล้วใน [`2026-08-06_02`](../migrations/changes/2026-08-06_02_drop_customers_data_view_wrapper.sql)
+> นิยามของข้อมูลย้ายไปอยู่ที่ **view `customers_data_build`** แทน
+
+ข้อสรุป "ห้ามใส่คอลัมน์" ยังเหมือนเดิม แต่เหตุผลเปลี่ยน:
+
+* **ตารางถูก `DROP` แล้วสร้างใหม่ทุกรอบ sync** — คอลัมน์ที่เติมด้วย `ALTER TABLE` หายเกลี้ยงรอบถัดไป
+* ถ้าเลี่ยงด้วยการ blend blacklist เข้าไปใน `customers_data_build` แทน (ซึ่งอยู่รอด rebuild) จะเจอข้อที่ตัดทิ้งได้ทันที: **ค่าที่แอดมินกดบล็อกไม่มีผลจนกว่า sync รอบถัดไปจะ rebuild** — ผิดข้อ 5 ของทดสอบมือใน §4.8 ที่ต้องการให้ลบออกจากบัญชีแล้วใช้ได้ทันที
+* build+swap ถือ `AccessExclusiveLock` ตอนสลับตาราง — งานที่ทำให้ขั้นตอนนี้หนักขึ้นกระทบทุกคนที่กำลังค้นหาลูกค้าอยู่
+
+**อีกผลหนึ่งของการเป็น build+swap:** ตารางนี้ถูก `DROP` เป็นรอบ ๆ → **สร้าง FK ชี้ไปหามันไม่ได้เลย** (FK จะบล็อก `DROP TABLE` ทั้งรอบ sync) เป็นเหตุผลเพิ่มที่ยืนยันว่า `quotation_blacklist` ต้องเก็บ id ดิบตาม §4.2 การอ่านชื่อทำด้วย `LEFT JOIN` ตอน query เท่านั้น
 
 **ห้ามกรอง blacklist ในการค้นหา** — ต้อง JOIN blacklist เข้า query ค้นหา = แตะ logic ที่ทำงานดีอยู่แล้ว และเซลล์จะงงว่าทำไมหาบริษัทที่มีอยู่จริงไม่เจอ
 ให้ "ค้นเจอได้ แต่ยืนยันไม่ได้" แทน แล้วติดป้ายเตือนที่ผลลัพธ์
@@ -237,7 +245,7 @@ ALTER TABLE admin_users
 
 #### 4.2 ตารางใหม่
 
-`migrations/changes/YYYY-MM-DD_NN_quotation_blacklist.sql`
+`migrations/changes/2026-08-06_03_quotation_blacklist.sql`
 
 ```sql
 CREATE TABLE public.quotation_blacklist (
@@ -356,7 +364,8 @@ blacklist จึงเข้าเป็น **เงื่อนไขที่ 
 * ต้องเปลี่ยน `GET /api/admin/customers/search` ([`index.ts`](../index.ts)) จาก `requireRole('admin')` เป็น `requireRole('admin', 'user')` เพื่อให้ role `user` ค้นหาบริษัทตอนเพิ่มรายการได้
 * หน้าใหม่ `frontend/src/admin/Blacklist.tsx` + เพิ่มใน `NAV_ITEMS` โดยตั้ง `roles: ['admin', 'user']`
 * ลบหน้า "ยังไม่มีเมนูสำหรับสิทธิ์ของคุณ" ใน [`AdminApp.tsx`](../frontend/src/admin/AdminApp.tsx) ออก เพราะ role `user` มีเมนูของตัวเองแล้ว
-* GET ต้อง join ชื่อบริษัท/ผู้ติดต่อจาก `customers_data_view` มาแสดง (อ่านอย่างเดียว ไม่แก้ view)
+* GET ต้อง **`LEFT JOIN`** ชื่อบริษัท/ผู้ติดต่อจาก `customers_data_view` มาแสดง (อ่านอย่างเดียว ไม่แก้ตาราง)
+  ต้องเป็น `LEFT JOIN` เพราะลูกค้าที่ถูกลบจาก Odoo จะหายจากตารางนี้รอบ sync ถัดไป — `INNER JOIN` จะทำให้รายการ blacklist หายจากหน้าจอทั้งที่ยังบล็อกอยู่จริง ให้โชว์ id ดิบแทนชื่อ
 
 #### 4.7 สิ่งที่ยืนยันว่า "ไม่ถูกแตะ"
 
@@ -364,12 +373,26 @@ blacklist จึงเข้าเป็น **เงื่อนไขที่ 
 
 #### 4.8 ลำดับงานย่อยและการตรวจ
 
-1. migration + `blacklistService.ts` (ยังไม่มีใครเรียก — ปลอดภัย 100%)
-2. API + UI แอดมิน (เพิ่มรายการได้ แต่ยังไม่มีผลกับใบเสนอราคา)
-3. `CUSTOMER_BLACKLISTED` เข้า `Violation` + `buildViolationDisplay` + `validateQuotationItems` (ยังไม่มี call site ส่ง id เข้ามา = ยังไม่มีผล)
-4. เติม id เข้าด่าน `stage: 'confirm'` 2 จุดก่อน — ด่านสุดท้ายที่กันจริง ทำให้ระบบปลอดภัยตั้งแต่ขั้นนี้
-5. เติม id เข้าด่าน `draft`/`save` อีก 4 จุด + guard ใหม่ 2 จุด (`resolveContactFlow`, `lineHandler:813`)
-6. เตือนต้นทาง: ปุ่ม Flex + `is_blacklisted` + LIFF
+1. ✅ **เสร็จ 2026-08-06** — `migrations/changes/2026-08-06_03_quotation_blacklist.sql` (รันบน DB จริงผ่าน psql แล้ว) + `services/blacklistService.ts` + เพิ่มตารางใน `schema.sql`
+   ยังไม่มีใครเรียกโมดูลนี้ → ทั้งโค้ดและ DB ไม่กระทบพฤติกรรมเดิมเลย
+   ตรวจแล้วด้วย harness ชั่วคราว 31 เคส (สร้าง-รัน-ลบทิ้ง): constraint ระดับตาราง, unique index ทั้งสองตัว, normalize `contact_id = 0 → NULL`, string id จาก JSON body, บล็อกทั้งบริษัทไม่ลามผิดคน, `ON DELETE SET NULL` ของ `created_by`
+2. ✅ API แอดมิน 5 เส้นใน `index.ts` + หน้า `frontend/src/admin/Blacklist.tsx` + `NAV_ITEMS` + ลบหน้า "ยังไม่มีเมนู"
+   **แก้จากแผนเดิม:** §4.6 เคยสั่งให้ปลด `GET /api/admin/customers/search` เป็น `requireRole('admin','user')` — **ทำไม่ได้**
+   เส้นนั้นคืนแค่ `reference` + `display_name` จากตาราง `customers` ไม่มี `company_id` ที่หน้านี้ต้องใช้ และเป็นของหน้าโปรโมชัน
+   จึงเพิ่มเส้นใหม่แทน: `GET /api/admin/blacklist/customers` และ `/api/admin/blacklist/customers/:id/contacts` (ใช้ `searchCustomersAdmin` / `getContactsByCustomerId` ที่มีอยู่แล้ว)
+3. ✅ `CUSTOMER_BLACKLISTED` เข้า `Violation` + `buildViolationDisplay` + `validateQuotationItems`
+   **ย้าย early-return ของ "ใบไม่มีสินค้า" ลงมาไว้หลังการตรวจ blacklist** — ไม่งั้นใบที่ยังไม่มีบรรทัดสินค้าจะข้ามด่านระดับลูกค้าไปทั้งใบ
+4. ✅ เติม id เข้าด่าน `stage: 'confirm'` 2 จุด
+5. ✅ เติม id เข้าด่าน `draft`/`save` อีก 4 จุด + guard **3 จุด** (มากกว่าที่วางแผนไว้ 1 จุด)
+   `resolveContactFlow` ต้องมี **2 ด่าน** ไม่ใช่ 1: ด่านบนสุดตรวจได้แค่ระดับบริษัท (ยังไม่รู้ว่าผู้ติดต่อคือใคร)
+   ต้องตรวจซ้ำระดับผู้ติดต่อตอน auto-match ได้ตัวคนแล้ว ก่อนเขียน DB · อีกจุดคือ postback `select_contact` ใน `lineHandler`
+6. ✅ เตือนต้นทาง: ปุ่มยืนยันใน Flex + `is_blacklisted` ใน `/api/customers/search` และ `/api/customer/:id/contacts` + ป้ายแดง/กดไม่ได้ในหน้า LIFF
+
+**ผลตรวจอัตโนมัติ (รันจริง 2026-08-06 — ผ่านทั้งหมด):**
+`npx tsc --noEmit` ✓ · `docker build --target frontend` ✓ · `npx eslint .` ✓ · `npm run diag:quote-validation` ✓ (12/12)
+`npm run diag:confirm-race` ✓ (ต้องส่ง `-e APP_URL=http://app:3011` เมื่อรันในคอนเทนเนอร์ชั่วคราว ไม่งั้นได้ HTTP 0 ทุกใบ)
+`tsx scripts/evalCustomerSearch.ts` ✓ **เทียบกับ baseline ที่ checkout จาก HEAD แล้วเท่ากันเป๊ะ** — top-1 50/54, top-3 54/54, zero-candidate 0, wrong-auto-select 0
+harness ชั่วคราวเฉพาะเฟสนี้ 26 เคส (สร้าง-รัน-ลบทิ้ง): ด่านกลางครบ 3 stage, บล็อกรายผู้ติดต่อไม่ลามคนอื่น, string id, ใบไม่มีสินค้า, guard ใน `resolveContactFlow` ไม่เขียน DB เลย, ปุ่ม Flex หาย/ไม่หาย, ปลดออกแล้วมีผลทันที
 
 **Verify:** `docker run ... npx tsc --noEmit` · `docker build --target frontend` · `npx eslint .` · `npm run diag:confirm-race` (แตะ confirm path) · **`tsx scripts/diag/quoteValidationSmoke.ts`** (แตะ `validateQuotationItems`/`buildViolationDisplay` โดยตรง — ไฟล์นั้นสั่งไว้เองว่าให้รันซ้ำทุกครั้งที่แตะ) · `tsx scripts/evalCustomerSearch.ts` (**เทียบผลก่อน/หลัง ต้องเท่าเดิมเป๊ะ** — เป็นหลักฐานว่าไม่ได้แตะการค้นหา)
 
@@ -421,7 +444,7 @@ blacklist จึงเข้าเป็น **เงื่อนไขที่ 
 เฟส 1 (เปลี่ยนรหัสผ่าน + pgcrypto)      ✅
    └─→ เฟส 2 (บังคับสิทธิ์ server)      ✅  ← ห้ามสร้าง user role 'user' ก่อนเฟสนี้เสร็จ
           ├─→ เฟส 3 (UI จัดการ user)     ✅
-          └─→ เฟส 4 (blacklist)          ☐ ออกแบบจบ รอลงมือ
+          └─→ เฟส 4 (blacklist)          ✅ โค้ดครบ รอ deploy
                  └─→ เฟส 5 (เก็บกวาด)    ✅
 ```
 
@@ -448,7 +471,7 @@ blacklist จึงเข้าเป็น **เงื่อนไขที่ 
 | เฟส | ไฟล์ใหม่ | ไฟล์ที่แก้ |
 | --- | --- | --- |
 | 1-3 (✅) | `migrations/changes/2026-08-06_01_admin_users_roles.sql`, `frontend/src/admin/Users.tsx`, `frontend/src/admin/ChangePasswordModal.tsx` | `config/auth.ts`, `index.ts`, `migrations/schema.sql`, `frontend/src/admin/AdminApp.tsx`, `frontend/src/context/AuthContext.tsx`, `DEPLOY.md` |
-| 4 (☐ ออกแบบแล้ว) | `services/blacklistService.ts`, `frontend/src/admin/Blacklist.tsx`, `migrations/changes/YYYY-MM-DD_NN_quotation_blacklist.sql` | `services/quotationService.ts`, `index.ts`, `handlers/lineHandler.ts`, `services/quotationAgent.ts`, `utils/flexTemplates.ts`, `liff_pages/quote-edit.html`, `frontend/src/admin/AdminApp.tsx`, `migrations/schema.sql` |
+| 4 (✅ รอ deploy) | `services/blacklistService.ts`, `frontend/src/admin/Blacklist.tsx`, `migrations/changes/2026-08-06_03_quotation_blacklist.sql` | `services/quotationService.ts`, `index.ts`, `handlers/lineHandler.ts`, `services/quotationAgent.ts`, `utils/flexTemplates.ts`, `liff_pages/quote-edit.html`, `frontend/src/admin/AdminApp.tsx`, `migrations/schema.sql` |
 | 5.3 (✅) | `config/loginRateLimit.ts` | `index.ts` |
 
 ---

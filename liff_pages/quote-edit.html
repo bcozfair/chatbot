@@ -1446,6 +1446,30 @@
         padding-bottom: 14px;
       }
 
+      /* บริษัทที่ถูกระงับการเสนอราคา — ค้นเจอได้ แต่กดเลือกไม่ได้ */
+      .dropdown-item.is-blocked {
+        background: var(--danger-bg);
+        cursor: not-allowed;
+      }
+      .dropdown-item.is-blocked:hover {
+        background: var(--danger-bg);
+      }
+      .dropdown-item.is-blocked .prod-code {
+        color: var(--danger);
+        text-decoration: line-through;
+      }
+      .blocked-badge {
+        font-size: 10px;
+        font-weight: 700;
+        color: var(--danger);
+        background: var(--white);
+        border: 1px solid var(--danger);
+        border-radius: 20px;
+        padding: 1px 7px;
+        white-space: nowrap;
+        flex-shrink: 0;
+      }
+
       /* ─── SEARCH CLEAR BUTTON ─── */
       .search-clear {
         position: absolute;
@@ -1663,6 +1687,12 @@
 
       // ข้อความแทนค่าลูกค้าที่ยังไม่มีข้อมูล (ค่าจริงเป็น null — ตรงกับ CUSTOMER_PLACEHOLDER ใน utils/flexTemplates.ts)
       const CUSTOMER_PLACEHOLDER = "-";
+
+      // ⚠️ mirror ของ CUSTOMER_BLACKLISTED ใน buildViolationDisplay() (services/quotationService.ts)
+      // หน้านี้เป็น vanilla JS ไม่มี bundler ตาม AGENTS.md จึงคัดลอกถ้อยคำมา แก้ที่นั่นต้องมาแก้ที่นี่ด้วย
+      // ฝั่ง server เป็นผู้ตัดสินเสมอ ข้อความนี้เป็นแค่การเตือนล่วงหน้าไม่ให้เสียเวลาทำใบที่ยืนยันไม่ได้
+      const BLACKLIST_MESSAGE =
+        "บริษัท/ผู้ติดต่อ รายนี้ถูกระงับการเสนอราคา กรุณาติดต่อแอดมิน";
 
       // ── State ──
       let quotesData = [];
@@ -3072,6 +3102,13 @@
           contacts.forEach((c) => {
             const opt = document.createElement("option");
             opt.value = c.name;
+            // ผู้ติดต่อที่ถูกระงับ (รายคน หรือถูกระงับทั้งบริษัท) เลือกไม่ได้ตั้งแต่ใน dropdown
+            if (c.is_blacklisted) {
+              opt.textContent = `🚫 ${c.name} (ระงับการเสนอราคา)`;
+              opt.disabled = true;
+              selectEl.appendChild(opt);
+              return;
+            }
             opt.textContent = c.name;
             if (c.name === selectedContactName) {
               opt.selected = true;
@@ -3187,17 +3224,26 @@
         }
         customers.forEach((cust) => {
           const itemEl = document.createElement("div");
-          itemEl.className = "dropdown-item";
+          // is_blacklisted มาจาก /api/customers/search (ฟิลด์ที่เติมต่อท้าย ไม่ได้แก้ SQL ค้นหา)
+          // ยังค้นเจอได้เหมือนเดิม แต่กดเลือกไม่ได้ — ตัวกันจริงอยู่ฝั่ง server ตอนบันทึก/ยืนยัน
+          const blocked = !!cust.is_blacklisted;
+          itemEl.className = blocked ? "dropdown-item is-blocked" : "dropdown-item";
           itemEl.innerHTML = `
           <div class="dropdown-item-header">
             <span class="prod-code">${cust.display_name}</span>
-            <span class="prod-price" style="font-size:11px;color:var(--text-light);">${cust.reference || ""}</span>
+            ${blocked ? '<span class="blocked-badge">🚫 ระงับการเสนอราคา</span>' : `<span class="prod-price" style="font-size:11px;color:var(--text-light);">${cust.reference || ""}</span>`}
           </div>
           `;
-          itemEl.addEventListener("click", () => {
-            selectCompanyForQuote(cust);
-            dropdown.style.display = "none";
-          });
+          if (blocked) {
+            itemEl.addEventListener("click", () => {
+              showCustomAlert(BLACKLIST_MESSAGE);
+            });
+          } else {
+            itemEl.addEventListener("click", () => {
+              selectCompanyForQuote(cust);
+              dropdown.style.display = "none";
+            });
+          }
           dropdown.appendChild(itemEl);
         });
         dropdown.style.display = "block";

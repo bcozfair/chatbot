@@ -37,6 +37,13 @@ import {
 } from './db/repositories.js';
 import { confirmQuotationAtomic, enrichQuotationData, buildItemSnapshots } from './services/quotationService.js';
 import {
+  listBlacklist,
+  addBlacklistEntry,
+  removeBlacklistEntry,
+  findBlockedCompanyIds,
+  findBlockedContacts,
+} from './services/blacklistService.js';
+import {
   buildOdooSaleOrderRows,
   selectExportableQuotes,
   loadOdooExportConfig,
@@ -257,7 +264,7 @@ app.post('/api/quotations', express.json(), async (req: any, res: any) => {
     const { insertDraftQuotations, validateQuotationItems } =
       await import('./services/quotationService.js');
     const { items: expandedOnCreate, violations: createViolations } =
-      await validateQuotationItems(items, { customerName, stage: 'draft' });
+      await validateQuotationItems(items, { customerName, stage: 'draft', customerId, contactId });
     if (createViolations.length > 0) {
       return res.status(422).json({ error: 'VALIDATION_ERROR', violations: createViolations });
     }
@@ -549,7 +556,17 @@ app.get('/api/customers/search', async (req: any, res: any) => {
     const q = req.query.q || '';
 
     const data = await searchCustomersAdmin(String(q), 30);
-    res.json(data);
+
+    // เตือนต้นทาง — เติมฟิลด์ใหม่ต่อท้ายผลลัพธ์ ไม่แตะ SQL ค้นหาเลย (ดูแผน §4.5)
+    // ล้มแล้วปล่อยผ่านโดยตั้งใจ: นี่เป็นชั้น UX ตัวกันจริงคือด่านตอนยืนยัน
+    // ค้นหาลูกค้าเป็นฟังก์ชันหลักของระบบ ห้ามพังเพราะตารางเสริม
+    let blockedIds = new Set<number>();
+    try {
+      blockedIds = await findBlockedCompanyIds(data.map((c: any) => c.id));
+    } catch (err) {
+      console.error('[customers/search] annotate blacklist failed (ปล่อยผ่าน):', err);
+    }
+    res.json(data.map((c: any) => ({ ...c, is_blacklisted: blockedIds.has(Number(c.id)) })));
   } catch (err: any) {
     console.error("API GET customers search error:", err);
     res.status(500).json({ error: err.message });
@@ -573,6 +590,14 @@ app.get('/api/customer/:id/contacts', async (req: any, res: any) => {
                              companyRows[0];
       }
 
+      // เตือนต้นทางระดับผู้ติดต่อ — ถูกระงับทั้งบริษัทก็ติดป้ายทุกคน (ดูแผน §4.5)
+      let blocked = { wholeCompany: false, contactIds: new Set<number>() };
+      try {
+        blocked = await findBlockedContacts(req.params.id);
+      } catch (err) {
+        console.error('[customer/:id/contacts] annotate blacklist failed (ปล่อยผ่าน):', err);
+      }
+
       formatted = data.map((c: any) => {
         const hasAddr = (c.invoice_street && c.invoice_street.trim()) || (c.invoice_state && c.invoice_state.trim());
         const target = hasAddr ? c : (companyDefaultAddr || c);
@@ -590,7 +615,8 @@ app.get('/api/customer/:id/contacts', async (req: any, res: any) => {
           invoice_sub_district: parts.subDistrict,
           invoice_state: parts.state,
           invoice_zip: target.invoice_zip,
-          address_complete: parts.full
+          address_complete: parts.full,
+          is_blacklisted: blocked.wholeCompany || blocked.contactIds.has(Number(c.id))
         };
       });
     }
@@ -762,9 +788,20 @@ app.put('/api/quotation/:id', express.json(), async (req: any, res: any) => {
     // ผนวกรายการสินค้าใหม่ที่ผ่านการตรวจสอบแล้ว
     resultItems.push(...expandedNew);
 
-    // ด่านตรวจกฎรวม — blocked/stock/MOQ/min-price เหนือทุกบรรทัด (fail-closed)
+    // ร่างที่ผูกลูกค้าที่ถูกระงับไว้ก่อนแล้ว ต้องแก้ไข/บันทึกต่อได้ (ตกลงกันไว้ในแผน §4.0)
+    // จึงส่ง id เข้าด่านเฉพาะตอน "เปลี่ยนไปเป็นลูกค้ารายใหม่" เท่านั้น
+    // ⚠️ ต้อง Number() ทั้งสองฝั่ง — ค่าจาก body เป็น JSON ส่วนใน DB เป็น integer
+    //    ถ้าเทียบดิบ ๆ จะได้ '123' !== 123 แล้วบล็อกร่างเดิมที่ควรแก้ต่อได้
+    const sameId = (incoming: any, current: any) =>
+      incoming === undefined || incoming === null || Number(incoming) === Number(current);
+    const isCustomerUnchanged =
+      sameId(customer_id, quote.customer_id) && sameId(contact_id, quote.contact_id);
+
+    // ด่านตรวจกฎรวม — blacklist/blocked/stock/MOQ/min-price เหนือทุกบรรทัด (fail-closed)
     const { violations: putViolations } = await validateQuotationItems(resultItems, {
-      customerName: customer_name ?? quote.customer_name, stage: 'save'
+      customerName: customer_name ?? quote.customer_name, stage: 'save',
+      customerId: isCustomerUnchanged ? null : customer_id,
+      contactId: isCustomerUnchanged ? null : contact_id,
     });
     if (putViolations.length > 0) {
       return res.status(422).json({ error: 'VALIDATION_ERROR', violations: putViolations });
@@ -1052,7 +1089,8 @@ app.post('/api/quotation/:id/confirm', express.json(), async (req: any, res: any
     // ด่านตรวจกฎรวมก่อนออกเลข (fail-closed) — blocked/stock/MOQ/min-price
     const { validateQuotationItems: validateOnConfirm } = await import('./services/quotationService.js');
     const { violations: confirmViolations } = await validateOnConfirm(quote.items, {
-      customerName: quote.customer_name, stage: 'confirm'
+      customerName: quote.customer_name, stage: 'confirm',
+      customerId: quote.customer_id, contactId: quote.contact_id
     });
     if (confirmViolations.length > 0) {
       return res.status(422).json({ error: 'VALIDATION_ERROR', violations: confirmViolations });
@@ -1742,6 +1780,81 @@ app.delete('/api/admin/users/:id', adminAuthMiddleware, requireRole('admin'), as
     res.json({ success: true });
   } catch (err: any) {
     console.error("DELETE /api/admin/users error:", err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// ═══════════════════ บัญชีห้ามเสนอราคา (blacklist) — admin + user ═══════════════════
+// เมนูเดียวที่ role 'user' เข้าถึงได้ ทุกเส้นจึงเป็น requireRole('admin', 'user')
+// ตัวบล็อกจริงอยู่ที่ validateQuotationItems ไม่ใช่ที่นี่ — เส้นพวกนี้แค่จัดการรายการ
+
+app.get('/api/admin/blacklist', adminAuthMiddleware, requireRole('admin', 'user'), async (_req: any, res: any) => {
+  try {
+    res.json(await listBlacklist());
+  } catch (err: any) {
+    console.error("GET /api/admin/blacklist error:", err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+app.post('/api/admin/blacklist', adminAuthMiddleware, requireRole('admin', 'user'), express.json(), async (req: any, res: any) => {
+  try {
+    const entry = await addBlacklistEntry({
+      companyId: req.body?.companyId,
+      contactId: req.body?.contactId,
+      reason: req.body?.reason,
+      createdBy: req.admin.id,
+    });
+
+    if (!entry) {
+      return res.status(400).json({ error: 'กรุณาเลือกบริษัทที่ต้องการระงับ' });
+    }
+    res.status(201).json(entry);
+  } catch (err: any) {
+    // 23505 = ชนกับ unique index ตัวใดตัวหนึ่ง (ทั้งบริษัท หรือ บริษัท+ผู้ติดต่อ)
+    if (err?.code === '23505') {
+      return res.status(409).json({ error: 'รายการนี้อยู่ในบัญชีระงับอยู่แล้ว' });
+    }
+    console.error("POST /api/admin/blacklist error:", err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+app.delete('/api/admin/blacklist/:id', adminAuthMiddleware, requireRole('admin', 'user'), async (req: any, res: any) => {
+  const targetId = Number(req.params.id);
+  try {
+    if (!Number.isInteger(targetId)) {
+      return res.status(400).json({ error: 'รหัสรายการไม่ถูกต้อง' });
+    }
+    if (!(await removeBlacklistEntry(targetId))) {
+      return res.status(404).json({ error: 'ไม่พบรายการที่ต้องการปลด' });
+    }
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error("DELETE /api/admin/blacklist error:", err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// ค้นหาบริษัท/ผู้ติดต่อสำหรับ "เพิ่มรายการ" — ต้องได้ company_id/contact_id กลับมาด้วย
+// จึงใช้ searchCustomersAdmin ไม่ใช่ /api/admin/customers/search ที่คืนแค่ชื่อ+รหัสอ้างอิง
+// (เส้นนั้นเป็นของหน้าโปรโมชัน ห้ามไปแตะ — ดู docs/plan-user-roles-auth.md §4.6)
+app.get('/api/admin/blacklist/customers', adminAuthMiddleware, requireRole('admin', 'user'), async (req: any, res: any) => {
+  try {
+    const rows = await searchCustomersAdmin(String(req.query.q || ''), 30);
+    res.json(rows.map((r: any) => ({ id: r.id, display_name: r.display_name, reference: r.reference })));
+  } catch (err: any) {
+    console.error("GET /api/admin/blacklist/customers error:", err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+app.get('/api/admin/blacklist/customers/:id/contacts', adminAuthMiddleware, requireRole('admin', 'user'), async (req: any, res: any) => {
+  try {
+    const rows = await getContactsByCustomerId(req.params.id);
+    res.json(rows.map((r: any) => ({ id: r.id, name: r.name })));
+  } catch (err: any) {
+    console.error("GET /api/admin/blacklist/customers/:id/contacts error:", err);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });

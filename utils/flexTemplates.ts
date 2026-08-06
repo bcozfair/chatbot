@@ -702,6 +702,17 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
 
   // ใบที่ยังไม่ได้ผูกลูกค้าจากฐานข้อมูล → แสดงข้อมูลลูกค้าเป็น placeholder และซ่อนปุ่มยืนยัน
   const customerIncomplete = isCustomerInfoIncomplete(quotes[0]);
+
+  // เตือนต้นทาง — ลูกค้าที่ถูกระงับไม่ต้องมีปุ่มยืนยันตั้งแต่แรก (ดูแผน §4.5)
+  // ไม่ใช่ตัวกันจริง (ตัวจริงคือด่านตอนกดยืนยัน) แต่ช่วยไม่ให้เซลล์กดแล้วเด้ง
+  // ล้มแล้วปล่อยผ่าน: ปุ่มยังโผล่ตามปกติ แล้วไปโดนปฏิเสธที่ด่านจริงแทน
+  let customerBlacklisted = false;
+  try {
+    const { isBlacklisted } = await import('../services/blacklistService.js');
+    customerBlacklisted = await isBlacklisted(quotes[0]?.customer_id, quotes[0]?.contact_id);
+  } catch (err) {
+    console.error('[getQuotationSummaryMessage] blacklist check failed (ปล่อยผ่าน):', err);
+  }
   if (customerIncomplete && meta.company === 'ลูกค้าทั่วไป') meta.company = '';
 
   // ค่าที่ไม่มีข้อมูล (null/ว่าง) แสดงเป็น placeholder เสมอ
@@ -1158,7 +1169,7 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
             }
           ];
 
-          if (customerIncomplete || hasMinPriceViolation) {
+          if (customerIncomplete || hasMinPriceViolation || customerBlacklisted) {
             // แสดงข้อความเตือนแทนปุ่มยืนยัน
             footerButtons.push({
               type: "box",
@@ -1168,7 +1179,9 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
                   type: "text",
                   text: customerIncomplete
                     ? "⚠️ ยังยืนยันไม่ได้ — ต้องกรอกข้อมูลลูกค้าก่อน"
-                    : "⚠️ ไม่สามารถยืนยันได้ — มีสินค้าราคาต่ำกว่าขั้นต่ำ",
+                    : customerBlacklisted
+                      ? "🚫 บริษัท/ผู้ติดต่อ รายนี้ถูกระงับการเสนอราคา กรุณาติดต่อแอดมิน"
+                      : "⚠️ ไม่สามารถยืนยันได้ — มีสินค้าราคาต่ำกว่าขั้นต่ำ",
                   size: "xs",
                   color: "#DC2626",
                   weight: "bold",
