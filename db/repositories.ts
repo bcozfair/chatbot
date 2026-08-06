@@ -333,6 +333,61 @@ export const ODOO_EXPORT_SALES_TEAM_JOIN = `
      LIMIT 1
   ) cust ON TRUE`;
 
+/**
+ * ท่อน JOIN ที่ดึง "ชื่อดิบ" ของบริษัท/ผู้ติดต่อจากตารางหลักให้ไฟล์นำเข้า Odoo
+ *
+ * ทำไมต้องมี: snapshot ใน quotations.customer_details ได้ชื่อมาจาก customers_data_view ซึ่งห่อทุกชื่อ
+ * ด้วย clean_text() = btrim() ช่องว่างท้ายชื่อจึงหายตั้งแต่ตอนสร้างใบ แต่ Odoo เทียบชื่อ res.partner
+ * แบบตรงตัวทุกอักขระ และชื่อที่ลงท้ายด้วยช่องว่างมีอยู่จริงในระบบ (customers 17,664 แถว / sale_orders
+ * 2,371 ผู้ติดต่อ) ใบที่โดนตัดจึงนำเข้าไม่ผ่านทั้งใบ — ที่นี่จึงข้าม view ไปอ่านตารางหลักตรง ๆ
+ *
+ * ⚠️ เงื่อนไข btrim(...) = btrim(...) คือตัวกันพลาด — หยิบชื่อจากตารางหลักได้ก็ต่อเมื่อเป็น "ชื่อเดียวกัน
+ *    ต่างแค่ช่องว่างหัวท้าย" เท่านั้น ถ้าลูกค้าถูกเปลี่ยนชื่อใน Odoo ทีหลัง หรือ contact นั้นหาไม่เจอ
+ *    (ใบที่ contact อยู่แค่ใน sale_orders และไม่ตรง) lateral จะคืน NULL แล้วฝั่ง TS ตกกลับไปใช้ snapshot
+ *    เหมือนเดิมทุกประการ — การแก้นี้จึงเปลี่ยนได้แค่ช่องว่างหัวท้าย ไม่มีทางเปลี่ยนตัวชื่อ
+ *
+ * แหล่งข้อมูลเรียงตาม pri ให้ตรงกับ 2 arm ของ customers_data_view: customers ก่อน แล้วค่อย sale_orders
+ * (arm 2 = contact ที่มีเฉพาะใน sale_orders) และในฝั่ง sale_orders เอาใบสั่งขายล่าสุดเหมือน latest_so
+ *
+ * ใช้ร่วมกันระหว่าง endpoint export (index.ts) กับ diag harness (scripts/diag/odooExportSmoke.ts)
+ * ต้องมี alias ตาราง `q` = quotations อยู่ก่อนหน้าในคำสั่ง เหมือน ODOO_EXPORT_SALES_TEAM_JOIN
+ */
+export const ODOO_EXPORT_RAW_NAME_JOINS = `
+  LEFT JOIN LATERAL (
+    SELECT n.customer_name
+      FROM (
+        SELECT 0 AS pri, NULL::timestamptz AS ord, c.customer_name
+          FROM customers c
+         WHERE c.company_id = q.customer_id
+        UNION ALL
+        SELECT 1 AS pri, s.order_date AS ord, s.customer_name
+          FROM sale_orders s
+         WHERE s.contact_id = q.contact_id AND q.contact_id > 0
+      ) n
+     WHERE btrim(n.customer_name) = btrim(split_part(q.customer_details->>'customer_name', ' | ', 1))
+     ORDER BY n.pri, n.ord DESC NULLS LAST
+     LIMIT 1
+  ) raw_company ON TRUE
+  LEFT JOIN LATERAL (
+    SELECT n.contact_name
+      FROM (
+        SELECT 0 AS pri, NULL::timestamptz AS ord, c.contact_name
+          FROM customers c
+         WHERE c.contact_id = q.contact_id AND q.contact_id > 0
+        UNION ALL
+        SELECT 1 AS pri, s.order_date AS ord, s.contact_name
+          FROM sale_orders s
+         WHERE s.contact_id = q.contact_id AND q.contact_id > 0
+      ) n
+     WHERE btrim(n.contact_name) = btrim(q.customer_details->>'contact_name')
+     ORDER BY n.pri, n.ord DESC NULLS LAST
+     LIMIT 1
+  ) raw_contact ON TRUE`;
+
+/** คอลัมน์ชื่อดิบที่คู่กับ ODOO_EXPORT_RAW_NAME_JOINS — ใส่ใน SELECT list ของทั้ง endpoint และ diag */
+export const ODOO_EXPORT_RAW_NAME_COLS =
+  'raw_company.customer_name AS raw_customer_name, raw_contact.contact_name AS raw_contact_name';
+
 // ────────────── ติดตามการส่งออกไป Odoo (กันส่งออกซ้ำ) ──────────────
 //
 // ⚠️ กลุ่มนี้ "โยน error ออกไป" ต่างจากกติกาหัวไฟล์ที่ให้ log แล้วคืน []/null โดยเจตนา

@@ -19,6 +19,8 @@
 import { pool } from '../../config/db.js';
 import {
   ODOO_EXPORT_SALES_TEAM_JOIN,
+  ODOO_EXPORT_RAW_NAME_JOINS,
+  ODOO_EXPORT_RAW_NAME_COLS,
   exportedFilterCondition,
   parseExportedFilter,
 } from '../../db/repositories.js';
@@ -79,10 +81,12 @@ const { rows: quotes } = await pool.query<OdooExportQuotationRow & {
   `SELECT q.quotation_no, q.total_sum, q.created_at, q.updated_at, q.customer_details, q.item_details, q.employee_details,
           q.customer_id, q.contact_id,
           s.name AS salesperson_name, cust.sales_team AS customer_sales_team,
-          s.employee_quotation_id AS salesperson_employee_quotation_id
+          s.employee_quotation_id AS salesperson_employee_quotation_id,
+          ${ODOO_EXPORT_RAW_NAME_COLS}
      FROM quotations q
      LEFT JOIN salesperson s ON q.user_id = s.user_id
      ${ODOO_EXPORT_SALES_TEAM_JOIN}
+     ${ODOO_EXPORT_RAW_NAME_JOINS}
     WHERE ${conditions.join(' AND ')}
     ORDER BY q.created_at DESC
     LIMIT ${limitParam}`,
@@ -143,6 +147,45 @@ const expectedSalesTeam = (q: { customer_id: number | null; contact_id: number |
   return teamByPair.get(`${q.customer_id}:${cid}`) ?? teamByContact.get(cid) ?? '';
 };
 
+// ตัวเทียบอิสระของช่อง B–E: อ่านชื่อดิบจากตารางหลักตรง ๆ ไม่ผ่าน ODOO_EXPORT_RAW_NAME_JOINS ที่ export ใช้
+// customers มาก่อน sale_orders ตาม 2 arm ของ customers_data_view และฝั่ง sale_orders เอาใบล่าสุด
+const baseCompanyByPair = new Map<string, string>();
+const baseContactByContactId = new Map<number, string>();
+const companyIds = Array.from(new Set(
+  quotes.map(q => Number(q.customer_id)).filter(id => Number.isInteger(id))
+));
+if (contactIds.length > 0 || companyIds.length > 0) {
+  const { rows: baseRows } = await pool.query<{
+    company_id: number | null; contact_id: number | null; customer_name: string | null; contact_name: string | null;
+  }>(
+    `SELECT company_id, contact_id, customer_name, contact_name FROM customers
+      WHERE company_id = ANY($1) OR contact_id = ANY($2)
+     UNION ALL
+     SELECT * FROM (
+       SELECT DISTINCT ON (contact_id) NULL::int, contact_id, customer_name, contact_name
+         FROM sale_orders WHERE contact_id = ANY($2)
+        ORDER BY contact_id, order_date DESC NULLS LAST
+     ) so`,
+    [companyIds, contactIds]
+  );
+  for (const r of baseRows) {
+    const cid = Number(r.contact_id);
+    if (r.customer_name && r.company_id !== null) {
+      baseCompanyByPair.set(`${r.company_id}|${cid}`, r.customer_name);
+    }
+    if (r.contact_name && Number.isInteger(cid) && cid > 0 && !baseContactByContactId.has(cid)) {
+      baseContactByContactId.set(cid, r.contact_name);
+    }
+  }
+  // ใบ orphan (contact อยู่แค่ใน sale_orders) ไม่มีแถวใน customers → เติมชื่อบริษัทจากฝั่ง sale_orders
+  for (const q of quotes) {
+    const key = `${q.customer_id}|${Number(q.contact_id)}`;
+    if (baseCompanyByPair.has(key)) continue;
+    const so = baseRows.find(r => r.company_id === null && Number(r.contact_id) === Number(q.contact_id));
+    if (so?.customer_name) baseCompanyByPair.set(key, so.customer_name);
+  }
+}
+
 let cursor = 0;
 let firstRowBad = 0;
 let continuationBad = 0;
@@ -157,9 +200,12 @@ let emptySalesTeam = 0;
 let noContactId = 0;
 let badEmpQuotationId = 0;
 let emptyEmpQuotationId = 0;
-// ชื่อที่มีช่องว่างหัว/ท้ายใน snapshot ต้องไปถึงไฟล์แบบครบตัวอักษร ไม่โดน trim ระหว่างทาง
+// ชื่อที่มีช่องว่างหัว/ท้ายต้องไปถึงไฟล์แบบครบตัวอักษร ไม่โดน trim ระหว่างทาง
 let edgeSpaceNames = 0;
 let edgeSpaceTrimmed = 0;
+// ชื่อในไฟล์ต้องตรงกับตารางหลักแบบตรงตัวทุกอักขระ (ตัวเทียบอิสระจากท่อน JOIN ที่ export ใช้)
+let baseNameChecked = 0;
+let baseNameMismatch = 0;
 
 for (const quote of quotesWithItems) {
   const slice = rows.slice(cursor, cursor + quote.item_details.length);
@@ -181,7 +227,8 @@ for (const quote of quotesWithItems) {
 
   // C: contact ต้องเป็น "บริษัท, ผู้ติดต่อ" ตาม template — ต่อชื่อเสมอแม้ 2 ชื่อซ้ำกัน
   // ชื่อต้องคงช่องว่างหัวท้ายไว้ดิบ ๆ (ห้าม .trim()) เพราะ Odoo เทียบชื่อ res.partner แบบตรงตัวทุกอักขระ
-  const rawContactName = String(quote.customer_details?.contact_name ?? '');
+  // ชื่อดิบจากตารางหลักมาก่อน snapshot ตามลำดับเดียวกับ buildOdooSaleOrderRows()
+  const rawContactName = String(quote.raw_contact_name ?? quote.customer_details?.contact_name ?? '');
   const hasContact = rawContactName.trim() !== '' && rawContactName.trim() !== '-';
   const contactName = hasContact ? rawContactName : '';
   const expectedContact = hasContact && first.partner_id
@@ -194,7 +241,9 @@ for (const quote of quotesWithItems) {
 
   // กันการถดถอยของบั๊กที่ทำให้นำเข้า Odoo ไม่ผ่าน: ชื่อผู้ติดต่ออย่าง "คุณแนน " (มีช่องว่างท้าย)
   // เคยโดน .trim() ตอน export แล้วกลายเป็นคนละ res.partner กับที่ Odoo เก็บ ทั้งใบจึงนำเข้าไม่ได้
-  const rawCompanyName = String(quote.customer_details?.customer_name ?? '').split(' | ')[0];
+  const rawCompanyName = String(
+    quote.raw_customer_name ?? String(quote.customer_details?.customer_name ?? '').split(' | ')[0]
+  );
   for (const [label, raw, got] of [
     ['ชื่อบริษัท', rawCompanyName, first.partner_id],
     ['ชื่อผู้ติดต่อ', rawContactName, first.contact],
@@ -203,7 +252,24 @@ for (const quote of quotesWithItems) {
     edgeSpaceNames++;
     if (!got.includes(raw)) {
       edgeSpaceTrimmed++;
-      console.log(`   ✗ ${quote.quotation_no}: ${label}โดนตัดช่องว่าง — snapshot "${raw}" แต่ไฟล์ได้ "${got}"`);
+      console.log(`   ✗ ${quote.quotation_no}: ${label}โดนตัดช่องว่าง — ต้นทาง "${raw}" แต่ไฟล์ได้ "${got}"`);
+    }
+  }
+
+  // ตัวเทียบอิสระ: ชื่อในไฟล์ต้องตรงกับตารางหลัก (customers/sale_orders) แบบตรงตัวทุกอักขระ
+  // ไม่ได้อ่านผ่าน ODOO_EXPORT_RAW_NAME_JOINS ที่ export ใช้ เพื่อให้จับได้ถ้าท่อน JOIN นั้นเองผิด
+  for (const [label, baseName, got] of [
+    ['ชื่อบริษัท', baseCompanyByPair.get(`${quote.customer_id}|${quote.contact_id}`), first.partner_id],
+    ['ชื่อผู้ติดต่อ', baseContactByContactId.get(Number(quote.contact_id)), first.contact],
+  ] as const) {
+    // เทียบเฉพาะใบที่ชื่อ "ตัวเดียวกัน ต่างแค่ช่องว่าง" — ใบที่ลูกค้าถูกเปลี่ยนชื่อใน Odoo ทีหลัง
+    // ตั้งใจให้คงชื่อตาม snapshot จึงไม่ใช่ข้อผิดพลาด
+    if (!baseName || !got) continue;
+    if (baseName.trim() === '' || !got.includes(baseName.trim())) continue;
+    baseNameChecked++;
+    if (!got.includes(baseName)) {
+      baseNameMismatch++;
+      console.log(`   ✗ ${quote.quotation_no}: ${label}ในไฟล์ไม่ตรงตารางหลัก — ตาราง "${baseName}" แต่ไฟล์ได้ "${got}"`);
     }
   }
 
@@ -265,6 +331,8 @@ ok('ช่อง contact เป็นรูปแบบ "บริษัท, ผ
   badContact ? `(พลาด ${badContact} ใบ)` : '');
 ok('ชื่อลูกค้า/ผู้ติดต่อคงช่องว่างหัวท้ายไว้ครบ (ไม่โดน trim)', edgeSpaceTrimmed === 0,
   edgeSpaceTrimmed ? `(โดนตัด ${edgeSpaceTrimmed} ชื่อ)` : `(ตรวจ ${edgeSpaceNames} ชื่อที่มีช่องว่างหัวท้าย)`);
+ok('ชื่อในไฟล์ตรงกับตารางหลัก customers/sale_orders ทุกอักขระ', baseNameMismatch === 0,
+  baseNameMismatch ? `(ไม่ตรง ${baseNameMismatch} ชื่อ)` : `(ตรวจ ${baseNameChecked} ชื่อ)`);
 ok('ช่อง note ตรงกับหมายเหตุการรับประกันของใบ', badNote === 0, badNote ? `(พลาด ${badNote} ใบ)` : '');
 ok('ชื่อเซลล์ (H) มีสังกัด (PM)/(THT) ห้อยท้ายตามเลขที่ใบ', badSuffix === 0,
   badSuffix ? `(พลาด ${badSuffix} ใบ)` : '');

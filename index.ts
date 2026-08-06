@@ -21,6 +21,8 @@ import {
   getBranchesByCodes,
   getBranches,
   ODOO_EXPORT_SALES_TEAM_JOIN,
+  ODOO_EXPORT_RAW_NAME_JOINS,
+  ODOO_EXPORT_RAW_NAME_COLS,
   parseExportedFilter,
   exportedFilterCondition,
   createdAtFromThaiDayCondition,
@@ -2632,10 +2634,12 @@ app.get('/api/admin/quotations/export', adminAuthMiddleware, async (req: any, re
       const result = await client.query(
         `SELECT q.id, q.quotation_no, q.created_at, q.updated_at, q.customer_details, q.item_details, q.employee_details,
                 ${SP_NAME_SQL} AS salesperson_name, cust.sales_team AS customer_sales_team,
-                s.employee_quotation_id AS salesperson_employee_quotation_id
+                s.employee_quotation_id AS salesperson_employee_quotation_id,
+                ${ODOO_EXPORT_RAW_NAME_COLS}
            FROM quotations q
            LEFT JOIN salesperson s ON q.user_id = s.user_id
            ${ODOO_EXPORT_SALES_TEAM_JOIN}
+           ${ODOO_EXPORT_RAW_NAME_JOINS}
            ${whereClause}
           ORDER BY ${sortBy} ${sortOrderParam}`,
         params

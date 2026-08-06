@@ -74,6 +74,15 @@ export interface OdooExportQuotationRow {
    * ไม่ใช่สังกัดของเซลล์ (salesperson.branch) เพราะทีมขายเป็นคุณสมบัติของลูกค้า
    */
   customer_sales_team?: string | null;
+  /**
+   * B/D/E: ชื่อบริษัทดิบจากตารางหลัก (customers/sale_orders ผ่าน ODOO_EXPORT_RAW_NAME_JOINS)
+   *
+   * snapshot ได้ชื่อมาจาก customers_data_view ที่ btrim() ช่องว่างท้ายทิ้งไปแล้ว ค่านี้จึงเป็นชื่อ
+   * ตัวเดียวกันแบบครบทุกอักขระ — NULL เมื่อหาไม่เจอหรือชื่อไม่ตรง (แปลว่าให้ใช้ snapshot ตามเดิม)
+   */
+  raw_customer_name?: string | null;
+  /** C: ชื่อผู้ติดต่อดิบจากตารางหลัก — กติกาเดียวกับ raw_customer_name */
+  raw_contact_name?: string | null;
 }
 
 /** 1 แถวในไฟล์ = 1 รายการสินค้า (ช่องหัวใบเป็นค่าว่างในแถวที่ 2 ขึ้นไปของใบเดียวกัน) */
@@ -207,8 +216,14 @@ export function buildOdooSaleOrderRows(
     const cust = quote.customer_details || {};
     // snapshot ควรเก็บเฉพาะชื่อบริษัท แต่ข้อมูลเก่าอาจปนเป็น "company | contact" — split แบบเดียวกับ
     // enrichQuotationData() (services/quotationService.ts) เพื่อให้ชื่อที่ส่งออกตรงกับที่หน้าจอโชว์
-    const company = cleanName(String(cust.customer_name ?? '').split(' | ')[0]);
-    const contact = cleanName(cust.contact_name);
+    //
+    // ชื่อดิบจากตารางหลักมาก่อน snapshot เสมอ เพราะ snapshot โดน customers_data_view btrim() ช่องว่างท้าย
+    // ทิ้งไปแล้ว (ดู ODOO_EXPORT_RAW_NAME_JOINS) — ค่า raw_* เป็น NULL เมื่อชื่อไม่ตรงกัน จึงตกกลับมาใช้
+    // snapshot เองโดยอัตโนมัติ ?? ไม่ใช่ || เพราะชื่อว่าง '' ที่ผ่านเงื่อนไขมาแล้วก็ยังเป็นคำตอบที่ถูก
+    const company = cleanName(
+      quote.raw_customer_name ?? String(cust.customer_name ?? '').split(' | ')[0]
+    );
+    const contact = cleanName(quote.raw_contact_name ?? cust.contact_name);
     // ช่อง contact ของ Odoo คือ res.partner ลูก ซึ่ง display name = "บริษัท, ผู้ติดต่อ"
     // ต่อชื่อตาม template เสมอแม้ 2 ชื่อจะซ้ำกัน (ลูกค้าบุคคลจะได้ "ก, ก" — ตั้งใจให้เป็นแบบนั้น)
     // ใบที่ยังไม่มีชื่อผู้ติดต่อใส่แค่ชื่อบริษัท ไม่ต้องมี ", " ห้อยท้าย
