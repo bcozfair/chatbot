@@ -285,17 +285,41 @@ export async function handleImage(event: any): Promise<any> {
   }
 }
 
+/** ตราประทับบน error ที่ "ด่านตรวจของ C.3" โยนเอง — ใช้แยกจาก AbortError ของไลบรารีอื่น */
+const DEADLINE_ABORT = Symbol.for('chatbot.deadlineAbort');
+
 /**
  * @param opts.deadlineAt เวลา (epoch ms) ที่งบตอบกลับหมด — คิดจาก "ตอนรับ webhook" ไม่ใช่ตอนเริ่มทำงาน
  *   ส่งมาจาก index.ts เพื่อให้ขั้นตอนที่ลองใหม่ได้ (เช่น retry ของ extraction) ถามงบก่อนเผาเวลาเพิ่ม
  *   ไม่ส่งมา = ไม่จำกัด (เส้นทาง CLI/เทสที่ไม่มี replyToken)
+ * @param opts.signal ธงยกเลิกจาก index.ts — ถูก abort ตอน Promise.race ตัดเพราะหมดงบ
+ *   ไม่ส่งมา = ไม่มีใครยกเลิก (เส้นทาง CLI/เทส)
  */
-export async function handleEvent(event: any, opts: { deadlineAt?: number } = {}): Promise<any> {
+export async function handleEvent(
+  event: any,
+  opts: { deadlineAt?: number; signal?: AbortSignal } = {}
+): Promise<any> {
   /** เหลืองบอีกกี่ ms (Infinity ถ้าไม่ได้กำหนด deadline มา) */
   const remainingMs = () => (opts.deadlineAt === undefined ? Infinity : opts.deadlineAt - Date.now());
+
+  /**
+   * C.3 — ด่านตรวจก่อนเริ่ม "ขั้นตอนหนัก" แต่ละขั้น (query DB ก้อนใหญ่ / เรียก LLM / สร้างใบเสนอราคา)
+   * จงใจไม่ cancel งานที่กำลังรันค้างอยู่ — แค่ไม่เริ่มขั้นถัดไปก็พอที่จะคืน slot ให้คิว
+   * ไม่ให้งานผีสะสมแย่ง CPU/DB จากคนที่ยังตอบทัน (ซึ่งเป็นโดมิโนตัวจริงตามที่ C.0 วัดไว้)
+   */
+  const checkpoint = (step: string) => {
+    if (!opts.signal?.aborted) return;
+    const err: any = new Error(`หมดงบเวลา — ไม่เริ่มขั้นตอน "${step}"`);
+    err.name = 'AbortError';
+    // ปักธงของเราเองด้วย ไม่ดูแค่ name: HTTP client ที่ถูก abort ก็โยน error ชื่อ 'AbortError'
+    // เหมือนกัน ถ้าไปเหมาว่าเป็นตัวเดียวกันจะกลืน error จริงแล้วเงียบใส่ผู้ใช้โดยไม่รู้ตัว
+    err[DEADLINE_ABORT] = true;
+    throw err;
+  };
   let customMessages: any = null;
   try {
     const userId = event?.source?.userId || 'unknown';
+    checkpoint('เริ่มประมวลผล event');
     // ดึงข้อมูลพนักงานขายเพื่อตรวจสอบสถานะ
     const salesperson = await getSalespersonByUserId(userId);
 
@@ -881,6 +905,7 @@ export async function handleEvent(event: any, opts: { deadlineAt?: number } = {}
 
         // outcome === 'done'
         const itemsForDb = slots.map((s: any) => s.itemForDb).filter(Boolean);
+        checkpoint('สร้างใบเสนอราคาหลังกดเลือกรุ่น');
         const result = await processQuotationRequest(
           userId,
           billCtx.customer_query,
@@ -1443,6 +1468,7 @@ export async function handleEvent(event: any, opts: { deadlineAt?: number } = {}
     }
     // 4.1 ให้ Gemini/Deepseek ช่วยคิดคำตอบ (ถ้าเป็นข้อความ)
     if (event.message.type === 'text' && content) {
+      checkpoint('ดึงประวัติแชท + สกัดคำสั่งด้วย LLM');
       // ดึงประวัติการคุยย้อนหลังของ userId นี้
       let historyContext = "";
       try {
@@ -1597,6 +1623,8 @@ export async function handleEvent(event: any, opts: { deadlineAt?: number } = {}
           console.warn(`[extraction] เหลืองบ ${remainingMs()}ms — ข้าม attempt ${attempt}/${MAX_EXTRACTION_ATTEMPTS}`);
           break;
         }
+        // งบหมดจริงระหว่างรอ attempt ก่อนหน้า — โยนออกไปเลย ไม่ยิง LLM เพิ่มให้เสียเงินเปล่า
+        checkpoint(`เรียก LLM attempt ${attempt}/${MAX_EXTRACTION_ATTEMPTS}`);
         try {
           const response = await createChatCompletion({
             messages: [{ role: 'user', content: prompt }],
@@ -1649,6 +1677,7 @@ export async function handleEvent(event: any, opts: { deadlineAt?: number } = {}
         const itemsForDb: any[] = [];
         let totalSum = 0;
         let issueCount = 0;
+        checkpoint(`ค้นหาสินค้า ${quoteData.items.length} รายการ (QUOTATION)`);
         const productPromises = quoteData.items.map(async (item: any) => {
           const codeRaw = String(item.model || item.product_code || '').trim();
           // ส่งข้อความเต็มไปด้วย — เซลส์มักพิมพ์รหัสแตกหลายบรรทัด AI จะได้เห็นคำนำหน้ารุ่นที่อยู่บรรทัดอื่น
@@ -1795,7 +1824,8 @@ export async function handleEvent(event: any, opts: { deadlineAt?: number } = {}
             });
           }
           customMessages = messages;
-        } else { 
+        } else {
+          checkpoint('ค้นหาลูกค้า + บันทึกใบเสนอราคา');
           const result = await processQuotationRequest(
             userId,
             quoteData.customer_query,
@@ -1827,6 +1857,7 @@ export async function handleEvent(event: any, opts: { deadlineAt?: number } = {}
                   (aiResult.product_query.product_codes && aiResult.product_query.product_codes.length > 0))) {
         const queryModels = aiResult.product_query.models || aiResult.product_query.product_codes || [];
         let infoReport = "";
+        checkpoint(`ค้นหาสินค้า ${queryModels.length} รายการ (PRODUCT_INFO)`);
         const infoPromises = queryModels.map(async (codeRaw: any) => {
           const result = await findProduct(codeRaw, content);
           return { codeRaw, result };
@@ -2124,6 +2155,13 @@ export async function handleEvent(event: any, opts: { deadlineAt?: number } = {}
       messages: [{ type: 'text', text: botReplyText }],
     });
   } catch (error: any) {
+    // C.3 — ไม่ใช่ระบบพัง แต่เป็นการหยุดตัวเองเพราะงบหมด (index.ts สั่ง abort และ log [queue] TIMEOUT ไว้แล้ว)
+    // ห้าม reply ที่นี่: reply token เป็น single-use และเส้นทางบางเส้นตอบไปแล้วก่อนถึงด่านตรวจ
+    // การยิงข้อความ "ระบบขัดข้อง" ทับจะทำให้เซลส์เห็นข้อความผิด — ปล่อยเงียบแล้วไปวัดที่ log แทน
+    if (error?.[DEADLINE_ABORT]) {
+      console.warn(`[abort] user=${event?.source?.userId || 'unknown'} type=${event?.type} — ${error.message}`);
+      return null;
+    }
     console.error('เกิดข้อผิดพลาดในการประมวลผลระบบ:', error);
     if (event && event.replyToken) {
       try {

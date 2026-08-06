@@ -37,6 +37,57 @@ export function replyBudget(receivedAt: number, now: number, budgetMs: number = 
   return { waited, remaining, expired: remaining <= 0 };
 }
 
+export type DeadlineOutcome =
+  | { outcome: 'ok' }
+  | { outcome: 'timeout' }
+  | { outcome: 'error'; error: any };
+
+/**
+ * รันงาน 1 ชิ้นภายใต้เพดานเวลา แล้วสั่ง abort ให้มันหยุดเองถ้าหมดเวลา (C.3)
+ *
+ * อยู่ที่นี่ไม่ใช่ใน index.ts เพราะสองเรื่องนี้ทดสอบไม่ได้ถ้าฝังอยู่ใน express handler:
+ *   1. งานที่ถูกตัดต้องหยุดจริง ไม่ใช่รันต่อเป็น "งานผี" แย่ง CPU/DB จากคนที่ยังตอบทัน
+ *   2. งานที่ถูกตัดถ้าไป reject ทีหลัง จะไม่มีใครรับ ⇒ unhandledRejection ⇒ Node ฆ่าโปรเซสทิ้ง
+ *      (บั๊กแบบนี้ไม่โผล่ตอน dev เพราะต้องหมดเวลาก่อนถึงจะเจอ — ต้องมีเทสยิงเอง)
+ *
+ * หมายเหตุ: abort หยุดงานได้แค่ที่ "ด่านตรวจถัดไป" ของ handler เท่านั้น ไม่ตัดกลางคัน
+ * ⇒ งานที่กำลังจะ reply อยู่พอดีจะได้ตอบจนจบ (ตั้งใจ: token ยังไม่ตาย ตอบช้าดีกว่าเงียบ)
+ *
+ * @param timeoutMs  งบที่เหลือจริง (จาก replyBudget) ไม่ใช่ค่าคงที่
+ * @param work       ตัวงาน — รับ signal ไปเช็คเองที่หัวแต่ละขั้นตอนหนัก
+ * @param onGhostError ถูกเรียกถ้างานที่ถูก abort ไป "พัง" ทีหลัง (ปกติไม่ควรเกิด — handler
+ *                     กลืน AbortError ของตัวเองอยู่แล้ว) มีไว้กัน unhandledRejection เป็นหลัก
+ */
+export async function runWithDeadline(
+  timeoutMs: number,
+  work: (signal: AbortSignal) => Promise<unknown>,
+  onGhostError?: (err: any) => void
+): Promise<DeadlineOutcome> {
+  const ac = new AbortController();
+  let timeoutId: NodeJS.Timeout | undefined;
+  const TIMEOUT = Symbol('timeout');
+  const timeoutPromise = new Promise<typeof TIMEOUT>((resolve) => {
+    timeoutId = setTimeout(() => resolve(TIMEOUT), timeoutMs);
+  });
+
+  const task = work(ac.signal);
+  try {
+    const result = await Promise.race([task, timeoutPromise]);
+    if (result !== TIMEOUT) return { outcome: 'ok' };
+
+    // หมดเวลา — สั่งให้ handler หยุดที่ด่านตรวจถัดไป แล้วผูก catch ไว้ "ตอนนี้" ขณะที่ task
+    // ยังค้างอยู่แน่นอน (ตัวที่ชนะ race คือ timeout ไม่ใช่ task) ⇒ ไม่มีจังหวะ rejection ลอย
+    ac.abort();
+    task.catch((err) => onGhostError?.(err));
+    return { outcome: 'timeout' };
+  } catch (error: any) {
+    // มาถึงตรงนี้ได้ทางเดียวคือ task reject เอง (timeoutPromise resolve เท่านั้น ไม่ reject)
+    return { outcome: 'error', error };
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
 /**
  * คิวประมวลผล event แบบ FIFO ต่อ key (userId) — event ของผู้ใช้คนเดียวกันจะรันทีละตัว
  * ไม่ทับกัน (กันการกดปุ่มยืนยันรัว ๆ ชนกันเอง) ส่วนผู้ใช้คนละคนรันขนานกันได้

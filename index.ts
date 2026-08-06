@@ -6,7 +6,7 @@ import fs from 'fs';
 dotenv.config();
 
 import { lineConfig, lineClient } from './config/clients.js';
-import { KeyedTaskQueue, replyBudget, BUDGET_MS } from './services/webhookQueue.js';
+import { KeyedTaskQueue, replyBudget, runWithDeadline, BUDGET_MS } from './services/webhookQueue.js';
 import {
   searchCustomersAdmin,
   getContactsByCustomerId,
@@ -147,37 +147,36 @@ app.post('/callback', line.middleware(lineConfig), (req: any, res: any) => {
         if (waited > 5_000) console.warn(`[queue] รอคิวนาน ${waited}ms ${who}`);
 
         const startedAt = Date.now();
-        let timeoutId: NodeJS.Timeout | undefined;
-        // timeout = งบที่เหลือจริงหลังหักเวลารอคิว ไม่ใช่ 25,000 คงที่เหมือนเดิม
-        // (งานที่เข้าคิวได้ทันทีจึงได้เวลามากกว่าเดิม — ตั้งใจ: มีงบก็ควรได้ใช้ ดีกว่าถูกตัดที่ 25 วิ
-        //  ทั้งที่ตอบทันที่ 30 วิ ส่วนเพดานของ LLM คุมด้วย timeout ของ SDK ใน C.2 อีกชั้น)
-        const timeoutPromise = new Promise((_, reject) => {
-          timeoutId = setTimeout(() => reject(new Error('Processing timeout')), remaining);
-        });
-
         try {
-          await Promise.race([
-            // ส่งเส้นตายให้ handler ถามงบเองได้ (C.2 ใช้ตัดสินใจว่าจะ retry extraction อีกรอบไหม)
-            // ใช้ receivedAt เป็นฐานเหมือนกัน ⇒ handler กับคิวมองงบก้อนเดียวกัน ไม่เพี้ยนจากกัน
-            handleEvent(event, { deadlineAt: receivedAt + BUDGET_MS }),
-            timeoutPromise
-          ]);
-          queueMetrics.replied++;
-        } catch (err: any) {
-          if (err.message === 'Processing timeout') {
+          // timeout = งบที่เหลือจริงหลังหักเวลารอคิว ไม่ใช่ 25,000 คงที่เหมือนเดิม
+          // (งานที่เข้าคิวได้ทันทีจึงได้เวลามากกว่าเดิม — ตั้งใจ: มีงบก็ควรได้ใช้ ดีกว่าถูกตัดที่ 25 วิ
+          //  ทั้งที่ตอบทันที่ 30 วิ ส่วนเพดานของ LLM คุมด้วย timeout ของ SDK ใน C.2 อีกชั้น)
+          const res = await runWithDeadline(
+            remaining,
+            // signal = ธงยกเลิกของ C.3: Promise.race ตัดได้แค่ "การรอ" ไม่ได้หยุดงานที่รันอยู่
+            // ธงนี้คือช่องทางเดียวที่จะบอก handler ว่าอย่าเริ่มขั้นตอนหนักขั้นถัดไป
+            (signal) => handleEvent(event, {
+              // ส่งเส้นตายให้ handler ถามงบเองได้ (C.2 ใช้ตัดสินใจว่าจะ retry extraction อีกรอบไหม)
+              // ใช้ receivedAt เป็นฐานเหมือนกัน ⇒ handler กับคิวมองงบก้อนเดียวกัน ไม่เพี้ยนจากกัน
+              deadlineAt: receivedAt + BUDGET_MS,
+              signal
+            }),
+            (e: any) => console.error(`[queue] งานที่ถูก abort พังหลังหมดเวลา ${who}:`, e?.message || e)
+          );
+
+          if (res.outcome === 'ok') {
+            queueMetrics.replied++;
+          } else if (res.outcome === 'timeout') {
             // ห้าม replyMessage ที่นี่ — reply token เป็น single-use และ handler เดิม (handleEvent)
-            // ยังทำงานต่ออยู่ (Promise.race ไม่ได้ cancel มัน) การยิงซ้ำจะแย่ง token กับ handler
-            // ที่กำลังจะตอบสำเร็จ ทำให้ผู้ใช้เห็นข้อความผิด และ Push Message ก็ถูกห้ามอยู่แล้ว
+            // อาจกำลังจะตอบสำเร็จอยู่พอดี (abort หยุดมันได้แค่ที่ "ด่านตรวจถัดไป" ไม่ตัดกลางคัน)
+            // การยิงซ้ำจะแย่ง token กัน ทำให้ผู้ใช้เห็นข้อความผิด และ Push Message ก็ถูกห้ามอยู่แล้ว
             queueMetrics.timedOut++;
-            console.warn(`[queue] TIMEOUT ที่ ${remaining}ms ${who} — ปล่อยให้ handler เดิมตอบเอง`);
+            console.warn(`[queue] TIMEOUT ที่ ${remaining}ms ${who} — abort แล้ว (handler จะหยุดที่ด่านถัดไป ถ้ากำลังตอบอยู่ก็ปล่อยให้ตอบจนจบ)`);
           } else {
             queueMetrics.failed++;
-            console.error(`[queue] ERROR ${who}:`, err.message || err);
+            console.error(`[queue] ERROR ${who}:`, res.error?.message || res.error);
           }
         } finally {
-          if (timeoutId) {
-            clearTimeout(timeoutId);
-          }
           const now = Date.now();
           const total = now - receivedAt;
           const m = queueMetrics;
