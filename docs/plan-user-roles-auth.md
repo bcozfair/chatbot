@@ -1,6 +1,6 @@
 # แผนงาน: ระบบผู้ใช้และสิทธิ์ (Auth & Roles) — Admin Portal
 
-> สถานะ: **เฟส 1-3 และ 5 เสร็จแล้ว (2026-08-06)** · เหลือเฟส 4 (blacklist) ที่พักไว้รอออกแบบ
+> สถานะ: **เฟส 1-3 และ 5 เสร็จแล้ว (2026-08-06)** · เฟส 4 (blacklist) ออกแบบจบแล้ว รอลงมือ
 > อ่านไฟล์นี้ก่อนเริ่มงานทุกครั้ง แล้วอัปเดตช่อง "สถานะ" ของแต่ละเฟสเมื่อทำเสร็จ
 
 ---
@@ -11,8 +11,8 @@
 | --- | --- |
 | เปลี่ยนรหัสผ่านได้ | ✅ ทำแล้ว — ปุ่มรูปกุญแจข้างปุ่มออกจากระบบ |
 | role `admin` | ✅ ทำแล้ว — เมนู "จัดการผู้ใช้งานระบบ" เพิ่ม/ลบ/แก้/เปลี่ยนสิทธิ์/ตั้งรหัสให้คนอื่น |
-| role `user` | ✅ สิทธิ์บังคับใช้แล้ว แต่ยังไม่มีเมนูของตัวเอง (รอ blacklist) |
-| blacklist | ⏸ ยังไม่ทำ — บล็อกไม่ให้ออกใบเสนอราคาให้บริษัท/ผู้ติดต่อที่ถูกขึ้นบัญชี |
+| role `user` | ✅ สิทธิ์บังคับใช้แล้ว · เมนูของตัวเอง (blacklist) มาพร้อมเฟส 4 |
+| blacklist | ☐ ออกแบบจบแล้ว (§เฟส 4) รอลงมือ — บล็อกไม่ให้ออกใบเสนอราคาให้บริษัท/ผู้ติดต่อที่ถูกขึ้นบัญชี |
 
 ---
 
@@ -205,53 +205,148 @@ ALTER TABLE admin_users
 
 ### เฟส 4 — Blacklist บริษัท/ผู้ติดต่อ
 
-**สถานะ:** ⏸ พักไว้ตามที่ตกลง — ต้องเคาะรายละเอียดและโครงสร้างให้จบก่อนลงมือ
-เนื้อหาด้านล่างเป็นข้อเสนอตั้งต้นจากการสำรวจโค้ด ไม่ใช่ข้อสรุป
+**สถานะ:** ☐ ออกแบบจบแล้ว 2026-08-06 รอลงมือ
+**ความเสี่ยง:** ปานกลาง — แตะ flow ใบเสนอราคาที่ใช้งานจริงอยู่ จึงออกแบบให้ "เพิ่มด่าน" ไม่ใช่ "แก้ของเดิม"
 
-**ผลกระทบระหว่างที่ยังพัก:** role `user` ยังไม่มีเมนูของตัวเอง ล็อกอินแล้วเจอหน้าแจ้งว่ายังไม่มีสิทธิ์เข้าเมนูใด
-เปลี่ยนรหัสผ่านตัวเองได้อย่างเดียว — ตั้งใจให้เป็นแบบนี้ ดีกว่าปล่อยให้เจอหน้าเปล่าหรือ error 403
+#### 4.0 ข้อสรุปที่เคาะแล้ว
 
-**4.1 โครงสร้างข้อมูล**
-ตาราง `customers` มี PK เป็น `(company_id, contact_id)` — [`schema.sql:745`](../migrations/schema.sql#L745)
-ดังนั้น blacklist รองรับ 2 ระดับ:
-* **ทั้งบริษัท** — `company_id` ระบุ, `contact_id` เป็น `NULL` → บล็อกทุกผู้ติดต่อของบริษัทนั้น
-* **เฉพาะผู้ติดต่อ** — ระบุทั้งคู่
+| ประเด็น | ข้อสรุป |
+| --- | --- |
+| แนวทาง | **แผน B — กันที่ปลายทาง + เตือนตั้งแต่ต้นทาง** |
+| ใบที่ยืนยันไปแล้วก่อนถูกขึ้นบัญชี | ปล่อยไว้เฉย ๆ ไม่ย้อนหลัง ไม่แตะ |
+| ร่างที่ค้างอยู่ตอนถูกขึ้นบัญชี | แก้ไขต่อได้ แต่กดยืนยันไม่ผ่าน |
+| ระดับการบล็อก | ทั้ง "ทั้งบริษัท" และ "เฉพาะผู้ติดต่อบางคน" |
+| ข้อความที่เซลล์เห็น | `บริษัท/ผู้ติดต่อ รายนี้ถูกระงับการเสนอราคา กรุณาติดต่อแอดมิน` (ไม่บอกเหตุผลที่แอดมินกรอก) |
+| สร้างร่างใหม่ให้ลูกค้าที่ถูกบล็อก | บล็อกด้วย |
 
-migration `migrations/changes/2026-08-06_02_quotation_blacklist.sql`
+#### 4.1 หลักการออกแบบ — แยกส่วน ไม่แตะของเดิม
+
+**ห้ามแตะ `customers_data_view`** — เป็น MATERIALIZED VIEW ([`schema.sql:219`](../migrations/schema.sql#L219)) ที่ถูก `REFRESH ... CONCURRENTLY` ทุกรอบ sync ([`refreshCustomerDirectory.ts:25`](../scripts/sync/refreshCustomerDirectory.ts#L25))
+ถ้าใส่ `is_blocked` เข้าไปใน matview จะเจอ:
+* **ค่าที่กดบล็อกไม่มีผลจนกว่า sync รอบถัดไปจะ refresh** ← ข้อนี้ข้อเดียวก็ตัดทิ้งได้แล้ว
+* matview ไม่มี `CREATE OR REPLACE` ต้อง DROP แล้วสร้างใหม่ พร้อม index 2 ตัวและ plain view `customers_data` ที่ครอบอยู่
+* กระทบ `syncCustomers.ts` / `syncSaleorders.ts` / `syncService.ts` ที่เรียก refresh ตัวนี้
+
+**ห้ามแปลง matview เป็นตารางจริงแล้วใส่คอลัมน์** — ข้อมูลใน matview เกิดจากการ blend `customers` + `sale_orders` ที่ sync ทับใหม่จาก Odoo ทุกรอบ ค่า `is_blocked` จะถูกทับหายทุกรอบ sync
+
+**ห้ามกรอง blacklist ในการค้นหา** — ต้อง JOIN blacklist เข้า query ค้นหา = แตะ logic ที่ทำงานดีอยู่แล้ว และเซลล์จะงงว่าทำไมหาบริษัทที่มีอยู่จริงไม่เจอ
+ให้ "ค้นเจอได้ แต่ยืนยันไม่ได้" แทน แล้วติดป้ายเตือนที่ผลลัพธ์
+
+**ความรู้เรื่อง blacklist อยู่ในไฟล์เดียว** — `services/blacklistService.ts` จุดอื่นเรียกใช้ฟังก์ชัน ไม่มีใครรู้จักโครงสร้างตารางนอกจากไฟล์นี้
+
+#### 4.2 ตารางใหม่
+
+`migrations/changes/YYYY-MM-DD_NN_quotation_blacklist.sql`
+
 ```sql
-CREATE TABLE quotation_blacklist (
+CREATE TABLE public.quotation_blacklist (
   id           serial PRIMARY KEY,
   company_id   integer NOT NULL,
-  contact_id   integer,
-  reason       text,
-  created_by   integer REFERENCES admin_users(id) ON DELETE SET NULL,
+  contact_id   integer,                -- NULL = บล็อกทั้งบริษัท
+  reason       text,                   -- บันทึกไว้ให้แอดมินอ่านกันเอง ไม่แสดงให้เซลล์
+  created_by   integer REFERENCES public.admin_users(id) ON DELETE SET NULL,
   created_at   timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at   timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- กันเพิ่มซ้ำ: NULL ไม่ชนกันเองใน unique index ปกติ จึงต้องแยกเป็น 2 ตัว
 CREATE UNIQUE INDEX quotation_blacklist_company_uniq
-  ON quotation_blacklist (company_id) WHERE contact_id IS NULL;
+  ON public.quotation_blacklist (company_id) WHERE contact_id IS NULL;
 CREATE UNIQUE INDEX quotation_blacklist_contact_uniq
-  ON quotation_blacklist (company_id, contact_id) WHERE contact_id IS NOT NULL;
+  ON public.quotation_blacklist (company_id, contact_id) WHERE contact_id IS NOT NULL;
 ```
-> ไม่ใส่ FK ไป `customers` เพราะข้อมูลนั้น sync ทับจาก Odoo เป็นรอบ — FK จะทำให้ sync ล้มหรือ blacklist หายโดยไม่ตั้งใจ ให้เก็บ id ดิบไว้แล้ว join ตอนอ่าน
 
-**4.2 จุดบังคับใช้ (ฝั่ง server — ห้ามเช็คแค่ UI)**
+> **ไม่ใส่ FK ไป `customers`** เพราะตารางนั้นถูก sync ทับจาก Odoo เป็นรอบ FK จะทำให้ sync ล้มหรือ blacklist หายโดยไม่ตั้งใจ — เก็บ id ดิบไว้แล้ว join ตอนอ่านเพื่อโชว์ชื่อ
+> **`created_by` มี FK ไป `admin_users`** ได้ เพราะเป็นข้อมูลของระบบเราเอง ไม่ถูก sync ทับ · `ON DELETE SET NULL` = ลบผู้ใช้แล้วรายการ blacklist ยังอยู่
 
-| จุด | ไฟล์ | บทบาท |
+#### 4.3 โมดูลใหม่ `services/blacklistService.ts`
+
+```ts
+export const BLACKLIST_MESSAGE =
+  'บริษัท/ผู้ติดต่อ รายนี้ถูกระงับการเสนอราคา กรุณาติดต่อแอดมิน';
+
+/** error ชนิดเฉพาะ เพื่อให้ caller แยกออกจาก error อื่นแล้วตอบข้อความที่ถูกต้อง */
+export class BlacklistedCustomerError extends Error { ... }
+
+/** บล็อกถ้าเจอแถวระดับบริษัท (contact_id IS NULL) หรือแถวที่ตรงทั้ง company + contact */
+export async function isBlacklisted(companyId, contactId, executor?): Promise<boolean>
+
+/** ใช้ติดป้ายในผลค้นหา — คืน Set ของ company_id ที่ถูกบล็อกทั้งบริษัท (query เดียว ไม่ยิงทีละแถว) */
+export async function findBlockedCompanyIds(companyIds: number[]): Promise<Set<number>>
+```
+
+`isBlacklisted` ต้องรับ `executor` ได้ (ตาม pattern `DbExecutor` ใน [`config/db.ts`](../config/db.ts)) เพราะด่านที่ 3 ต้องเรียกจากใน transaction ที่ถือ row lock อยู่
+
+#### 4.4 ด่านบังคับใช้ — 3 จุด ครอบทุกเส้นทาง
+
+ทั้งการสร้างร่างและการยืนยันมี**จุดคอขวดเดียว**อยู่แล้ว ทำให้ไม่ต้องไล่แก้รายเส้นทาง:
+
+| ด่าน | ที่ตั้ง | ครอบอะไร | พฤติกรรม |
+| --- | --- | --- | --- |
+| **A — สร้างร่าง** | `insertDraftQuotations()` [`quotationService.ts:429`](../services/quotationService.ts#L429) | ถูกเรียกจาก 10 ที่ (LINE flow, LIFF, REST, quotationAgent, revise) | มี `customerId` และถูกบล็อก → `throw BlacklistedCustomerError` |
+| **B — เปลี่ยนลูกค้า** | `PUT /api/quotation/:id` [`index.ts:684`](../index.ts#L684) | เลือก/เปลี่ยนบริษัท-ผู้ติดต่อจาก LIFF | ตอบ `400` |
+| **C — ยืนยัน** | `confirmQuotationAtomic()` [`quotationService.ts:156`](../services/quotationService.ts#L156) | **ทั้งปุ่มใน Flex และ REST** — คอมเมนต์ในไฟล์เขียนเองว่า "จุดเดียวในระบบที่เปลี่ยน status เป็น confirmed" | คืน `outcome: 'blocked'` |
+
+```
+① แชท + Flex → ปุ่มยืนยัน (lineHandler.ts:596) ─┐
+                                                 ├─→ confirmQuotationAtomic()  ← ด่าน C
+② LIFF → POST /api/quotation/:id/confirm ────────┘
+```
+
+**⚠️ กติกาสำคัญของด่าน B** — LIFF ส่ง `customer_id` มาทุกครั้งที่เซฟ ถ้าบล็อกแบบเหมารวมจะทำให้ **ร่างที่ค้างอยู่แก้ไขต่อไม่ได้ ซึ่งขัดกับข้อ 2 ที่ตกลงกันไว้**
+ต้องบล็อกเฉพาะตอน **เปลี่ยนไปเป็นลูกค้ารายใหม่ที่ถูกบล็อก** เท่านั้น — ถ้า `(customer_id, contact_id)` ที่ส่งมาตรงกับที่ผูกอยู่เดิมในใบ ให้ผ่าน
+(เทียบกับ `quote.customer_id` / `quote.contact_id` ที่อ่านมาแล้วที่ [`index.ts:783-784`](../index.ts#L783))
+
+**ทำไมด่าน A ใช้ throw ไม่ใช่ return** — caller มี 10 ที่ ถ้าเปลี่ยน return type ต้องแก้ทุกที่ การ throw ทำให้ caller ที่ไม่ได้ส่ง `customerId` (สถานะ `pending_company`) ไม่ต้องแก้อะไรเลย และถ้าวันหน้ามี caller ใหม่ มันจะถูกกันอัตโนมัติ
+ที่ต้องเพิ่ม `catch` มี 3 จุดคือ [`index.ts:268`](../index.ts#L268) (REST → 400), [`lineHandler.ts:1441`](../handlers/lineHandler.ts#L1441) (revise → reply ข้อความ), [`quotationAgent.ts:123`](../services/quotationAgent.ts#L123) (flow AI → reply ข้อความ)
+ตอบกลับใน LINE ใช้ **replyToken เท่านั้น** ห้าม push (AGENTS.md §8)
+
+#### 4.5 เตือนต้นทาง (ชั้นที่ 2 ของแผน B)
+
+ไม่ใช่ security — เป็นเรื่องไม่ให้เซลล์เสียเวลาทำใบที่ยืนยันไม่ได้
+
+| จุด | ทำอะไร |
+| --- | --- |
+| ปุ่มยืนยันใน Flex [`flexTemplates.ts:1190`](../utils/flexTemplates.ts#L1190) | ใบที่ผูกลูกค้าที่ถูกบล็อก → ไม่สร้างปุ่ม `action=confirm` แสดงข้อความแทน |
+| `GET /api/customers/search` [`index.ts:546`](../index.ts#L546) | เติมฟิลด์ใหม่ `is_blacklisted` ต่อท้ายผลลัพธ์ (annotate หลัง query ด้วย `findBlockedCompanyIds` — **ไม่แตะ SQL ค้นหา**) |
+| `GET /api/customer/:id/contacts` [`index.ts:559`](../index.ts#L559) | เติม `is_blacklisted` รายผู้ติดต่อแบบเดียวกัน |
+| `liff_pages/quote-edit.html` | ผลค้นหาที่ `is_blacklisted` → ป้ายแดง + กดเลือกไม่ได้ |
+
+การเติมฟิลด์เป็นการ **เพิ่ม** ไม่ใช่แก้ — client เก่าที่ไม่รู้จักฟิลด์นี้ยังทำงานเหมือนเดิม
+
+#### 4.6 API + UI ฝั่งแอดมิน
+
+| Method | Path | สิทธิ์ |
 | --- | --- | --- |
-| ตอนบอทจับคู่ลูกค้าได้ | [`handlers/lineHandler.ts:695, 784, 2076`](../handlers/lineHandler.ts#L695) | เตือนพนักงานตั้งแต่ต้นทาง |
-| `POST /api/quotation/:id/confirm` | [`index.ts:993`](../index.ts#L993) | **ด่านตัดสินสุดท้าย ห้ามข้าม** |
-| `POST /api/quotations` · `POST /api/quotation/draft-cart` · `PUT /api/quotation/:id` | [`index.ts:244, 600, 678`](../index.ts#L244) | ตัดจบเร็ว ไม่ให้เสียเวลาทำใบที่ยืนยันไม่ได้ |
+| GET | `/api/admin/blacklist` | `admin` + `user` |
+| POST | `/api/admin/blacklist` | `admin` + `user` |
+| DELETE | `/api/admin/blacklist/:id` | `admin` + `user` |
 
-ใส่ logic ที่เดียวใน `services/customerService.ts` (เช่น `isBlacklisted(companyId, contactId)`) แล้วเรียกจากทุกจุด — ห้าม copy เงื่อนไขไปวางซ้ำ
-เงื่อนไข: บล็อกถ้าเจอแถวระดับบริษัท (`contact_id IS NULL`) **หรือ** แถวที่ตรงทั้งคู่
+* ต้องเปลี่ยน `GET /api/admin/customers/search` ([`index.ts`](../index.ts)) จาก `requireRole('admin')` เป็น `requireRole('admin', 'user')` เพื่อให้ role `user` ค้นหาบริษัทตอนเพิ่มรายการได้
+* หน้าใหม่ `frontend/src/admin/Blacklist.tsx` + เพิ่มใน `NAV_ITEMS` โดยตั้ง `roles: ['admin', 'user']`
+* ลบหน้า "ยังไม่มีเมนูสำหรับสิทธิ์ของคุณ" ใน [`AdminApp.tsx`](../frontend/src/admin/AdminApp.tsx) ออก เพราะ role `user` มีเมนูของตัวเองแล้ว
+* GET ต้อง join ชื่อบริษัท/ผู้ติดต่อจาก `customers_data_view` มาแสดง (อ่านอย่างเดียว ไม่แก้ view)
 
-**4.3 API + UI** — `/api/admin/blacklist` (GET/POST/DELETE) เข้าได้ทั้ง `admin` และ `user` + หน้า `frontend/src/admin/Blacklist.tsx`
-ค้นหาบริษัท/ผู้ติดต่อผ่าน `GET /api/admin/customers/search` ที่มีอยู่แล้ว ([`index.ts:2416`](../index.ts#L2416))
+#### 4.7 สิ่งที่ยืนยันว่า "ไม่ถูกแตะ"
 
-**Verify:** `npx tsc --noEmit` · `npm --prefix frontend run build` · ทดสอบมือ: ขึ้น blacklist บริษัทหนึ่ง → สั่งออกใบเสนอราคาให้บริษัทนั้นผ่าน LINE → ต้องถูกปฏิเสธพร้อมเหตุผล · ลบออกจาก blacklist → ต้องออกใบได้ตามปกติ
+`customers_data_view` และ sync ทั้งหมด · SQL ค้นหาลูกค้า/สินค้า · Fuse.js matching · `utils/pricing.ts` · `utils/promotionValidator.ts` · `services/rules/` · `pdfGenerator.ts` · การคำนวณส่วนลด/ค่าขนส่ง/MOQ/วันจัดส่ง · `quotation_rules` / `promotions` / `products` ทุกตาราง
+
+#### 4.8 ลำดับงานย่อยและการตรวจ
+
+1. migration + `blacklistService.ts` (ยังไม่มีใครเรียก — ปลอดภัย 100%)
+2. API + UI แอดมิน (เพิ่มรายการได้ แต่ยังไม่มีผลกับใบเสนอราคา)
+3. ด่าน C (ยืนยัน) — ด่านที่สำคัญที่สุด ทำก่อน
+4. ด่าน A (สร้างร่าง) + ด่าน B (เปลี่ยนลูกค้า)
+5. เตือนต้นทาง: ปุ่ม Flex + `is_blacklisted` + LIFF
+
+**Verify:** `docker run ... npx tsc --noEmit` · `docker build --target frontend` · `npx eslint .` · `npm run diag:confirm-race` (แตะ confirm path) · `tsx scripts/evalCustomerSearch.ts` (**เทียบผลก่อน/หลัง ต้องเท่าเดิมเป๊ะ** — เป็นหลักฐานว่าไม่ได้แตะการค้นหา)
+
+ทดสอบมือ:
+1. ขึ้นบัญชีทั้งบริษัท → สั่งใบใหม่ผ่านแชท → ต้องถูกปฏิเสธพร้อมข้อความไทย
+2. ขึ้นบัญชีเฉพาะผู้ติดต่อ A → เสนอราคาให้ผู้ติดต่อ B ของบริษัทเดียวกัน → **ต้องผ่าน**
+3. ร่างค้างอยู่ก่อน → ขึ้นบัญชี → แก้ไขร่างได้ แต่กดยืนยันไม่ผ่าน
+4. ใบที่ยืนยันไปแล้ว → ขึ้นบัญชี → ใบเดิมยังโหลด/ดาวน์โหลด PDF ได้ตามปกติ
+5. ลบออกจากบัญชี → ทุกอย่างกลับมาทำงานปกติทันที (ไม่ต้องรอ sync)
 
 ---
 
@@ -293,7 +388,7 @@ CREATE UNIQUE INDEX quotation_blacklist_contact_uniq
 เฟส 1 (เปลี่ยนรหัสผ่าน + pgcrypto)      ✅
    └─→ เฟส 2 (บังคับสิทธิ์ server)      ✅  ← ห้ามสร้าง user role 'user' ก่อนเฟสนี้เสร็จ
           ├─→ เฟส 3 (UI จัดการ user)     ✅
-          └─→ เฟส 4 (blacklist)          ⏸ พักไว้รอออกแบบ
+          └─→ เฟส 4 (blacklist)          ☐ ออกแบบจบ รอลงมือ
                  └─→ เฟส 5 (เก็บกวาด)    ✅
 ```
 
@@ -318,7 +413,7 @@ CREATE UNIQUE INDEX quotation_blacklist_contact_uniq
 | เฟส | ไฟล์ใหม่ | ไฟล์ที่แก้ |
 | --- | --- | --- |
 | 1-3 (✅) | `migrations/changes/2026-08-06_01_admin_users_roles.sql`, `frontend/src/admin/Users.tsx`, `frontend/src/admin/ChangePasswordModal.tsx` | `config/auth.ts`, `index.ts`, `migrations/schema.sql`, `frontend/src/admin/AdminApp.tsx`, `frontend/src/context/AuthContext.tsx`, `DEPLOY.md` |
-| 4 (⏸ ประเมินไว้) | `frontend/src/admin/Blacklist.tsx`, `migrations/changes/YYYY-MM-DD_NN_quotation_blacklist.sql` | `index.ts`, `services/customerService.ts`, `handlers/lineHandler.ts`, `db/repositories.ts`, `migrations/schema.sql`, `frontend/src/admin/AdminApp.tsx` |
+| 4 (☐ ออกแบบแล้ว) | `services/blacklistService.ts`, `frontend/src/admin/Blacklist.tsx`, `migrations/changes/YYYY-MM-DD_NN_quotation_blacklist.sql` | `services/quotationService.ts`, `index.ts`, `handlers/lineHandler.ts`, `services/quotationAgent.ts`, `utils/flexTemplates.ts`, `liff_pages/quote-edit.html`, `frontend/src/admin/AdminApp.tsx`, `migrations/schema.sql` |
 | 5.3 (✅) | `config/loginRateLimit.ts` | `index.ts` |
 
 ---
