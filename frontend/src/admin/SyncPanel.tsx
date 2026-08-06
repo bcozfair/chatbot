@@ -12,6 +12,7 @@ import {
   Info,
   ChevronRight,
   RotateCcw,
+  MoreVertical,
 } from 'lucide-react';
 
 const BRAND = '#009032';
@@ -71,6 +72,8 @@ const DAY_CHIPS: { value: number; label: string }[] = [
 ];
 
 const MIN_INTERVAL_SECONDS = 30;
+/** ต้องพิมพ์ตรงตัวก่อนเริ่ม full sync — กันกดยืนยันโดยไม่ได้อ่าน */
+const CONFIRM_WORD = 'ยืนยัน';
 const WEEKDAYS = [1, 2, 3, 4, 5];
 const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
 
@@ -238,6 +241,13 @@ export function SyncPanel() {
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
+  // เมนู "..." ราย resource — เปิดได้ทีละอันเดียว จึงใช้ ref เดียวพอ
+  const [menuFor, setMenuFor] = useState<ResourceId | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  /** resource ที่รอยืนยัน full sync (null = ไม่มี dialog) + ข้อความที่ผู้ใช้พิมพ์ */
+  const [fullTarget, setFullTarget] = useState<{ id: ResourceId; label: string } | null>(null);
+  const [confirmText, setConfirmText] = useState('');
+
   // ฟอร์มตั้งเวลา (แยกจาก status เพื่อแก้ไขได้อิสระ)
   const [form, setForm] = useState<SyncSettings | null>(null);
   // ช่อง interval แยกเก็บเป็นสตริง+หน่วย เพื่อให้พิมพ์ลบจนว่างได้โดยฟอร์มไม่กระตุก
@@ -326,6 +336,33 @@ export function SyncPanel() {
     }
   }, [running, status?.lastError, fetchStatus, showToast]);
 
+  // ปิดเมนู "..." เมื่อคลิกที่อื่นหรือกด Esc
+  useEffect(() => {
+    if (!menuFor) return;
+    const onPointerDown = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuFor(null);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMenuFor(null);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [menuFor]);
+
+  // Esc = ยกเลิกการยืนยัน full sync (ปุ่มยกเลิกยังมีอยู่ตามปกติ)
+  useEffect(() => {
+    if (!fullTarget) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setFullTarget(null);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [fullTarget]);
+
   const triggerSync = async (resources: ResourceId[] | 'all', full = false) => {
     if (!token || running) return;
     try {
@@ -344,18 +381,22 @@ export function SyncPanel() {
   };
 
   /**
-   * full sync กวาดใหม่ทั้งหมด ใช้เวลานานกว่ารอบปกติมาก — ถามยืนยันก่อนเสมอ
+   * full sync กวาดใหม่ทั้งหมด ใช้เวลานานกว่ารอบปกติมากและกระทบข้อมูลทั้งชุด
+   * จึงซ่อนไว้ในเมนู "..." แล้วบังคับพิมพ์คำยืนยันอีกชั้น
    * และรับได้ทีละ resource เท่านั้น (ฝั่ง server ก็ปฏิเสธถ้าส่งมาหลายรายการ)
    */
-  const triggerFullSync = (id: ResourceId, label: string) => {
+  const askFullSync = (id: ResourceId, label: string) => {
     if (running) return;
-    if (
-      !window.confirm(
-        `Full sync ${label} จะล้าง cursor แล้วดึงข้อมูลใหม่ทั้งหมดจาก ERP ซึ่งใช้เวลานานกว่ารอบปกติมาก\n\nยืนยันที่จะเริ่มหรือไม่?`
-      )
-    ) {
-      return;
-    }
+    setMenuFor(null);
+    setConfirmText('');
+    setFullTarget({ id, label });
+  };
+
+  const confirmFullSync = () => {
+    if (!fullTarget || confirmText.trim() !== CONFIRM_WORD) return;
+    const { id } = fullTarget;
+    setFullTarget(null);
+    setConfirmText('');
     void triggerSync([id], true);
   };
 
@@ -572,20 +613,52 @@ export function SyncPanel() {
                   )}
                   Sync
                 </button>
-                {/* Full sync — กวาดใหม่ทั้งหมด ใช้เวลานาน จึงทำเป็นปุ่มรองแยกจาก Sync ปกติ */}
-                <button
-                  onClick={() => triggerFullSync(r.id, r.label)}
-                  disabled={running}
-                  title={`Full sync ${r.label} — ล้าง cursor แล้วดึงข้อมูลใหม่ทั้งหมด (ใช้เวลานาน)`}
-                  className="flex items-center gap-1 px-2.5 py-1 bg-white hover:bg-amber-50 text-amber-700 border border-amber-200 rounded-md text-[11px] font-semibold shadow-sm transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isCurrent && fullRun ? (
-                    <Loader2 className="w-3 h-3 animate-spin" />
-                  ) : (
-                    <RotateCcw className="w-3 h-3" />
+                {/* Full sync — กวาดใหม่ทั้งหมด เสี่ยง/ใช้เวลานาน จึงเก็บไว้ในเมนู "..." ไม่ให้เด่นเท่า Sync ปกติ */}
+                <div className="relative" ref={menuFor === r.id ? menuRef : undefined}>
+                  <button
+                    type="button"
+                    onClick={() => setMenuFor((prev) => (prev === r.id ? null : r.id))}
+                    disabled={running}
+                    aria-haspopup="menu"
+                    aria-expanded={menuFor === r.id}
+                    aria-label={`ตัวเลือกเพิ่มเติมของ ${r.label}`}
+                    title="ตัวเลือกเพิ่มเติม"
+                    className={`flex items-center justify-center w-7 h-[26px] rounded-md transition-all active:scale-95 disabled:cursor-not-allowed ${
+                      menuFor === r.id
+                        ? 'bg-slate-100 text-slate-700'
+                        : 'text-slate-400 hover:text-slate-700 hover:bg-slate-100'
+                    } ${running ? 'opacity-50' : ''}`}
+                  >
+                    {isCurrent && fullRun ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <MoreVertical className="w-3.5 h-3.5" />
+                    )}
+                  </button>
+                  {menuFor === r.id && (
+                    <div
+                      role="menu"
+                      className="absolute right-0 top-full mt-1 z-20 w-60 bg-white border border-slate-200 rounded-lg shadow-lg py-1 animate-fade-in"
+                    >
+                      <button
+                        role="menuitem"
+                        type="button"
+                        onClick={() => askFullSync(r.id, r.label)}
+                        className="w-full flex items-start gap-2 px-3 py-2 text-left hover:bg-amber-50 transition-colors"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-600" />
+                        <span className="min-w-0">
+                          <span className="block text-[11px] font-bold text-slate-800">
+                            Full sync {r.label}
+                          </span>
+                          <span className="block text-[10px] text-slate-400 leading-snug">
+                            ล้าง cursor แล้วดึงใหม่ทั้งหมด · ใช้เวลานาน
+                          </span>
+                        </span>
+                      </button>
+                    </div>
                   )}
-                  Full
-                </button>
+                </div>
               </div>
             </div>
           );
@@ -782,6 +855,82 @@ export function SyncPanel() {
               {isSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
               บันทึก
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* ยืนยัน full sync — บังคับพิมพ์คำยืนยัน เพราะกวาดข้อมูลใหม่ทั้งชุดและหยุดกลางคันไม่ได้ */}
+      {fullTarget && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4"
+        >
+          <div className="bg-white rounded-2xl border border-slate-200 w-full max-w-md shadow-2xl">
+            <div className="px-5 py-4 border-b border-slate-100 flex items-start gap-3">
+              <div className="w-9 h-9 rounded-xl bg-amber-50 border border-amber-100 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-4 h-4 text-amber-600" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="font-bold text-slate-900 text-sm">Full sync {fullTarget.label}?</h3>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  ดึงข้อมูลใหม่ทั้งหมดจาก ERP ไม่ใช่เฉพาะที่เปลี่ยนแปลง
+                </p>
+              </div>
+            </div>
+
+            <div className="px-5 py-4 space-y-3 text-xs text-slate-600">
+              <div className="space-y-2">
+                <p className="font-semibold text-slate-700">สิ่งที่จะเกิดขึ้น</p>
+                <ul className="space-y-1.5 list-disc list-inside">
+                  <li>
+                    cursor ของ <span className="font-bold">{fullTarget.label}</span> จะถูกล้าง
+                    แล้วกวาดข้อมูลใหม่ตั้งแต่ต้น
+                  </li>
+                  <li>ใช้เวลานานกว่ารอบปกติมาก และระหว่างนั้น sync อื่นทั้งหมดจะทำไม่ได้</li>
+                  <li className="text-amber-700">
+                    ข้อมูลในระบบจะถูกเขียนทับด้วยค่าล่าสุดจาก ERP — ย้อนกลับเองไม่ได้
+                  </li>
+                </ul>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block font-semibold text-slate-700" htmlFor="full-sync-confirm">
+                  พิมพ์ <span className="font-bold text-slate-900">{CONFIRM_WORD}</span> เพื่อยืนยัน
+                </label>
+                <input
+                  id="full-sync-confirm"
+                  autoFocus
+                  autoComplete="off"
+                  value={confirmText}
+                  onChange={(e) => setConfirmText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') confirmFullSync();
+                  }}
+                  placeholder={CONFIRM_WORD}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 px-5 py-3.5 border-t border-slate-100 bg-slate-50/60 rounded-b-2xl">
+              <button
+                type="button"
+                onClick={() => setFullTarget(null)}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 border border-slate-200 hover:bg-slate-100 rounded-lg transition-all"
+              >
+                ยกเลิก
+              </button>
+              <button
+                type="button"
+                onClick={confirmFullSync}
+                disabled={confirmText.trim() !== CONFIRM_WORD}
+                className="px-5 py-2 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-lg transition-all active:scale-95 shadow-sm flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-amber-600"
+              >
+                <RotateCcw className="w-3 h-3" />
+                เริ่ม full sync
+              </button>
+            </div>
           </div>
         </div>
       )}
