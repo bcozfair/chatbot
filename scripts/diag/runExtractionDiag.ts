@@ -9,11 +9,11 @@
 //  ⚠️ PROMPT ด้านล่างคัดลอกจาก lineHandler เพื่อวินิจฉัย ถ้าแก้ prompt ใน handler
 //     ต้อง sync ที่นี่ด้วย (ตั้งใจ duplicate เพื่อไม่ให้ diagnostic ไปแตะ production flow)
 // ─────────────────────────────────────────────────────────────────────────────
-import { openai } from '../../config/clients.js';
+import { createChatCompletion, LLM_MODEL } from '../../config/clients.js';
 import { CASES, type DiagCase } from './extractionCases.js';
 import { buildExtractionPrompt, parseAiJson, evaluate, type Check } from './extractionCore.js';
 
-const MODEL = 'deepseek-v4-flash'; // ตรงกับ lineHandler.ts:1258
+const MODEL = LLM_MODEL;
 
 const GREEN = '\x1b[32m', RED = '\x1b[31m', DIM = '\x1b[2m', BOLD = '\x1b[1m', YEL = '\x1b[33m', RESET = '\x1b[0m';
 
@@ -23,10 +23,13 @@ async function runOne(c: DiagCase) {
   let error: string | null = null;
   const t0 = Date.now();
   try {
-    const res = await openai.chat.completions.create({
-      model: MODEL,
+    // ต้องผ่าน createChatCompletion เท่านั้น — ของเดิมเรียก openai.chat.completions.create ตรง ๆ
+    // ⇒ ได้ thinking mode + temperature 1.0 ซึ่ง production ไม่เคยใช้ (ช้ากว่า 5-10 เท่าและสุ่มคำตอบ)
+    // diagnostic ที่บอกว่า "mirror production" จึงต้องใช้ทางเดียวกับ call site จริงทั้ง 4 จุด
+    const res = await createChatCompletion({
       messages: [{ role: 'user', content: buildExtractionPrompt(c.message) }],
       response_format: { type: 'json_object' },
+      max_tokens: 8192,
     });
     rawText = res.choices[0]?.message?.content || '';
     ai = parseAiJson(rawText);

@@ -157,7 +157,9 @@ app.post('/callback', line.middleware(lineConfig), (req: any, res: any) => {
 
         try {
           await Promise.race([
-            handleEvent(event),
+            // ส่งเส้นตายให้ handler ถามงบเองได้ (C.2 ใช้ตัดสินใจว่าจะ retry extraction อีกรอบไหม)
+            // ใช้ receivedAt เป็นฐานเหมือนกัน ⇒ handler กับคิวมองงบก้อนเดียวกัน ไม่เพี้ยนจากกัน
+            handleEvent(event, { deadlineAt: receivedAt + BUDGET_MS }),
             timeoutPromise
           ]);
           queueMetrics.replied++;

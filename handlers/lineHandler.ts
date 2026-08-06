@@ -285,7 +285,14 @@ export async function handleImage(event: any): Promise<any> {
   }
 }
 
-export async function handleEvent(event: any): Promise<any> {
+/**
+ * @param opts.deadlineAt เวลา (epoch ms) ที่งบตอบกลับหมด — คิดจาก "ตอนรับ webhook" ไม่ใช่ตอนเริ่มทำงาน
+ *   ส่งมาจาก index.ts เพื่อให้ขั้นตอนที่ลองใหม่ได้ (เช่น retry ของ extraction) ถามงบก่อนเผาเวลาเพิ่ม
+ *   ไม่ส่งมา = ไม่จำกัด (เส้นทาง CLI/เทสที่ไม่มี replyToken)
+ */
+export async function handleEvent(event: any, opts: { deadlineAt?: number } = {}): Promise<any> {
+  /** เหลืองบอีกกี่ ms (Infinity ถ้าไม่ได้กำหนด deadline มา) */
+  const remainingMs = () => (opts.deadlineAt === undefined ? Infinity : opts.deadlineAt - Date.now());
   let customMessages: any = null;
   try {
     const userId = event?.source?.userId || 'unknown';
@@ -1582,6 +1589,14 @@ export async function handleEvent(event: any): Promise<any> {
       let aiResult: any = null;
       let lastExtractionErr: any = null;
       for (let attempt = 1; attempt <= MAX_EXTRACTION_ATTEMPTS; attempt++) {
+        // งบไม่พอสำหรับอีก 1 รอบ — หยุดเลย ดีกว่าเผาเวลาแล้วตอบไม่ทันอยู่ดี
+        // (จงใจไม่ลดเลข MAX_EXTRACTION_ATTEMPTS: ให้ deadline เป็นตัวคุมแทน มีเวลาก็ retry ได้เต็มที่
+        //  ไม่มีเวลาก็หยุดเอง — วัดแล้วว่าที่โหลดปกติ attempt 1 ไม่เคยพลาดเลยใน 150 call)
+        // 8 วิ = p95 ของ 1 call (2.5s) + เผื่อ SDK ลองใหม่อีกรอบ + เวลาที่ยังต้องใช้หลังสกัดเสร็จ
+        if (attempt > 1 && remainingMs() < 8_000) {
+          console.warn(`[extraction] เหลืองบ ${remainingMs()}ms — ข้าม attempt ${attempt}/${MAX_EXTRACTION_ATTEMPTS}`);
+          break;
+        }
         try {
           const response = await createChatCompletion({
             messages: [{ role: 'user', content: prompt }],
@@ -1597,6 +1612,9 @@ export async function handleEvent(event: any): Promise<any> {
             continue;
           }
           aiResult = parseAiJson(rawContent);
+          // ต้อง log ตอน retry "สำเร็จ" ด้วย ไม่งั้นจะวัดไม่ได้เลยว่า retry มีประโยชน์แค่ไหน
+          // (ของเดิม break เงียบ ๆ ⇒ DB/log เก็บร่องรอยไว้เฉพาะครั้งที่ retry ไม่ช่วย)
+          if (attempt > 1) console.warn(`[extraction] ✅ กู้ได้ที่ attempt ${attempt}/${MAX_EXTRACTION_ATTEMPTS}`);
           break; // สำเร็จ
         } catch (e) {
           lastExtractionErr = e;

@@ -6,9 +6,22 @@ dotenv.config();
 
 const hasDeepSeekKey = !!process.env.DEEPSEEK_API_KEY;
 
+/**
+ * เพดานเวลาของ LLM — จุดเดียวที่คุมได้ทั้งระบบ (ทุกการเรียกผ่าน createChatCompletion ด้านล่าง)
+ *
+ * ของเดิมไม่ตั้งอะไรเลย ⇒ ใช้ default ของ SDK คือ timeout 600 วิ × ลองใหม่ 3 ครั้ง = 1,800 วิ
+ * ต่อ 1 การเรียก ซ้อนกับ retry ระดับแอปอีก 3 ชั้น ⇒ worst case ~90 นาที/ข้อความ ขณะกินสล็อตคิว
+ * อยู่ตลอด ทั้งที่ replyToken ตายไปตั้งแต่นาทีแรก
+ *
+ * 20 วิมาจากของที่วัดจริง (scripts/diag/extractionReliability.ts, 150 call):
+ * p50 1,787ms · p95 2,554ms · max 3,000ms ⇒ เผื่อไว้ราว 8 เท่าของ p95 แล้ว
+ * worst case ต่อ 1 การเรียกจึงลดจาก 1,800 วิ เหลือ 40 วิ
+ */
 export const openai = new OpenAI({
   apiKey: process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY,
   baseURL: hasDeepSeekKey ? 'https://api.deepseek.com' : (process.env.OPENAI_BASE_URL || undefined),
+  timeout: 20_000,
+  maxRetries: 1,   // default 2 (= ยิงรวม 3 ครั้ง) → เหลือยิงรวม 2 ครั้ง
 });
 
 // โมเดลกลางของระบบ — ใช้ deepseek-v4-flash
