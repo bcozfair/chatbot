@@ -15,7 +15,7 @@
 //            การแยกบริษัท: ไฟล์มีเฉพาะใบของบริษัทที่เลือก ใบที่เลขไม่ขึ้นต้น QP/QT ไม่ลงไฟล์
 //            และชื่อภาษีเป็นค่าของบริษัทนั้น (QP กับ QT ต่างกันแค่เว้นวรรค แต่ต่างกันจริง)
 //            ส่วนต่างของยอดรวมหลังยุบส่วนลด 2 ชั้นเหลือช่องเดียว · หมายเหตุการรับประกัน
-//            ช่อง Sales Team (I) = ทีมขายของผู้ติดต่อจาก customers_data ไม่ใช่สังกัดของเซลล์
+//            ช่อง Sales Team (I) = ทีมขายของผู้ติดต่อจาก customers_data_view ไม่ใช่สังกัดของเซลล์
 //            ช่อง employee_quotation_id (J) = ชื่อจริงของเซลล์จากตาราง salesperson + สังกัดห้อยท้าย
 //  ให้รันซ้ำทุกครั้งที่แตะ services/odooSaleOrderExport.ts หรือ endpoint export
 // ─────────────────────────────────────────────────────────────────────────────
@@ -156,7 +156,7 @@ const HEADER_KEYS = [
   'source_id', 'note',
 ] as const;
 
-// ตัวเทียบอิสระของช่อง I: อ่าน sales_team จาก customers_data ตรง ๆ ไม่ผ่านท่อน JOIN ที่ export ใช้
+// ตัวเทียบอิสระของช่อง I: อ่าน sales_team จาก customers_data_view ตรง ๆ ไม่ผ่านท่อน JOIN ที่ export ใช้
 // เรียง company_id ให้ตรงกับลำดับใน ODOO_EXPORT_SALES_TEAM_JOIN เพื่อให้เลือกแถวเดียวกันตอน contact_id ซ้ำ
 const contactIds = Array.from(new Set(
   quotes.map(q => Number(q.contact_id)).filter(id => Number.isInteger(id) && id > 0)
@@ -165,7 +165,7 @@ const teamByPair = new Map<string, string>();
 const teamByContact = new Map<number, string>();
 if (contactIds.length > 0) {
   const { rows: cdRows } = await pool.query<{ company_id: number; contact_id: number; sales_team: string | null }>(
-    `SELECT company_id, contact_id, sales_team FROM customers_data
+    `SELECT company_id, contact_id, sales_team FROM customers_data_view
       WHERE contact_id = ANY($1) ORDER BY contact_id, company_id`,
     [contactIds]
   );
@@ -333,12 +333,12 @@ for (const quote of quotesWithItems) {
   }
   if (!first.employee_quotation_id) emptyEmpQuotationId++;
 
-  // I: Sales Team ต้องเป็นทีมขายของผู้ติดต่อใน customers_data (join ด้วย contact_id)
+  // I: Sales Team ต้องเป็นทีมขายของผู้ติดต่อใน customers_data_view (join ด้วย contact_id)
   // ไม่ใช่สังกัดของเซลล์ (salesperson.branch) — ใบที่ผู้ติดต่อไม่มีทีมขายต้องได้เซลล์ว่าง
   const wantSalesTeam = expectedSalesTeam(quote);
   if (first.sales_team !== wantSalesTeam) {
     badSalesTeam++;
-    console.log(`   ✗ ${quote.quotation_no}: Sales Team ไม่ตรง customers_data (ได้ "${first.sales_team}" คาด "${wantSalesTeam}" contact_id=${quote.contact_id})`);
+    console.log(`   ✗ ${quote.quotation_no}: Sales Team ไม่ตรง customers_data_view (ได้ "${first.sales_team}" คาด "${wantSalesTeam}" contact_id=${quote.contact_id})`);
   }
   if (!first.sales_team) emptySalesTeam++;
   if (!(Number(quote.contact_id) > 0)) noContactId++;
@@ -373,7 +373,7 @@ ok('ชื่อในไฟล์ตรงกับตารางหลัก 
 ok('ช่อง note ตรงกับหมายเหตุการรับประกันของใบ', badNote === 0, badNote ? `(พลาด ${badNote} ใบ)` : '');
 ok('ชื่อเซลล์ (H) มีสังกัด (PM)/(THT) ห้อยท้ายตามเลขที่ใบ', badSuffix === 0,
   badSuffix ? `(พลาด ${badSuffix} ใบ)` : '');
-ok('Sales Team (I) ตรงกับ customers_data ของ contact_id นั้น', badSalesTeam === 0,
+ok('Sales Team (I) ตรงกับ customers_data_view ของ contact_id นั้น', badSalesTeam === 0,
   badSalesTeam ? `(พลาด ${badSalesTeam} ใบ)` : `(ตรวจ ${quotesWithItems.length} ใบ)`);
 if (emptySalesTeam > 0) {
   console.log(`   ℹ️  ${emptySalesTeam} ใบได้ Sales Team เป็นเซลล์ว่าง` +

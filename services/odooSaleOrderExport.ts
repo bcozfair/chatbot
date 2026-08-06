@@ -78,7 +78,7 @@ export interface OdooExportQuotationRow {
   /**
    * J: employee_quotation_id — ชื่อจริงของเซลล์ฝั่ง Odoo (salesperson.employee_quotation_id)
    * อ่านจากตาราง salesperson สด ๆ อย่างเดียว ไม่มี fallback ไป snapshot — ใบของพนักงานที่ถูกลบ
-   * (user_id = NULL) จึงได้เซลล์ว่าง เหมือนช่อง I ที่อ่านทีมขายจาก customers_data สด ๆ
+   * (user_id = NULL) จึงได้เซลล์ว่าง เหมือนช่อง I ที่อ่านทีมขายจาก customers_data_view สด ๆ
    */
   salesperson_employee_quotation_id?: string | null;
   /**
@@ -302,7 +302,7 @@ export function buildOdooSaleOrderRows(
       // ใบที่ไม่มีเครดิตเทอมปล่อยเป็นเซลล์ว่าง ไม่ยัดค่าตั้งต้นให้ — ให้ Odoo ใช้เทอมของลูกค้าเอง
       payment_term_id: clean(cust.payment_terms),
       salesperson,
-      // I: ทีมขายของผู้ติดต่อ (มาจาก customers_data ผ่าน contact_id) — ผู้ติดต่อที่ยังไม่มีทีมขาย
+      // I: ทีมขายของผู้ติดต่อ (มาจาก customers_data_view ผ่าน contact_id) — ผู้ติดต่อที่ยังไม่มีทีมขาย
       // ในฐานข้อมูล หรือใบที่ยังไม่ผูก contact_id ปล่อยเป็นเซลล์ว่าง ไม่ถอยไปใช้สังกัดของเซลล์
       sales_team: clean(quote.customer_sales_team),
       employee_quotation_id: employeeQuotationId,

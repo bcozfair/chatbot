@@ -113,19 +113,18 @@ export async function refreshCustomerDataView(opts?: { force?: boolean }): Promi
     }
 
     // ── 3. สลับชื่อใน transaction เดียว (atomic — ล้มก็ไม่มีช่วงที่ตารางหายไป) ──
+    // ห้ามมี view ครอบ customers_data_view — view ผูกกับ OID ของตาราง พอ DROP TABLE ก็ต้อง
+    // DROP+CREATE view ตามไปด้วยทุกรอบ ซึ่งยืดเวลาถือ AccessExclusiveLock โดยไม่จำเป็น
+    // (customers_data ถูกเลิกใช้แล้วใน migration 2026-08-06_02)
     // lock_timeout กันกรณีมี query ยาวค้างอยู่: ถ้ารอเกิน 5 วิให้ถอย ไม่งั้นคำขอ AccessExclusiveLock
     // ที่ค้างในคิวจะบล็อกคนอ่านที่มาทีหลังทั้งหมดตามไปด้วย — ยอมใช้ข้อมูลรอบก่อนแล้วไปเอาใหม่รอบหน้า
     try {
       await client.query('BEGIN');
       await client.query("SET LOCAL lock_timeout = '5s'");
-      await client.query('DROP VIEW IF EXISTS public.customers_data');
       await client.query('DROP TABLE IF EXISTS public.customers_data_view');
       await client.query(`ALTER TABLE ${NEW_TABLE} RENAME TO customers_data_view`);
       await client.query('ALTER INDEX idx_cdv_new_company_contact RENAME TO idx_cdv_company_contact');
       await client.query('ALTER INDEX idx_cdv_new_company RENAME TO idx_cdv_company');
-      await client.query(
-        'CREATE VIEW public.customers_data AS SELECT * FROM public.customers_data_view'
-      );
       await client.query('COMMIT');
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {});

@@ -363,6 +363,8 @@ LEFT JOIN comp ON comp.company_id = b.company_id;
 -- ════════════════════════════════════════════════════════════════════
 BEGIN;
 
+-- plain view customers_data (2026-07-23_03) ถูกปลดแล้วใน 2026-08-06_02 — มีไว้เพื่อให้ TablePlus
+-- เห็น matview เท่านั้น ตอนนี้ customers_data_view เป็นตารางจริงจึงโผล่ในโฟลเดอร์ Tables อยู่แล้ว
 DROP VIEW IF EXISTS public.customers_data;
 
 DO $$ BEGIN
@@ -385,10 +387,6 @@ SET LOCAL default_statistics_target = 10;
 ANALYZE public.customers_data_view;
 SET LOCAL default_statistics_target = 100;
 ANALYZE public.customers_data_view (company_id, contact_id);
-
--- plain view สำหรับเปิดดูใน DB tool + ใช้ใน odooSaleOrderExport / diag
-CREATE OR REPLACE VIEW public.customers_data AS
-  SELECT * FROM public.customers_data_view;
 
 COMMIT;
 
