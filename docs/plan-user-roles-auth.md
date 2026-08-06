@@ -1,6 +1,6 @@
 # แผนงาน: ระบบผู้ใช้และสิทธิ์ (Auth & Roles) — Admin Portal
 
-> สถานะ: **เฟส 1-3 เสร็จแล้ว (2026-08-06)** · เฟส 4 (blacklist) พักไว้รอออกแบบ · เฟส 5 เหลือข้อ 5.3 เท่านั้น
+> สถานะ: **เฟส 1-3 และ 5 เสร็จแล้ว (2026-08-06)** · เหลือเฟส 4 (blacklist) ที่พักไว้รอออกแบบ
 > อ่านไฟล์นี้ก่อนเริ่มงานทุกครั้ง แล้วอัปเดตช่อง "สถานะ" ของแต่ละเฟสเมื่อทำเสร็จ
 
 ---
@@ -40,7 +40,6 @@
 
 * ไม่มี blacklist บริษัท/ผู้ติดต่อ (เฟส 4)
   (คำว่า "บล็อกห้ามเสนอราคา" ใน [`QuotationRules.tsx:1043`](../frontend/src/admin/QuotationRules.tsx#L1043) เป็นระดับ **สินค้า** — `products.is_locked` คนละเรื่องกัน)
-* ไม่มี rate limit ที่ `/api/admin/login` (เฟส 5.3)
 
 ---
 
@@ -258,7 +257,7 @@ CREATE UNIQUE INDEX quotation_blacklist_contact_uniq
 
 ### เฟส 5 — เก็บกวาดความปลอดภัย
 
-**สถานะ:** 5.1 และ 5.2 จบไปพร้อมเฟส 2 · เหลือ 5.3 (rate limit) ยังไม่ทำ
+**สถานะ:** ✅ เสร็จครบทั้ง 3 ข้อ — 5.1 และ 5.2 จบไปพร้อมเฟส 2 · 5.3 ทำ 2026-08-06
 
 **5.1 token ค้างหลังเปลี่ยนสิทธิ์** — ✅ แก้แล้วด้วยทางเลือก (ก)
 `adminAuthMiddleware` อ่าน `id, username, name, role` สดจาก DB ทุก request แทนการเชื่อค่าใน JWT
@@ -268,7 +267,23 @@ CREATE UNIQUE INDEX quotation_blacklist_contact_uniq
 **5.2 ชื่อตาราง `admin_users`** — ✅ ตัดสินแล้ว: ไม่เปลี่ยนชื่อ
 (ต้องแก้ทั้ง schema.sql, query, migration, FK ที่จะเพิ่มในเฟส 4) เขียน comment กำกับไว้ในไฟล์ migration แทน
 
-**5.3 rate limit `/api/admin/login`** — ตอนนี้ยิงเดารหัสได้ไม่จำกัด ควรจำกัดจำนวนครั้งต่อ IP
+**5.3 rate limit `/api/admin/login`** — ✅ ทำแล้วใน `config/loginRateLimit.ts`
+
+กติกา: กรอกผิดได้ **8 ครั้งต่อช่วง 15 นาที** เกินนั้นตอบ `429` พร้อม header `Retry-After` และข้อความไทยบอกเวลาที่ต้องรอ
+ล็อกอินสำเร็จเมื่อไหร่ตัวนับของคีย์นั้นถูกล้างทันที
+
+**คีย์ของตัวนับคือ `IP + ชื่อผู้ใช้` ไม่ใช่ IP อย่างเดียว** — จุดนี้ตั้งใจ:
+* นับต่อ IP ล้วน → คนออฟฟิศเดียวกันใช้ IP ขาออกร่วมกัน คนหนึ่งพิมพ์ผิดจนถูกกั้นจะลากคนอื่นไปด้วย
+* นับต่อชื่อผู้ใช้ล้วน → ใครก็ได้ยิงชื่อ `admin` รัว ๆ เพื่อกันแอดมินตัวจริงไม่ให้เข้าระบบได้
+* รวมสองอย่าง → คนเดารหัสต้องอยู่ IP เดียวกับเหยื่อถึงจะกวนได้
+
+**การหา IP จริง** — เส้นทางคือ ผู้ใช้ → Cloudflare edge → `cf-tunnel` (cloudflared, อยู่ network `primus-chatbot_default` เดียวกับแอป) → แอป
+`req.socket.remoteAddress` จึงเป็น IP ของ cloudflared ทุก request ใช้แยกคนไม่ได้
+ต้องอ่าน `CF-Connecting-IP` ที่ Cloudflare เขียนทับให้ที่ edge (ปลอมจากภายนอกไม่ได้) แล้วค่อย fallback ไป `X-Forwarded-For` → socket
+
+**ข้อจำกัดที่ยอมรับ**
+* ตัวนับอยู่ใน memory ของ process → restart แอปแล้วรีเซ็ตหมด รับได้เพราะ deploy ไม่ได้บ่อยพอจะใช้เป็นช่องล้างตัวนับ
+* ถ้าวันหน้าเปลี่ยน reverse proxy จน `CF-Connecting-IP` หายไป ทุกคนจะกลายเป็น IP เดียวกัน ผลคือคนเดารหัสจะกั้นได้ทีละ 1 ชื่อผู้ใช้ (นานสุด 15 นาที) ไม่ใช่กั้นทั้งระบบ — ตรวจได้จาก log `[login] <ip> ...` ว่าเห็น IP จริงหรือไม่
 
 ---
 
@@ -279,7 +294,7 @@ CREATE UNIQUE INDEX quotation_blacklist_contact_uniq
    └─→ เฟส 2 (บังคับสิทธิ์ server)      ✅  ← ห้ามสร้าง user role 'user' ก่อนเฟสนี้เสร็จ
           ├─→ เฟส 3 (UI จัดการ user)     ✅
           └─→ เฟส 4 (blacklist)          ⏸ พักไว้รอออกแบบ
-                 └─→ เฟส 5 (เก็บกวาด)    5.1, 5.2 ✅ · 5.3 ยังไม่ทำ
+                 └─→ เฟส 5 (เก็บกวาด)    ✅
 ```
 
 ---
@@ -304,7 +319,7 @@ CREATE UNIQUE INDEX quotation_blacklist_contact_uniq
 | --- | --- | --- |
 | 1-3 (✅) | `migrations/changes/2026-08-06_01_admin_users_roles.sql`, `frontend/src/admin/Users.tsx`, `frontend/src/admin/ChangePasswordModal.tsx` | `config/auth.ts`, `index.ts`, `migrations/schema.sql`, `frontend/src/admin/AdminApp.tsx`, `frontend/src/context/AuthContext.tsx`, `DEPLOY.md` |
 | 4 (⏸ ประเมินไว้) | `frontend/src/admin/Blacklist.tsx`, `migrations/changes/YYYY-MM-DD_NN_quotation_blacklist.sql` | `index.ts`, `services/customerService.ts`, `handlers/lineHandler.ts`, `db/repositories.ts`, `migrations/schema.sql`, `frontend/src/admin/AdminApp.tsx` |
-| 5.3 (⏸ ประเมินไว้) | — | `index.ts` |
+| 5.3 (✅) | `config/loginRateLimit.ts` | `index.ts` |
 
 ---
 

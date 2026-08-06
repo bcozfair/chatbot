@@ -62,6 +62,12 @@ import jwt from 'jsonwebtoken';
 import { pool, withTransaction, type DbExecutor } from './config/db.js';
 import { getJwtSecret } from './config/jwt.js';
 import { adminAuthMiddleware, requireRole, type Role } from './config/auth.js';
+import {
+  getClientIp,
+  checkLoginRateLimit,
+  recordFailedLogin,
+  clearLoginAttempts,
+} from './config/loginRateLimit.js';
 import { sumLineTotals } from './utils/pricing.js';
 import { isCustomerInfoIncomplete } from './utils/flexTemplates.js';
 import {
@@ -1415,10 +1421,25 @@ app.post('/api/admin/login', express.json(), async (req: any, res: any) => {
       return res.status(400).json({ error: 'Username and password are required' });
     }
 
+    const clientIp = getClientIp(req);
+
+    // กั้นคนไล่เดารหัสผ่าน — เช็คก่อนแตะ DB เพื่อไม่ให้การยิงรัวกลายเป็นภาระของ DB ไปด้วย
+    const retryAfterSec = checkLoginRateLimit(clientIp, username);
+    if (retryAfterSec !== null) {
+      console.warn(`[login] ${clientIp} ถูกกั้นชั่วคราว (username: ${username}) เหลืออีก ${retryAfterSec} วินาที`);
+      res.setHeader('Retry-After', String(retryAfterSec));
+      return res.status(429).json({
+        error: `กรอกรหัสผ่านผิดหลายครั้งเกินไป กรุณารออีก ${Math.ceil(retryAfterSec / 60)} นาทีแล้วลองใหม่`,
+      });
+    }
+
     // Query admin user from postgres database using the shared pool
     const result = await pool.query('SELECT * FROM admin_users WHERE username = $1', [username.trim()]);
-    
+
+    // นับ "ไม่มี username นี้" เป็นการกรอกผิดด้วย ไม่งั้นคนเดาชื่อผู้ใช้ยิงได้ไม่จำกัด
     if (result.rows.length === 0) {
+      recordFailedLogin(clientIp, username);
+      console.warn(`[login] ${clientIp} กรอกชื่อผู้ใช้ที่ไม่มีในระบบ: ${username}`);
       return res.status(401).json({ error: 'Invalid username or password' });
     }
 
@@ -1427,8 +1448,12 @@ app.post('/api/admin/login', express.json(), async (req: any, res: any) => {
     // Verify password with bcryptjs
     const isPasswordValid = await bcrypt.compare(password, admin.password_hash);
     if (!isPasswordValid) {
+      recordFailedLogin(clientIp, username);
+      console.warn(`[login] ${clientIp} กรอกรหัสผ่านผิดของ ${username}`);
       return res.status(401).json({ error: 'Invalid username or password' });
     }
+
+    clearLoginAttempts(clientIp, username);
 
     // Generate JWT token
     const token = jwt.sign(
