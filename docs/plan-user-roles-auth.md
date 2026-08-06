@@ -1,6 +1,7 @@
 # แผนงาน: ระบบผู้ใช้และสิทธิ์ (Auth & Roles) — Admin Portal
 
 > สถานะ: **เฟส 1-3 และ 5 เสร็จแล้ว (2026-08-06)** · เฟส 4 (blacklist) ออกแบบจบแล้ว รอลงมือ
+> §4.3-4.4 ถูกเขียนใหม่ 2026-08-06 หลังสำรวจโค้ดรอบสอง — เดิมออกแบบเป็น "3 ด่านใหม่ + throw" ซึ่ง**กันไม่ครบและตอบข้อความผิด** เปลี่ยนเป็นต่อยอด `validateQuotationItems` ที่มีอยู่แล้ว
 > อ่านไฟล์นี้ก่อนเริ่มงานทุกครั้ง แล้วอัปเดตช่อง "สถานะ" ของแต่ละเฟสเมื่อทำเสร็จ
 
 ---
@@ -261,45 +262,75 @@ CREATE UNIQUE INDEX quotation_blacklist_contact_uniq
 
 #### 4.3 โมดูลใหม่ `services/blacklistService.ts`
 
+ไฟล์นี้ถือ**ความรู้เรื่องตาราง** อย่างเดียว — ไม่มีข้อความ ไม่มีการตัดสินใจว่าจะบล็อกที่ไหน
+
 ```ts
-export const BLACKLIST_MESSAGE =
-  'บริษัท/ผู้ติดต่อ รายนี้ถูกระงับการเสนอราคา กรุณาติดต่อแอดมิน';
-
-/** error ชนิดเฉพาะ เพื่อให้ caller แยกออกจาก error อื่นแล้วตอบข้อความที่ถูกต้อง */
-export class BlacklistedCustomerError extends Error { ... }
-
 /** บล็อกถ้าเจอแถวระดับบริษัท (contact_id IS NULL) หรือแถวที่ตรงทั้ง company + contact */
-export async function isBlacklisted(companyId, contactId, executor?): Promise<boolean>
+export async function isBlacklisted(companyId, contactId): Promise<boolean>
 
 /** ใช้ติดป้ายในผลค้นหา — คืน Set ของ company_id ที่ถูกบล็อกทั้งบริษัท (query เดียว ไม่ยิงทีละแถว) */
 export async function findBlockedCompanyIds(companyIds: number[]): Promise<Set<number>>
 ```
 
-`isBlacklisted` ต้องรับ `executor` ได้ (ตาม pattern `DbExecutor` ใน [`config/db.ts`](../config/db.ts)) เพราะด่านที่ 3 ต้องเรียกจากใน transaction ที่ถือ row lock อยู่
+> `contact_id = 0` ในระบบนี้แปลว่า "แถวบริษัทที่ไม่มีผู้ติดต่อ" ([`repositories.ts:128`](../db/repositories.ts#L128)) — `isBlacklisted` ต้อง normalize `0 → null` ก่อนเทียบ ไม่งั้นจะหลุดทั้ง unique index และ logic "บล็อกทั้งบริษัท"
+> **ไม่ต้องรับ `executor`** ตามที่เคยร่างไว้ เพราะด่านยืนยันทำงานนอก transaction เหมือนกฎอื่นทุกตัวอยู่แล้ว (เหตุผลใน §4.4)
 
-#### 4.4 ด่านบังคับใช้ — 3 จุด ครอบทุกเส้นทาง
+#### 4.4 ด่านบังคับใช้ — ต่อยอดด่านตรวจกฎเดิม ไม่สร้างด่านใหม่
 
-ทั้งการสร้างร่างและการยืนยันมี**จุดคอขวดเดียว**อยู่แล้ว ทำให้ไม่ต้องไล่แก้รายเส้นทาง:
+**ระบบมี "จุดรวมเงื่อนไขการออกใบเสนอราคา" อยู่แล้ว** คือ [`validateQuotationItems()`](../services/quotationService.ts#L971) → `Violation[]` → [`buildViolationDisplay()`](../services/quotationService.ts#L48) ("ถ้อยคำเดียวของทั้งระบบ") ปัจจุบันถือ 5 เงื่อนไข (`BLOCKED`, `OUT_OF_STOCK`, `MOQ_VIOLATION`, `MIN_PRICE_VIOLATION`, `SYSTEM_ERROR`) และถูกเรียกครบทั้ง 3 stage (`draft` / `save` / `confirm`)
 
-| ด่าน | ที่ตั้ง | ครอบอะไร | พฤติกรรม |
-| --- | --- | --- | --- |
-| **A — สร้างร่าง** | `insertDraftQuotations()` [`quotationService.ts:429`](../services/quotationService.ts#L429) | ถูกเรียกจาก 10 ที่ (LINE flow, LIFF, REST, quotationAgent, revise) | มี `customerId` และถูกบล็อก → `throw BlacklistedCustomerError` |
-| **B — เปลี่ยนลูกค้า** | `PUT /api/quotation/:id` [`index.ts:684`](../index.ts#L684) | เลือก/เปลี่ยนบริษัท-ผู้ติดต่อจาก LIFF | ตอบ `400` |
-| **C — ยืนยัน** | `confirmQuotationAtomic()` [`quotationService.ts:156`](../services/quotationService.ts#L156) | **ทั้งปุ่มใน Flex และ REST** — คอมเมนต์ในไฟล์เขียนเองว่า "จุดเดียวในระบบที่เปลี่ยน status เป็น confirmed" | คืน `outcome: 'blocked'` |
+blacklist จึงเข้าเป็น **เงื่อนไขที่ 6 ของด่านเดิม** ไม่ใช่ด่านที่ 4:
 
-```
-① แชท + Flex → ปุ่มยืนยัน (lineHandler.ts:596) ─┐
-                                                 ├─→ confirmQuotationAtomic()  ← ด่าน C
-② LIFF → POST /api/quotation/:id/confirm ────────┘
-```
+1. `Violation['type']` เพิ่ม `'CUSTOMER_BLACKLISTED'`
+2. `buildViolationDisplay` เพิ่ม 1 case → `บริษัท/ผู้ติดต่อ รายนี้ถูกระงับการเสนอราคา กรุณาติดต่อแอดมิน`
+3. `validateQuotationItems` รับ `opts.customerId / contactId` เพิ่ม แล้วเรียก `isBlacklisted()`
 
-**⚠️ กติกาสำคัญของด่าน B** — LIFF ส่ง `customer_id` มาทุกครั้งที่เซฟ ถ้าบล็อกแบบเหมารวมจะทำให้ **ร่างที่ค้างอยู่แก้ไขต่อไม่ได้ ซึ่งขัดกับข้อ 2 ที่ตกลงกันไว้**
-ต้องบล็อกเฉพาะตอน **เปลี่ยนไปเป็นลูกค้ารายใหม่ที่ถูกบล็อก** เท่านั้น — ถ้า `(customer_id, contact_id)` ที่ส่งมาตรงกับที่ผูกอยู่เดิมในใบ ให้ผ่าน
-(เทียบกับ `quote.customer_id` / `quote.contact_id` ที่อ่านมาแล้วที่ [`index.ts:783-784`](../index.ts#L783))
+ผลพลอยได้: **ไม่มี `throw` ไม่มี `BlacklistedCustomerError` ไม่ต้องเพิ่ม `catch` สักจุด** · fail-closed มีอยู่แล้วที่ [`:1016`](../services/quotationService.ts#L1016) · มี smoke test รออยู่ที่ [`scripts/diag/quoteValidationSmoke.ts`](../scripts/diag/quoteValidationSmoke.ts)
+และ **เงื่อนไขใหม่ในอนาคต** (ค้างชำระ / เกินวงเงิน / ฯลฯ) = แก้ 3 ที่ในไฟล์เดียว แล้วทุก call site ทั้ง 3 stage ได้ผลทันทีโดยไม่ต้องแตะ
 
-**ทำไมด่าน A ใช้ throw ไม่ใช่ return** — caller มี 10 ที่ ถ้าเปลี่ยน return type ต้องแก้ทุกที่ การ throw ทำให้ caller ที่ไม่ได้ส่ง `customerId` (สถานะ `pending_company`) ไม่ต้องแก้อะไรเลย และถ้าวันหน้ามี caller ใหม่ มันจะถูกกันอัตโนมัติ
-ที่ต้องเพิ่ม `catch` มี 3 จุดคือ [`index.ts:268`](../index.ts#L268) (REST → 400), [`lineHandler.ts:1441`](../handlers/lineHandler.ts#L1441) (revise → reply ข้อความ), [`quotationAgent.ts:123`](../services/quotationAgent.ts#L123) (flow AI → reply ข้อความ)
-ตอบกลับใน LINE ใช้ **replyToken เท่านั้น** ห้าม push (AGENTS.md §8)
+**ทำไมไม่ต้องเช็คใน transaction ของ `confirmQuotationAtomic`** — ด่าน `stage: 'confirm'` ทำงานก่อนเข้า transaction เหมือนกฎราคาขั้นต่ำ/โปรโมชันทุกตัว ตามที่ [`confirmQuotationAtomic` เขียนกำกับไว้เอง](../services/quotationService.ts#L150) ("ต้องเรียกหลัง enrich + ตรวจราคาขั้นต่ำเสร็จแล้ว ทำนอก transaction เพราะจะขอ connection ซ้อนขณะถือ row lock จนตัน") ช่องแข่ง (แอดมินกดบล็อกเสี้ยววินาทีเดียวกับที่เซลล์กดยืนยัน) เป็นช่องเดียวกับที่กฎเดิมมีอยู่แล้ว — ยอมรับตามมาตรฐานเดิมของระบบ
+
+##### จุดที่เขียน `customer_id` / `contact_id` ลง DB — สำรวจจาก SQL ทุกคำสั่ง (2026-08-06)
+
+ไล่จาก `INSERT/UPDATE quotations` ทั้งไฟล์ ไม่ได้ไล่จาก flow (ไล่จาก flow มีโอกาสตกหล่น):
+
+| # | คำสั่งที่เขียนจริง | ปิดด้วย |
+| --- | --- | --- |
+| 1 | `INSERT INTO quotations` [`quotationService.ts:676`](../services/quotationService.ts#L676) ใน `insertDraftQuotations` | ด่านที่ caller |
+| 2 | `UPDATE ... SET customer_id, status='pending_contact'` [`quotationService.ts:1231`](../services/quotationService.ts#L1231) | guard บนสุดของ `resolveContactFlow` |
+| 3 | `UPDATE ... SET customer_id, contact_id` [`quotationService.ts:1398`](../services/quotationService.ts#L1398) ใน `updateQuotationCustomerSnapshot` | guard ที่ caller ทั้ง 2 ที่ |
+| 4 | `UPDATE ... SET customer_id, contact_id` [`index.ts:945`](../index.ts#L945) ใน `PUT /api/quotation/:id` | ด่าน `stage: 'save'` |
+
+> **จุดที่ 2 คือเหตุผลที่แผนเดิมพลาด** — เป็น `pool.query` ตรง ๆ ใน `resolveContactFlow` ไม่ผ่าน `insertDraftQuotations` เลย การวางด่านไว้ที่ `insertDraftQuotations` อย่างเดียวจึงกันไม่ครบ และ guard ต้องอยู่**บนสุดของฟังก์ชัน ก่อนเขียนอะไรทั้งสิ้น**
+> [`lineHandler.ts:1989/2014`](../handlers/lineHandler.ts#L1989) เขียนแค่ `customer_details` (ข้อความที่เซลล์พิมพ์) ไม่มี id และคาสถานะ `pending_*` ไว้ — ไม่ใช่การผูกลูกค้า ไม่ต้องมีด่าน
+> **ทางเข้าสถานะ `confirmed` มีทางเดียวจริง** — `SET status='confirmed'` ปรากฏที่ [`quotationService.ts:181`](../services/quotationService.ts#L181) ที่เดียวในโค้ดโปรดักชัน (ที่เหลืออยู่ใน diag script)
+
+##### ผังครอบคลุม — ยืนยันครบทั้ง 3 ทางเข้า
+
+**① เลือกลูกค้าผ่านแชท (พิมพ์ชื่อ)** — ทุกเส้นลงที่ `resolveContactFlow` หมด: สั่งครั้งแรก [`quotationService.ts:1024`](../services/quotationService.ts#L1024) · พิมพ์แก้ตอน `pending_company` [`lineHandler:2039`](../handlers/lineHandler.ts#L2039) · ตอน `pending_contact` [`lineHandler:2089`](../handlers/lineHandler.ts#L2089) · หลังกดเลือกรุ่นสินค้า [`lineHandler:909`](../handlers/lineHandler.ts#L909)
+ส่วน revise ([`lineHandler:1441`](../handlers/lineHandler.ts#L1441), [`quotationAgent:123`](../services/quotationAgent.ts#L123)) ปิดด้วยด่าน `stage:'draft'` ที่มีอยู่เหนือมันแล้ว
+
+**② Flex message** — `select_company` [`lineHandler:718`](../handlers/lineHandler.ts#L718) → `resolveContactFlow` · `select_contact` [`lineHandler:813`](../handlers/lineHandler.ts#L813) → **จุดเดียวในระบบที่เรียก `updateQuotationCustomerSnapshot` โดยไม่ผ่าน `resolveContactFlow` จึงต้องมี guard ของตัวเอง** · `confirm` [`lineHandler:596`](../handlers/lineHandler.ts#L596) → ด่าน `stage:'confirm'` ที่ [`:578`](../handlers/lineHandler.ts#L578)
+
+**③ LIFF `quote-edit.html`** — เลือกบริษัท/ผู้ติดต่อ ([`:3222`](../liff_pages/quote-edit.html#L3222), [`:3242`](../liff_pages/quote-edit.html#L3242)) เป็น state ในหน้าเว็บ ยังไม่แตะ DB · กดบันทึก → `PUT /api/quotation/:id` ([`:2983`](../liff_pages/quote-edit.html#L2983)) → ด่าน `stage:'save'` · สร้างใบใหม่ → `POST /api/quotations` ([`:3610`](../liff_pages/quote-edit.html#L3610)) → ด่าน `stage:'draft'` · **หน้านี้ยืนยันเองไม่ได้แล้ว** ([คอมเมนต์ `:1802`](../liff_pages/quote-edit.html#L1802)) ต้องไปกดปุ่มใน Flex
+
+##### รายการแก้ทั้งหมด — 8 จุด
+
+**เติม `customerId`/`contactId` เข้าด่านที่มีอยู่แล้ว 6 จุด** (ไม่เพิ่มด่านใหม่):
+[`index.ts:260`](../index.ts#L260) `draft` · [`index.ts:766`](../index.ts#L766) `save` · [`index.ts:1055`](../index.ts#L1055) `confirm` · [`lineHandler:578`](../handlers/lineHandler.ts#L578) `confirm` · [`lineHandler:1416`](../handlers/lineHandler.ts#L1416) `draft` · [`quotationAgent:100`](../services/quotationAgent.ts#L100) `draft`
+
+**guard ใหม่ 2 จุด** (เรียก `isBlacklisted()` ตัวเดียวกัน แล้ว `return { text }` — shape ที่ caller รองรับอยู่แล้วทุกที่ ไม่ต้องแตะ caller):
+บนสุดของ [`resolveContactFlow`](../services/quotationService.ts#L1140) · [`lineHandler:813`](../handlers/lineHandler.ts#L813)
+
+**ไม่ต้องแตะ:** [`index.ts:662`](../index.ts#L662) และ [`quotationService:1051/1078/1096/1117`](../services/quotationService.ts#L1051) — ทั้งหมดสร้างใบสถานะ `pending_company` ที่ยังไม่มี id
+
+##### กติกาสำคัญ 3 ข้อ
+
+* **guard ที่ `resolveContactFlow` ไม่ทำให้ร่างเดิมพัง** — ฟังก์ชันนี้ถูกเรียกเฉพาะตอนใบอยู่สถานะ `pending_company`/`pending_contact` ซึ่งยังไม่เคยผูกลูกค้า = เป็นการ "ผูกใหม่" เสมอ ไม่มีเคส false positive
+* **ด่าน `save` ต้องบล็อกเฉพาะตอนเปลี่ยนไปเป็นลูกค้ารายใหม่** — LIFF ส่ง `customer_id` มาทุกครั้งที่เซฟ ถ้าบล็อกเหมารวมจะทำให้ร่างที่ค้างอยู่แก้ไขต่อไม่ได้ ขัดกับ §4.0 ข้อ 3
+  ตัดสินที่ call site ([`index.ts:766`](../index.ts#L766)) ว่าจะส่ง id เข้าด่านหรือไม่ — **ไม่ยัดเงื่อนไขนี้เข้าด่านกลาง** เพราะเป็นกติกาของ endpoint นั้นเอง
+  **⚠️ ต้อง `Number()` ทั้งสองฝั่งก่อนเทียบ** — ค่าจาก body เป็น JSON ส่วนใน DB เป็น `integer` เทียบ `!==` ตรง ๆ จะได้ `'123' !== 123` แล้วบล็อกร่างเดิมที่ควรแก้ต่อได้
+* **เช็คครั้งเดียวก่อน loop** — `insertDraftQuotations` สร้างได้หลายใบต่อครั้ง และเส้นทางแชทมีงบเวลา (`deadlineAt` ใน `handleEvent`) ห้ามยิง query รายใบ
 
 #### 4.5 เตือนต้นทาง (ชั้นที่ 2 ของแผน B)
 
@@ -335,18 +366,20 @@ export async function findBlockedCompanyIds(companyIds: number[]): Promise<Set<n
 
 1. migration + `blacklistService.ts` (ยังไม่มีใครเรียก — ปลอดภัย 100%)
 2. API + UI แอดมิน (เพิ่มรายการได้ แต่ยังไม่มีผลกับใบเสนอราคา)
-3. ด่าน C (ยืนยัน) — ด่านที่สำคัญที่สุด ทำก่อน
-4. ด่าน A (สร้างร่าง) + ด่าน B (เปลี่ยนลูกค้า)
-5. เตือนต้นทาง: ปุ่ม Flex + `is_blacklisted` + LIFF
+3. `CUSTOMER_BLACKLISTED` เข้า `Violation` + `buildViolationDisplay` + `validateQuotationItems` (ยังไม่มี call site ส่ง id เข้ามา = ยังไม่มีผล)
+4. เติม id เข้าด่าน `stage: 'confirm'` 2 จุดก่อน — ด่านสุดท้ายที่กันจริง ทำให้ระบบปลอดภัยตั้งแต่ขั้นนี้
+5. เติม id เข้าด่าน `draft`/`save` อีก 4 จุด + guard ใหม่ 2 จุด (`resolveContactFlow`, `lineHandler:813`)
+6. เตือนต้นทาง: ปุ่ม Flex + `is_blacklisted` + LIFF
 
-**Verify:** `docker run ... npx tsc --noEmit` · `docker build --target frontend` · `npx eslint .` · `npm run diag:confirm-race` (แตะ confirm path) · `tsx scripts/evalCustomerSearch.ts` (**เทียบผลก่อน/หลัง ต้องเท่าเดิมเป๊ะ** — เป็นหลักฐานว่าไม่ได้แตะการค้นหา)
+**Verify:** `docker run ... npx tsc --noEmit` · `docker build --target frontend` · `npx eslint .` · `npm run diag:confirm-race` (แตะ confirm path) · **`tsx scripts/diag/quoteValidationSmoke.ts`** (แตะ `validateQuotationItems`/`buildViolationDisplay` โดยตรง — ไฟล์นั้นสั่งไว้เองว่าให้รันซ้ำทุกครั้งที่แตะ) · `tsx scripts/evalCustomerSearch.ts` (**เทียบผลก่อน/หลัง ต้องเท่าเดิมเป๊ะ** — เป็นหลักฐานว่าไม่ได้แตะการค้นหา)
 
-ทดสอบมือ:
-1. ขึ้นบัญชีทั้งบริษัท → สั่งใบใหม่ผ่านแชท → ต้องถูกปฏิเสธพร้อมข้อความไทย
+ทดสอบมือ — ข้อ 1-3 ต้องทำ **ครบทั้ง 3 ทางเข้า** (พิมพ์ในแชท / ปุ่มใน Flex / หน้า LIFF) ตามผังใน §4.4:
+1. ขึ้นบัญชีทั้งบริษัท → สั่งใบใหม่ → ต้องถูกปฏิเสธพร้อมข้อความไทย
 2. ขึ้นบัญชีเฉพาะผู้ติดต่อ A → เสนอราคาให้ผู้ติดต่อ B ของบริษัทเดียวกัน → **ต้องผ่าน**
-3. ร่างค้างอยู่ก่อน → ขึ้นบัญชี → แก้ไขร่างได้ แต่กดยืนยันไม่ผ่าน
+3. ร่างค้างอยู่ก่อน → ขึ้นบัญชี → แก้ไขร่าง**และกดบันทึกใน LIFF ได้** แต่กดยืนยันไม่ผ่าน (ข้อนี้คือตัวจับ bug `'123' !== 123` ใน §4.4)
 4. ใบที่ยืนยันไปแล้ว → ขึ้นบัญชี → ใบเดิมยังโหลด/ดาวน์โหลด PDF ได้ตามปกติ
 5. ลบออกจากบัญชี → ทุกอย่างกลับมาทำงานปกติทันที (ไม่ต้องรอ sync)
+6. ใบที่ยังไม่ผูกบริษัท (`pending_company`) → พิมพ์ชื่อบริษัทที่ถูกบล็อกเข้าไป → ต้องถูกปฏิเสธ **และร่างต้องไม่ถูกผูก id ทิ้งไว้** (กัน regression ของจุดเขียนที่ 2 ใน §4.4)
 
 ---
 
@@ -403,7 +436,9 @@ export async function findBlockedCompanyIds(companyIds: number[]): Promise<Set<n
 5. **blacklist ต้องเช็คฝั่ง backend** — ตรงกับกฎ AGENTS.md §4 ที่ว่าห้ามตรวจสิทธิ์แค่ฝั่งเดียว
 6. **ห้าม log รหัสผ่าน** และอย่าเก็บไฟล์ `.sql` ที่มีรหัสผ่าน plaintext ไว้หลังใช้เสร็จ
 7. **ห้ามส่ง `password_hash` ออก API** — endpoint ของผู้ใช้ทุกตัวเลือกคอลัมน์ผ่านค่าคงที่ `USER_PUBLIC_COLUMNS` ห้ามใช้ `SELECT *`
-8. **migration ต้องรันผ่าน `scripts/runMigration.ts` หรือ psql** ห้ามแก้ DB ด้วยมือ (AGENTS.md §5)
+8. **เงื่อนไขใหม่ของการออกใบเสนอราคา ให้เพิ่มใน `validateQuotationItems` ที่เดียว** — ห้ามสร้างด่านแยก
+   ถ้าเขียนโค้ดที่ `INSERT/UPDATE quotations` แล้วเซ็ต `customer_id`/`contact_id` ขึ้นมาใหม่ ต้องกลับไปเติมในตาราง §4.4 ด้วย ไม่งั้นจะกลายเป็นรูที่มองไม่เห็น
+9. **migration ต้องรันผ่าน `scripts/runMigration.ts` หรือ psql** ห้ามแก้ DB ด้วยมือ (AGENTS.md §5)
    ไฟล์ .sql ใหม่ยังไม่อยู่ใน image เก่าที่รันอยู่ → `docker compose exec app npx tsx ...` จะหาไฟล์ไม่เจอ ให้ใช้ psql ผ่าน stdin ตาม DEPLOY.md ขั้น 4
 
 ---

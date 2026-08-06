@@ -191,7 +191,7 @@ CREATE TABLE public.sale_orders (
 
 --
 -- Phase 3 (2026-07-23): customers_view + contacts_view ถูกปลดแล้ว (migration 2026-07-23_02)
--- ทุก query ลูกค้า/ผู้ติดต่ออ่านจาก customers_data_view (materialized view ด้านล่าง) แทน
+-- ทุก query ลูกค้า/ผู้ติดต่ออ่านจาก customers_data_view (ตารางด้านล่าง) แทน
 --
 
 
@@ -206,27 +206,59 @@ $$ SELECT CASE WHEN lower(btrim(v)) = ANY (ARRAY['null', '']) THEN NULL ELSE btr
 
 
 --
--- Name: customers_data_view; Type: MATERIALIZED VIEW; Schema: public; Owner: -
+-- Name: customers_data_build / customers_data_view; Type: VIEW + TABLE; Schema: public; Owner: -
 -- 1 แถว/ผู้ติดต่อ รวมข้อมูลลูกค้าครบสำหรับใบเสนอราคา normalize จาก customers (หลัก) + sale_orders
 -- Arm1=customers contact_id>=0 (รวมบริษัทไม่มีผู้ติดต่อ) ; Arm2=sale_orders orphan +enrich via tax_id
--- comp=company-level propagation (sale_area/district/sub_district) ; REFRESH หลัง sync (services/syncService.ts)
+-- comp=company-level propagation (sale_area/district/sub_district)
+--
+-- ⚠️ customers_data_view เป็น "ตารางจริง" ไม่ใช่ materialized view (migration 2026-08-06_01)
+--    customers_data_build = view ที่เก็บนิยาม · scripts/sync/refreshCustomerDirectory.ts สร้างตาราง
+--    ใหม่จาก view นี้แล้วสลับชื่อ (build+swap) หลัง sync — ห้ามสั่ง REFRESH MATERIALIZED VIEW
 --
 
 CREATE INDEX IF NOT EXISTS idx_sale_orders_contact_order ON public.sale_orders (contact_id, order_date DESC);
 CREATE INDEX IF NOT EXISTS idx_customers_contact_id ON public.customers (contact_id);
 CREATE INDEX IF NOT EXISTS idx_customers_tax_id ON public.customers (customer_tax_id);
 
-CREATE MATERIALIZED VIEW public.customers_data_view AS
+-- ── index สำหรับ latest_so ──
+-- ของเดิม idx_sale_orders_contact_order (contact_id, order_date DESC) ใช้ไม่ได้จริง เพราะ DESC ของ
+-- Postgres = NULLS FIRST แต่ query สั่ง DESC NULLS LAST → planner ตกไป seq scan 366MB + external
+-- sort 49MB/worker. index นี้เรียงตรงกับ ORDER BY เป๊ะและมี order_reference เป็น key ตัวท้าย
+-- → ได้ index-only scan (ขั้น latest_so: 1,450ms → 129ms)
+CREATE INDEX IF NOT EXISTS idx_so_contact_latest
+  ON public.sale_orders (contact_id, order_date DESC NULLS LAST, order_reference DESC)
+  WHERE contact_id > 0;
+
+-- ── index สำหรับ watermark (ข้าม refresh เมื่อไม่มีอะไรเปลี่ยน) ──
+-- refresh ต้องหา max(sync_updated_at)/max(updated_at) ให้ได้ในระดับ ms ไม่งั้นการเช็ค
+-- "มีอะไรเปลี่ยนไหม" จะแพงกว่าการ refresh เอง
+CREATE INDEX IF NOT EXISTS idx_customers_sync_updated_at ON public.customers (sync_updated_at DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_sale_orders_updated_at    ON public.sale_orders (updated_at DESC NULLS LAST);
+
+-- ════════════════════════════════════════════════════════════════════
+-- นิยามข้อมูล — เก็บเป็น plain view ตัวเดียว (source of truth)
+-- refresh script สร้างตารางจาก view นี้: CREATE TABLE ... AS SELECT * FROM customers_data_build
+-- ⚠️ ห้าม app query view นี้ตรง ๆ (ใช้ ~2 วิ/ครั้ง) — app ต้องอ่าน customers_data_view เสมอ
+-- ════════════════════════════════════════════════════════════════════
+CREATE OR REPLACE VIEW public.customers_data_build AS
 WITH latest_so AS (
-  SELECT DISTINCT ON (contact_id)
-    contact_id, customer_name, customer_reference, customer_tax_id,
-    contact_name, contact_mobile, contact_phone, customer_sale_area, salesperson, sales_team,
-    invoice_street, invoice_district, invoice_sub_district, invoice_state, invoice_zip
-  FROM public.sale_orders
-  WHERE contact_id IS NOT NULL AND contact_id > 0
-  ORDER BY contact_id, order_date DESC NULLS LAST
+  -- ยุบ sale_orders -> 1 แถว/contact (ใบล่าสุด)
+  -- แยก 2 ขั้น: ขั้นแรกหา key ด้วย index-only scan (ไม่แตะ heap 366MB) แล้วค่อย join กลับด้วย PK
+  SELECT
+    k.contact_id, s.customer_name, s.customer_reference, s.customer_tax_id,
+    s.contact_name, s.contact_mobile, s.contact_phone, s.customer_sale_area, s.salesperson, s.sales_team,
+    s.invoice_street, s.invoice_district, s.invoice_sub_district, s.invoice_state, s.invoice_zip
+  FROM (
+    SELECT DISTINCT ON (contact_id) contact_id, order_reference
+    FROM public.sale_orders
+    WHERE contact_id > 0
+    ORDER BY contact_id, order_date DESC NULLS LAST, order_reference DESC
+  ) k
+  JOIN public.sale_orders s ON s.order_reference = k.order_reference
 ),
 base AS (
+  -- ── Arm 1: ผู้ติดต่อหลักจาก customers (contact_id>=0 → รวมบริษัทที่ไม่มีผู้ติดต่อด้วย)
+  --          address + sales_team blend customers -> latest sale_order ──
   SELECT
     c.company_id,
     c.contact_id,
@@ -254,7 +286,10 @@ base AS (
   FROM public.customers c
   LEFT JOIN latest_so so ON so.contact_id = c.contact_id
   WHERE c.contact_id >= 0
+
   UNION ALL
+
+  -- ── Arm 2: contact ที่มีเฉพาะใน sale_orders + enrich field บริษัท (payment/type/phone/mobile/email) จากบริษัทจริง via tax_id ──
   SELECT
     COALESCE(comp.company_id, s.contact_id)      AS company_id,
     s.contact_id,
@@ -282,11 +317,11 @@ base AS (
   FROM latest_so s
   LEFT JOIN LATERAL (
     SELECT c2.company_id,
-      (array_remove(array_agg(public.clean_text(c2.customer_payment_terms)), NULL))[1] AS customer_payment_terms,
-      (array_remove(array_agg(public.clean_text(c2.customer_type)), NULL))[1]          AS customer_type,
-      (array_remove(array_agg(public.clean_text(c2.phone)), NULL))[1]                  AS phone,
-      (array_remove(array_agg(public.clean_text(c2.mobile)), NULL))[1]                 AS mobile,
-      (array_remove(array_agg(public.clean_text(c2.email)), NULL))[1]                  AS email
+      (array_remove(array_agg(public.clean_text(c2.customer_payment_terms) ORDER BY c2.contact_id), NULL))[1] AS customer_payment_terms,
+      (array_remove(array_agg(public.clean_text(c2.customer_type)          ORDER BY c2.contact_id), NULL))[1] AS customer_type,
+      (array_remove(array_agg(public.clean_text(c2.phone)                  ORDER BY c2.contact_id), NULL))[1] AS phone,
+      (array_remove(array_agg(public.clean_text(c2.mobile)                 ORDER BY c2.contact_id), NULL))[1] AS mobile,
+      (array_remove(array_agg(public.clean_text(c2.email)                  ORDER BY c2.contact_id), NULL))[1] AS email
     FROM public.customers c2
     WHERE c2.customer_tax_id = s.customer_tax_id
       AND s.customer_tax_id IS NOT NULL AND btrim(s.customer_tax_id) <> ''
@@ -297,11 +332,13 @@ base AS (
   WHERE NOT EXISTS (SELECT 1 FROM public.customers c3 WHERE c3.contact_id = s.contact_id)
 ),
 comp AS (
+  -- company-level propagation: หยิบค่าที่ไม่ null ของ contact_id น้อยสุดในบริษัท
+  -- (สาขา = คนละ company_id จึงไม่ปนสาขา · ORDER BY contact_id = ตัวที่ทำให้ผลคงที่)
   -- ⚠️ sales_team ไม่อยู่ในนี้โดยตั้งใจ — ทีมขายไม่ใช่คุณสมบัติของบริษัท ผู้ติดต่อคนละคนอาจคนละทีม
   SELECT company_id,
-    (array_remove(array_agg(customer_sale_area), NULL))[1]     AS customer_sale_area,
-    (array_remove(array_agg(invoice_district), NULL))[1]       AS invoice_district,
-    (array_remove(array_agg(invoice_sub_district), NULL))[1]   AS invoice_sub_district
+    (array_remove(array_agg(customer_sale_area   ORDER BY contact_id), NULL))[1] AS customer_sale_area,
+    (array_remove(array_agg(invoice_district     ORDER BY contact_id), NULL))[1] AS invoice_district,
+    (array_remove(array_agg(invoice_sub_district ORDER BY contact_id), NULL))[1] AS invoice_sub_district
   FROM base GROUP BY company_id
 )
 SELECT
@@ -315,21 +352,58 @@ SELECT
   COALESCE(b.invoice_sub_district, comp.invoice_sub_district)    AS invoice_sub_district,
   b.invoice_state, b.invoice_zip
 FROM base b
-LEFT JOIN comp ON comp.company_id = b.company_id
-WITH DATA;
+LEFT JOIN comp ON comp.company_id = b.company_id;
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_cdv_company_contact ON public.customers_data_view (company_id, contact_id);
-CREATE INDEX IF NOT EXISTS idx_cdv_company ON public.customers_data_view (company_id);
-
-
+-- ════════════════════════════════════════════════════════════════════
+-- แปลง customers_data_view: MATERIALIZED VIEW -> ตารางจริง
+-- (rerun ได้ — ถ้าเป็นตารางอยู่แล้วก็สร้างใหม่ทับ)
 --
--- Name: customers_data; Type: VIEW; Schema: public; Owner: -
--- plain view ครอบ matview customers_data_view — มีไว้เปิดดูใน DB tool (TablePlus ไม่โชว์ matview)
--- ห้ามใช้ใน app code; app ต้อง query customers_data_view (matview) โดยตรง
---
+-- ครอบด้วย transaction เดียว: ระหว่างทำ คนอ่านจะ "รอ" ~3 วิแล้วได้ข้อมูล
+-- ถ้าไม่ครอบ จะมีช่วงที่ตารางหายจริง ๆ → บอทที่ยิง query พอดีจะได้ error
+-- ════════════════════════════════════════════════════════════════════
+BEGIN;
 
+DROP VIEW IF EXISTS public.customers_data;
+
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_class WHERE relname='customers_data_view' AND relnamespace='public'::regnamespace AND relkind='m') THEN
+    DROP MATERIALIZED VIEW public.customers_data_view;
+  ELSIF EXISTS (SELECT 1 FROM pg_class WHERE relname='customers_data_view' AND relnamespace='public'::regnamespace AND relkind='r') THEN
+    DROP TABLE public.customers_data_view;
+  END IF;
+END $$;
+
+CREATE TABLE public.customers_data_view AS SELECT * FROM public.customers_data_build;
+
+CREATE UNIQUE INDEX idx_cdv_company_contact ON public.customers_data_view (company_id, contact_id);
+CREATE INDEX        idx_cdv_company         ON public.customers_data_view (company_id);
+
+-- ANALYZE เต็มรูปแบบตารางนี้ใช้ 7.3 วิ (คอลัมน์ text ไทยต้อง sort 30,000 ตัวอย่างด้วย collation ไทย
+-- ต่อคอลัมน์ — วัดแยก: customer_name อย่างเดียว 5.1 วิ) → ลด sample ของคอลัมน์ text เหลือ target 10
+-- แล้วเก็บละเอียดเฉพาะ 2 คอลัมน์ที่เป็นคีย์ของทุก query. ต้องตรงกับ refreshCustomerDirectory.ts
+SET LOCAL default_statistics_target = 10;
+ANALYZE public.customers_data_view;
+SET LOCAL default_statistics_target = 100;
+ANALYZE public.customers_data_view (company_id, contact_id);
+
+-- plain view สำหรับเปิดดูใน DB tool + ใช้ใน odooSaleOrderExport / diag
 CREATE OR REPLACE VIEW public.customers_data AS
   SELECT * FROM public.customers_data_view;
+
+COMMIT;
+
+-- ════════════════════════════════════════════════════════════════════
+-- watermark ของรอบ refresh ล่าสุด — ใช้ข้าม refresh เมื่อ customers/sale_orders ไม่ขยับเลย
+-- เก็บเป็นตารางแยกแทนการยัดแถวปลอมลง sync_state (scripts/diag ลิสต์ sync_state ทั้งตาราง)
+-- ════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS public.customers_data_view_state (
+  id                INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  source_watermark  TIMESTAMPTZ,
+  refreshed_at      TIMESTAMPTZ,
+  build_ms          INTEGER,
+  row_count         INTEGER
+);
+INSERT INTO public.customers_data_view_state (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
 
 
 --

@@ -163,15 +163,18 @@ async function reconcileOrphanContacts() {
 }
 
 /**
- * REFRESH materialized view customers_data_view หลัง sync (customers/sale_orders เปลี่ยนผ่าน sync เท่านั้น
- * → refresh ท้าย sync = matview สดเสมอในทางปฏิบัติ) แล้วล้าง in-memory search cache
+ * สร้าง customers_data_view ใหม่หลัง sync (customers/sale_orders เปลี่ยนผ่าน sync เท่านั้น
+ * → rebuild ท้าย sync = ข้อมูลสดเสมอในทางปฏิบัติ) แล้วล้าง in-memory search cache
  *
- * logic REFRESH จริงอยู่ใน refreshCustomerDataView() (แชร์กับ CLI sync scripts); ที่นี่ห่อเพิ่ม
+ * logic จริงอยู่ใน refreshCustomerDataView() (แชร์กับ CLI sync scripts); ที่นี่ห่อเพิ่ม
  * clearCustomerSearchCache() ซึ่งเป็นเรื่องเฉพาะโปรเซสแอปที่รันอยู่
+ *
+ * ถ้ารอบนั้นถูกข้าม (ข้อมูลต้นทางไม่ขยับ) ก็ไม่ต้องล้าง cache — ข้อมูลใน cache ยังตรงอยู่
+ * และการล้างทิ้งเปล่า ๆ ทำให้ค้นหาครั้งถัดไปต้องโหลด 52k แถวใหม่ฟรี ๆ
  */
 async function refreshCustomerDirectory() {
-  await refreshCustomerDataView();
-  clearCustomerSearchCache();
+  const result = await refreshCustomerDataView();
+  if (!result.skipped) clearCustomerSearchCache();
 }
 
 /** เพิ่ม 4 คอลัมน์ผลรอบล่าสุด — เรียกตอน boot เพื่อให้ deploy แล้วใช้ได้เลยไม่ต้องรันมือ */
@@ -269,7 +272,7 @@ export function startSync(
       console.log(runState.aborted ? '[sync] จบรอบ sync (ถูกยกเลิก)' : '[sync] จบรอบ sync ทั้งหมด');
       // guard: เตือนถ้ายังมี contact ตกค้าง (อ่าน DB อย่างเดียว ไม่ throw)
       await reconcileOrphanContacts();
-      // refresh matview customers_data_view ให้สะท้อนข้อมูลที่ sync มาใหม่ + ล้าง search cache
+      // สร้าง customers_data_view ใหม่ให้สะท้อนข้อมูลที่ sync มาใหม่ + ล้าง search cache
       await refreshCustomerDirectory();
     }
   })();

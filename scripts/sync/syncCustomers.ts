@@ -495,7 +495,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const forceFull = process.argv.includes('--full') || process.env.SYNC_FULL === '1';
   syncCustomers({ forceFull })
     .then(async () => {
-      await refreshCustomerDataView(); // matview เป็น source of truth ของแอป — ต้อง refresh เอง (path นี้ไม่ผ่าน syncService)
+      // customers_data_view เป็น source of truth ของแอป — ต้องสร้างใหม่เอง (path นี้ไม่ผ่าน syncService)
+      // --full = สั่งกวาดใหม่ทั้งฐาน → บังคับ rebuild ด้วย ไม่ให้ watermark ข้าม (ใช้กู้ข้อมูลที่เพี้ยนได้)
+      await refreshCustomerDataView({ force: forceFull });
       await pool.end(); // ปิด pool → event loop ว่าง → Node ออกเอง (อย่าเรียก process.exit(0) จะชน libuv teardown บน Windows)
     })
     .catch((error) => {

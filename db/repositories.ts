@@ -17,7 +17,7 @@ function logErr(fn: string, err: any): void {
 // ═══════════════════════════ customers ═══════════════════════════
 
 // Phase 3: customers_view/contacts_view ถูกปลดแล้ว — ทุก query ลูกค้า/ผู้ติดต่ออ่านจาก customers_data_view
-// (matview รวม customers+sale_orders → เห็น orphan company/contact ที่มีเฉพาะใน sale_orders ด้วย)
+// (ตารางรวม customers+sale_orders → เห็น orphan company/contact ที่มีเฉพาะใน sale_orders ด้วย)
 //
 // CDV_COMPANY_SUBQ = 1 แถว/บริษัท (DISTINCT ON company_id, contact แรก) map ชื่อคอลัมน์ให้ตรง customers_view เดิมเป๊ะ
 //   (id/display_name/reference/tax_id/phone/email/branch/salesperson/customer_type/customer_payment_terms)
@@ -121,7 +121,7 @@ export async function getCompanyAddressRows(companyId: number | string): Promise
 
 // ═══════════════════════════ contacts ═══════════════════════════
 
-// contacts อ่านจาก customers_data_view (matview รวม customers+sale_orders) แทน contacts_view
+// contacts อ่านจาก customers_data_view (ตารางรวม customers+sale_orders) แทน contacts_view
 // เพื่อให้ orphan contact ที่มีเฉพาะใน sale_orders (~5,906 คน เช่น คุณหนิง/คุณต๊อบ ของ ควอเซอร์) โผล่ใน picker ด้วย
 // alias คอลัมน์ให้ตรง output เดิมของ contacts_view เป๊ะ: id/name/mobile/phone/email + invoice_* (blend แล้วใน view)
 //   phone = COALESCE(contact_phone, phone) , email = COALESCE(contact_email, email) เหมือน contacts_view เดิม
@@ -318,7 +318,7 @@ export async function deletePendingQuotations(userId: string): Promise<void> {
  * ทีมขายเป็นคุณสมบัติของผู้ติดต่อ (customers_data_view.sales_team) ไม่ใช่สังกัดของเซลล์ที่ออกใบ
  * จึง join ด้วย quotations.contact_id เท่านั้น — ห้ามกลับไปใช้ salesperson.branch
  *
- * ⚠️ contact_id ไม่ unique ใน matview (แถวบริษัทที่ไม่มีผู้ติดต่อใช้ contact_id = 0 ซ้ำกันได้)
+ * ⚠️ contact_id ไม่ unique ใน customers_data_view (แถวบริษัทที่ไม่มีผู้ติดต่อใช้ contact_id = 0 ซ้ำกันได้)
  *    จึงกรอง > 0 และเรียงให้แถวที่ company_id ตรงกับใบมาก่อน เพื่อไม่หยิบทีมขายของบริษัทอื่น
  *
  * ใช้ร่วมกันระหว่าง endpoint export (index.ts) กับ diag harness (scripts/diag/odooExportSmoke.ts)
@@ -630,7 +630,7 @@ export async function getBranches(): Promise<any[]> {
 
 // ═══════════════════════════ admin (index.ts) ═══════════════════════════
 
-// ค้นจาก customers_data_view (matview รวม customers+sale_orders) แทน customers_view
+// ค้นจาก customers_data_view (ตารางรวม customers+sale_orders) แทน customers_view
 // เพื่อให้ orphan company ที่มีเฉพาะใน sale_orders (~1,112 บริษัท synthetic company_id) ค้นเจอในหน้า LIFF ด้วย
 // cdv grain = 1 แถว/ผู้ติดต่อ → DISTINCT ON(company_id) ORDER BY contact_id ให้เหลือ 1 แถว/บริษัท เหมือน customers_view เดิม
 // map ชื่อคอลัมน์กลับ shape เดิมเป๊ะ: id/display_name/reference/branch_code/salesperson/payment_terms
