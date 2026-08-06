@@ -97,9 +97,9 @@ type ExportedFilter = 'no' | 'yes' | 'all';
  */
 type ExportCompany = 'QP' | 'QT';
 
-const EXPORT_COMPANIES: { value: ExportCompany; label: string }[] = [
-  { value: 'QP', label: 'QP (PM)' },
-  { value: 'QT', label: 'QT (THT)' },
+const EXPORT_COMPANIES: { value: ExportCompany; company: string }[] = [
+  { value: 'QP', company: 'PM' },
+  { value: 'QT', company: 'THT' },
 ];
 
 /** 1 ครั้งที่กดปุ่มส่งออก (GET /api/admin/quotations/export-batches) */
@@ -449,39 +449,44 @@ export const Quotations: React.FC = () => {
               </button>
 
               {exportMenuOpen && (
-                <div className="absolute right-0 top-full mt-2 z-30 w-72 bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden">
+                <div className="absolute right-0 top-full mt-2 z-30 w-[19rem] bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden">
                   {/* 1 ครั้ง = 1 บริษัท — Odoo ของ PM กับ THT เป็นคนละระบบ ไฟล์จึงรวมกันไม่ได้ */}
-                  {EXPORT_COMPANIES.map(({ value, label }) => (
-                    <div key={value} className="border-b border-slate-100">
-                      <p className="px-3.5 pt-2.5 pb-1 text-[11px] font-bold text-slate-400 tracking-wide">{label}</p>
+                  {EXPORT_COMPANIES.map(({ value, company }) => (
+                    <div key={value} className="flex items-center gap-2 px-3 py-2 border-b border-slate-100">
+                      <div className="flex items-baseline gap-1.5 flex-1 min-w-0">
+                        <span className="px-1.5 py-0.5 rounded-md bg-[#009032]/10 text-[#009032] text-xs font-extrabold tracking-wide">
+                          {value}
+                        </span>
+                        <span className="text-sm font-bold text-slate-800 truncate">{company}</span>
+                      </div>
                       <button
                         onClick={() => handleExportOdoo('xlsx', value)}
-                        className="w-full flex items-center gap-2 px-3.5 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 transition-colors"
+                        title={`ส่งออก ${value} (${company}) เป็น Excel`}
+                        className="flex items-center gap-1 px-2 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-slate-600 hover:border-[#009032] hover:text-[#009032] hover:bg-[#009032]/5 transition-colors"
                       >
-                        <FileSpreadsheet className="w-4 h-4 text-[#009032]" />
-                        Excel (.xlsx)
+                        <FileSpreadsheet className="w-3.5 h-3.5" />
+                        Excel
                       </button>
                       <button
                         onClick={() => handleExportOdoo('csv', value)}
-                        className="w-full flex items-center gap-2 px-3.5 py-2 pb-2.5 text-left text-sm text-slate-700 hover:bg-slate-50 transition-colors"
+                        title={`ส่งออก ${value} (${company}) เป็น CSV`}
+                        className="flex items-center gap-1 px-2 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-slate-600 hover:border-[#009032] hover:text-[#009032] hover:bg-[#009032]/5 transition-colors"
                       >
-                        <FileText className="w-4 h-4 text-slate-400" />
+                        <FileText className="w-3.5 h-3.5" />
                         CSV
                       </button>
                     </div>
                   ))}
                   <button
                     onClick={openHistory}
-                    className="w-full flex items-center gap-2 px-3.5 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50 transition-colors"
+                    className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 transition-colors"
                   >
                     <History className="w-4 h-4 text-slate-400" />
                     ประวัติการส่งออก
                   </button>
-                  <p className="px-3.5 py-2.5 text-[11px] leading-snug text-slate-500 border-t border-slate-100 bg-slate-50">
-                    ส่งออกตามตัวกรองบนหน้าจอ — ค่าตั้งต้นคือเฉพาะใบที่ยังไม่เคยส่ง
-                    และใบที่ลงไฟล์แล้วจะถูกทำเครื่องหมายว่าส่งออกแล้วทันที
-                    <br />
-                    ใบที่เลขที่ไม่ขึ้นต้นด้วย QP/QT จะไม่อยู่ในไฟล์ของทั้งสองบริษัท
+                  <p className="px-3 py-2 text-[11px] leading-snug text-slate-500 border-t border-slate-100 bg-slate-50">
+                    ส่งออกตามตัวกรองบนหน้าจอ (ตั้งต้น: เฉพาะใบที่ยังไม่เคยส่ง) ใบที่อยู่ในไฟล์จะถูกทำเครื่องหมายว่าส่งแล้วทันที
+                    · เลขที่ที่ไม่ขึ้นต้นด้วย QP/QT จะไม่อยู่ในไฟล์
                   </p>
                 </div>
               )}

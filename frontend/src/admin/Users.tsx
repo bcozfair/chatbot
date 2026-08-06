@@ -32,8 +32,8 @@ const ROLE_LABEL: Record<Role, string> = {
 };
 
 const ROLE_DESCRIPTION: Record<Role, string> = {
-  admin: 'เข้าถึงและจัดการได้ทุกเมนู รวมถึงจัดการผู้ใช้',
-  user: 'สิทธิ์จำกัด ยังไม่มีเมนูของตัวเองจนกว่าฟีเจอร์บัญชีห้ามเสนอราคาจะเปิดใช้',
+  admin: 'จัดการได้ทุกเมนู รวมถึงผู้ใช้',
+  user: 'สิทธิ์จำกัด ยังไม่มีเมนูของตัวเอง',
 };
 
 type FormMode = { kind: 'create' } | { kind: 'edit'; target: AdminUserRow };
@@ -317,13 +317,13 @@ const RoleSelect: React.FC<{
   disabled: boolean;
   disabledHint?: string;
 }> = ({ value, onChange, disabled, disabledHint }) => (
-  <div className="space-y-1.5">
+  <div className="space-y-1">
     <label className="block text-xs font-semibold text-slate-600">สิทธิ์การใช้งาน</label>
-    <div className="space-y-2">
+    <div className="grid grid-cols-2 gap-2">
       {(['admin', 'user'] as Role[]).map((role) => (
         <label
           key={role}
-          className={`flex items-start gap-2.5 p-3 rounded-xl border transition-colors ${
+          className={`flex items-start gap-2 p-2.5 rounded-xl border transition-colors ${
             value === role ? 'border-[#009032] bg-[#009032]/5' : 'border-slate-200'
           } ${disabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-slate-50'}`}
         >
@@ -333,11 +333,11 @@ const RoleSelect: React.FC<{
             checked={value === role}
             disabled={disabled}
             onChange={() => onChange(role)}
-            className="mt-0.5 accent-[#009032]"
+            className="mt-0.5 accent-[#009032] shrink-0"
           />
           <span className="min-w-0">
             <span className="block text-sm font-semibold text-slate-800">{ROLE_LABEL[role]}</span>
-            <span className="block text-[11px] text-slate-500">{ROLE_DESCRIPTION[role]}</span>
+            <span className="block text-[11px] leading-snug text-slate-500">{ROLE_DESCRIPTION[role]}</span>
           </span>
         </label>
       ))}
@@ -410,44 +410,48 @@ const UserFormModal: React.FC<{
       icon={<UsersIcon className="w-4 h-4" />}
       onClose={onClose}
     >
-      <form onSubmit={handleSubmit} className="p-5 space-y-4">
+      <form onSubmit={handleSubmit} className="p-5 space-y-3">
         {error && <ErrorBox message={error} />}
 
-        <div className="space-y-1.5">
-          <label htmlFor="user-username" className="block text-xs font-semibold text-slate-600">
-            ชื่อผู้ใช้งาน (Username)
-          </label>
-          <input
-            id="user-username"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            // แก้ username ทีหลังไม่รองรับ เพราะเป็นตัวระบุที่ผูกกับการเข้าสู่ระบบ
-            disabled={isEdit || isSubmitting}
-            placeholder="เช่น somchai"
-            className={`${inputClass} font-mono`}
-          />
-          {isEdit && <p className="text-[11px] text-slate-400">ชื่อผู้ใช้งานแก้ไขภายหลังไม่ได้</p>}
-        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="space-y-1">
+            <label htmlFor="user-username" className="block text-xs font-semibold text-slate-600">
+              ชื่อผู้ใช้งาน (Username)
+            </label>
+            <input
+              id="user-username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              // แก้ username ทีหลังไม่รองรับ เพราะเป็นตัวระบุที่ผูกกับการเข้าสู่ระบบ
+              disabled={isEdit || isSubmitting}
+              placeholder="เช่น somchai"
+              className={`${inputClass} font-mono`}
+            />
+            {isEdit && <p className="text-[11px] text-slate-400">แก้ไขภายหลังไม่ได้</p>}
+          </div>
 
-        <div className="space-y-1.5">
-          <label htmlFor="user-name" className="block text-xs font-semibold text-slate-600">
-            ชื่อ-นามสกุล
-          </label>
-          <input
-            id="user-name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            disabled={isSubmitting}
-            placeholder="เช่น สมชาย ใจดี"
-            className={inputClass}
-          />
+          <div className="space-y-1">
+            <label htmlFor="user-name" className="block text-xs font-semibold text-slate-600">
+              ชื่อ-นามสกุล
+            </label>
+            <input
+              id="user-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              disabled={isSubmitting}
+              placeholder="เช่น สมชาย ใจดี"
+              className={inputClass}
+            />
+          </div>
         </div>
 
         {!isEdit && (
-          <div className="space-y-1.5">
+          <div className="space-y-1">
             <label htmlFor="user-password" className="block text-xs font-semibold text-slate-600">
               รหัสผ่านเริ่มต้น{' '}
-              <span className="font-normal text-slate-400">(อย่างน้อย {MIN_PASSWORD_LENGTH} ตัวอักษร)</span>
+              <span className="font-normal text-slate-400">
+                — อย่างน้อย {MIN_PASSWORD_LENGTH} ตัวอักษร แจ้งให้เจ้าตัวเปลี่ยนเองหลังเข้าสู่ระบบ
+              </span>
             </label>
             <input
               id="user-password"
@@ -458,9 +462,6 @@ const UserFormModal: React.FC<{
               disabled={isSubmitting}
               className={inputClass}
             />
-            <p className="text-[11px] text-slate-400">
-              แจ้งรหัสนี้ให้เจ้าตัวแล้วให้เปลี่ยนเองผ่านปุ่ม "เปลี่ยนรหัสผ่าน" หลังเข้าสู่ระบบ
-            </p>
           </div>
         )}
 
