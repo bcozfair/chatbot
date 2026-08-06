@@ -31,6 +31,3 @@ BEGIN
       );
   END IF;
 END $$;
-
-COMMENT ON COLUMN public.quotations.delivery_days_override IS
-  'จำนวนวันจัดส่งที่เซลล์แก้เองจากหน้า LIFF (NULL = ใช้ค่าที่คำนวณจาก quotation_rules)';

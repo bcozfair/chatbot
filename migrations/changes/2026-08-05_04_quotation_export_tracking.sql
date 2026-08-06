@@ -23,9 +23,6 @@
 ALTER TABLE public.quotations
   ADD COLUMN IF NOT EXISTS odoo_exported_at timestamptz;
 
-COMMENT ON COLUMN public.quotations.odoo_exported_at IS
-  'เวลาที่ใบนี้ถูกส่งออกไฟล์นำเข้า Odoo ครั้งล่าสุด; NULL = ยังไม่เคยส่งออก (ตัวกรอง "ยังไม่ส่งออก" อ่านคอลัมน์นี้)';
-
 -- 1 แถว = 1 ครั้งที่กดปุ่มส่งออก
 CREATE TABLE IF NOT EXISTS public.quotation_export_batches (
   id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -38,16 +35,6 @@ CREATE TABLE IF NOT EXISTS public.quotation_export_batches (
   filters              jsonb
 );
 
-COMMENT ON TABLE public.quotation_export_batches IS
-  'ประวัติการส่งออกไฟล์นำเข้า Odoo — 1 แถวต่อ 1 ครั้งที่แอดมินกดปุ่มส่งออก';
-COMMENT ON COLUMN public.quotation_export_batches.exported_by_id IS
-  'admin.id จาก JWT (config/auth.ts) — ไม่ผูก FK เพราะเป็น snapshot ของผู้กด ไม่ควรหายตามบัญชีที่ถูกลบ';
-COMMENT ON COLUMN public.quotation_export_batches.format IS 'xlsx | csv';
-COMMENT ON COLUMN public.quotation_export_batches.row_count IS
-  'จำนวนแถวในไฟล์ (1 แถว = 1 รายการสินค้า) ต่างจาก quotation_count ที่นับเป็นใบ';
-COMMENT ON COLUMN public.quotation_export_batches.filters IS
-  'ตัวกรองที่ใช้ตอนกด (search/status/dateFrom/dateTo/exported) ไว้ตรวจย้อนหลังว่าไฟล์นั้นมาจากเงื่อนไขอะไร';
-
 -- 1 แถว = 1 ใบเสนอราคาในชุดนั้น
 CREATE TABLE IF NOT EXISTS public.quotation_export_log (
   id           bigserial PRIMARY KEY,
@@ -57,15 +44,6 @@ CREATE TABLE IF NOT EXISTS public.quotation_export_log (
   exported_at  timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
   reverted_at  timestamptz
 );
-
-COMMENT ON TABLE public.quotation_export_log IS
-  'รายการใบเสนอราคาในแต่ละชุดส่งออก Odoo — 1 แถวต่อ 1 ใบ';
-COMMENT ON COLUMN public.quotation_export_log.quotation_id IS
-  'ON DELETE SET NULL ไม่ใช่ CASCADE — ใบถูกลบแล้วประวัติต้องยังอ่านออกจาก quotation_no ที่เก็บคู่กันไว้';
-COMMENT ON COLUMN public.quotation_export_log.quotation_no IS
-  'เลขที่ใบ ณ ตอนส่งออก (denormalize ไว้ให้ประวัติอ่านออกแม้ใบต้นทางถูกลบ)';
-COMMENT ON COLUMN public.quotation_export_log.reverted_at IS
-  'เวลาที่แอดมินยกเลิกเครื่องหมาย "ส่งออกแล้ว" ของใบนี้; NULL = ยังนับว่าส่งออกไปแล้ว';
 
 -- path ที่ใช้บ่อยที่สุด: ตัวกรองตั้งต้น "ยังไม่ส่งออก" + เรียง created_at DESC
 CREATE INDEX IF NOT EXISTS idx_quotations_not_exported

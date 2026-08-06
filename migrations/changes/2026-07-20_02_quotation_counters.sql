@@ -46,5 +46,3 @@ GROUP BY 1
 ON CONFLICT (counter_key) DO UPDATE
   SET last_seq = GREATEST(public.quotation_counters.last_seq, EXCLUDED.last_seq),
       updated_at = CURRENT_TIMESTAMP;
-
-COMMENT ON TABLE public.quotation_counters IS 'ตัวนับลำดับเลขที่ใบเสนอราคาแบบ atomic ต่อ (prefix:YYMM) และ REV:เลขฐาน';

@@ -53,8 +53,3 @@ END $$;
 ALTER TABLE public.sync_settings DROP COLUMN IF EXISTS mode;
 ALTER TABLE public.sync_settings DROP COLUMN IF EXISTS daily_time;
 ALTER TABLE public.sync_settings DROP COLUMN IF EXISTS interval_minutes;
-
-COMMENT ON COLUMN public.sync_settings.days             IS 'วันที่ให้ auto sync ทำงาน 0=อาทิตย์…6=เสาร์ (ว่าง = ทุกวัน)';
-COMMENT ON COLUMN public.sync_settings.window_start     IS 'เวลาเริ่มช่วงที่อนุญาตให้ sync (HH:MM เวลาไทย)';
-COMMENT ON COLUMN public.sync_settings.window_end       IS 'เวลาสิ้นสุดช่วง (HH:MM เวลาไทย) ต้อง >= window_start';
-COMMENT ON COLUMN public.sync_settings.interval_seconds IS 'เว้นกี่วินาทีต่อรอบภายในช่วงเวลา (30–86400)';

@@ -129,6 +129,3 @@ CREATE INDEX IF NOT EXISTS idx_cdv_company ON public.customers_data_view (compan
 -- plain view สำหรับเปิดดูใน DB tool (TablePlus ไม่โชว์ matview) — สร้างใหม่ให้ติดคอลัมน์ sales_team ด้วย
 CREATE OR REPLACE VIEW public.customers_data AS
   SELECT * FROM public.customers_data_view;
-
-COMMENT ON VIEW public.customers_data IS
-  'plain view ครอบ matview customers_data_view — มีไว้เปิดดูใน DB tool (TablePlus ไม่โชว์ matview); ห้ามใช้ใน app code, app ต้อง query customers_data_view (matview) โดยตรง';

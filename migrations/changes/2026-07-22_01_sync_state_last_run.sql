@@ -24,8 +24,3 @@ ALTER TABLE public.sync_state ADD COLUMN IF NOT EXISTS last_status   text;
 ALTER TABLE public.sync_state ADD COLUMN IF NOT EXISTS last_run_at   timestamptz;
 ALTER TABLE public.sync_state ADD COLUMN IF NOT EXISTS last_error    text;
 ALTER TABLE public.sync_state ADD COLUMN IF NOT EXISTS last_error_at timestamptz;
-
-COMMENT ON COLUMN public.sync_state.last_status   IS 'ผลรอบ sync ล่าสุด: success | failed | aborted | skipped';
-COMMENT ON COLUMN public.sync_state.last_run_at   IS 'เวลาที่รอบ sync ล่าสุดจบ ไม่ว่าผลจะเป็นอะไร';
-COMMENT ON COLUMN public.sync_state.last_error    IS 'ข้อความ error ล่าสุด — ไม่ถูกล้างเมื่อรอบถัดไปสำเร็จ';
-COMMENT ON COLUMN public.sync_state.last_error_at IS 'เวลาที่เกิด error ล่าสุด — ไม่ถูกล้างเมื่อรอบถัดไปสำเร็จ';

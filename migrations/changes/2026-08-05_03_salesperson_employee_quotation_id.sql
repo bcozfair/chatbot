@@ -9,6 +9,3 @@
 
 ALTER TABLE public.salesperson
   ADD COLUMN IF NOT EXISTS employee_quotation_id character varying(255);
-
-COMMENT ON COLUMN public.salesperson.employee_quotation_id IS
-  'ชื่อจริงของพนักงานขายฝั่ง Odoo — ใช้เติมช่อง J (employee_quotation_id) ตอน export Sale Order; NULL = ปล่อยเป็นเซลล์ว่าง';

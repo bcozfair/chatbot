@@ -36,11 +36,6 @@ BEGIN
   END IF;
 END $$;
 
-COMMENT ON COLUMN public.quotation_rules.delivery_days_qty_10  IS 'วันจัดส่งเมื่อสั่ง >= 10 ชิ้นและสต็อกไม่พอ (NULL = ไม่ใช้ tier)';
-COMMENT ON COLUMN public.quotation_rules.delivery_days_qty_20  IS 'วันจัดส่งเมื่อสั่ง >= 20 ชิ้นและสต็อกไม่พอ (NULL = ไม่ใช้ tier)';
-COMMENT ON COLUMN public.quotation_rules.delivery_days_qty_50  IS 'วันจัดส่งเมื่อสั่ง >= 50 ชิ้นและสต็อกไม่พอ (NULL = ไม่ใช้ tier)';
-COMMENT ON COLUMN public.quotation_rules.delivery_days_qty_100 IS 'วันจัดส่งเมื่อสั่ง >= 100 ชิ้นและสต็อกไม่พอ (NULL = ไม่ใช้ tier)';
-
 -- ── Seed ตามตารางที่ฝ่ายขายกำหนด ────────────────────────────────────────────
 
 -- Production 1 → 7 / 15 / 20 / 30

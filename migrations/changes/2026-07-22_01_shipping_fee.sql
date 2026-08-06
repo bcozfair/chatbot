@@ -21,9 +21,6 @@
 ALTER TABLE public.products
   ADD COLUMN IF NOT EXISTS is_system_item boolean NOT NULL DEFAULT false;
 
-COMMENT ON COLUMN public.products.is_system_item IS
-  'true = แถวที่ระบบสร้างเอง ไม่ได้มาจาก Odoo sync — ต้องถูกกรองออกจากทุก query ค้นหาสินค้า';
-
 CREATE INDEX IF NOT EXISTS idx_products_is_system_item
   ON public.products (is_system_item)
   WHERE is_system_item = true;
@@ -76,15 +73,6 @@ CREATE TABLE IF NOT EXISTS public.shipping_fee_config (
   CONSTRAINT shipping_fee_config_name        CHECK (btrim(default_item_name) <> ''),
   CONSTRAINT shipping_fee_config_ref         CHECK (btrim(product_internal_reference) <> '')
 );
-
-COMMENT ON TABLE  public.shipping_fee_config IS
-  'ค่าคงที่ของกฎค่าขนส่งอัตโนมัติ — มีได้แถวเดียว (id = 1) แก้จากหน้า Admin > ตั้งค่า > ค่าขนส่ง';
-COMMENT ON COLUMN public.shipping_fee_config.threshold_before_vat IS
-  'ยอดสินค้าก่อน VAT (หลังหักส่วนลด) ที่ต่ำกว่าค่านี้จึงคิดค่าขนส่ง';
-COMMENT ON COLUMN public.shipping_fee_config.default_item_name IS
-  'ชื่อรายการตั้งต้นที่แสดงในใบเสนอราคา — เซลล์แก้รายใบได้ ค่านี้ใช้เฉพาะตอนสร้างบรรทัดใหม่';
-COMMENT ON COLUMN public.shipping_fee_config.product_internal_reference IS
-  'ชี้ไปที่แถวใน products ที่ถือข้อมูล Odoo (internal_reference / name / group / category)';
 
 INSERT INTO public.shipping_fee_config (id) VALUES (1)
 ON CONFLICT (id) DO NOTHING;

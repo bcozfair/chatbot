@@ -45,6 +45,3 @@ END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_products_internal_reference
   ON public.products (internal_reference)
   WHERE internal_reference IS NOT NULL AND TRIM(internal_reference) <> '';
-
-COMMENT ON INDEX public.idx_products_internal_reference IS
-  'ใช้ join กับ product_stock_rules / product_moq_rules — unique เพราะเป็น key 1:1 กับสินค้า';
