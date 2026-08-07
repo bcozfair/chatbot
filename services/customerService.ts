@@ -3,7 +3,7 @@ import { pool } from '../config/db.js';
 import {
   searchCustomersByReferencePatterns,
   searchCustomersByNamePatterns,
-  getContactsByCustomerId,
+  getRelatedContactsByCustomerId,
   getCompanyAddressRows,
   getContactNamesByCustomerIds,
   getConfirmedQuotationCounts,
@@ -350,6 +350,44 @@ export function formatLineLabel(text: string | null | undefined): string {
   return trimmed;
 }
 
+
+/**
+ * ยุบ candidate ที่เป็น "บริษัทเดียวกันแต่มีหลายแถว" — ชื่อ *และ* รหัสลูกค้าเหมือนกันเป๊ะ
+ *
+ * Odoo แตกนิติบุคคลเดียวกันเป็นหลาย company_id ทำให้ picker เคยมีปุ่มที่ข้อความเหมือนกัน
+ * ทุกตัวอักษรวางซ้อนกัน เซลส์แยกไม่ออกว่าต่างกันตรงไหน ได้แต่เดา (เคสจริง 2026-08-07:
+ * "บริษัท ไพรมัส จำกัด (สำนักงานใหญ่)" A0010 โผล่ 2 ปุ่ม กดผิดปุ๊บก็ไม่เจอผู้ติดต่อที่พิมพ์มา)
+ *
+ * ⚠️ ยุบเฉพาะที่ชื่อ+รหัสตรงกันเป๊ะเท่านั้น ห้ามยุบทั้งนิติบุคคล — สาขาคนละสาขามีรหัสคนละตัว
+ *    (A000902(3) / A000902(4) ...) และเป็นคนละที่อยู่/คนละใบ เซลส์ต้องเลือกเองได้
+ *
+ * ตัวที่เก็บไว้คือตัวที่หลักฐานดีที่สุดตาม compareCandidates — และเพราะ findContactCandidates
+ * ค้นผู้ติดต่อข้ามทุก company_id ของนิติบุคคลเดียวกันแล้ว การทิ้งแถวซ้ำจึงไม่ทำให้ผู้ติดต่อหาย
+ */
+export function dedupeIdenticalCompanies(candidates: any[]): any[] {
+  const seen = new Map<string, any>();
+  for (const c of candidates) {
+    const key = `${collapseSpaces(c.item?.display_name)}|${collapseSpaces(c.item?.reference)}`;
+    const prev = seen.get(key);
+    if (!prev || compareCandidates(c, prev) < 0) seen.set(key, c);
+  }
+  return Array.from(seen.values());
+}
+
+/**
+ * ข้อความบนปุ่มเลือกบริษัท — ชื่อบริษัทอย่างเดียวไม่พอให้เซลส์ตัดสินใจ
+ *
+ * เติมรหัสลูกค้า (แยกสาขาที่ชื่อคล้ายกันได้) และผู้ติดต่อที่ตรงกับที่พิมพ์มา (ตัวชี้ขาดที่แรงที่สุด
+ * — เซลส์รู้จักลูกค้าจากชื่อคนมากกว่าจากรหัส) ปุ่มเป็น text ที่ wrap ได้ ไม่ใช่ label ของ
+ * LINE button จึงยาวหลายบรรทัดได้
+ */
+export function buildCompanyOptionLabel(c: any): string {
+  const base = formatLineLabel(c.item?.display_name);
+  const ref = String(c.item?.reference || '').trim();
+  const matched = c.evidence?.matchedContacts?.[0];
+  const head = ref ? `${base} · ${ref}` : base;
+  return matched ? `${head}\n👤 ${matched}` : head;
+}
 
 /**
  * buildDotInitialVariants
@@ -1108,7 +1146,9 @@ export async function findContactCandidates(customerId: any, contactQuery: strin
 
   const cleaned = cleanContactNameExtra(contactQuery);
 
-  const dbContacts = await getContactsByCustomerId(customerId);
+  // ค้นข้ามทุก company_id ของนิติบุคคลเดียวกัน — คนที่เซลส์หมายถึงมักอยู่ใต้รหัสสาขาอื่น
+  // (แต่ละแถวพก company_id ของตัวเองมาด้วย ผู้เรียกต้องผูกใบตามนั้น ไม่ใช่ตาม customerId ที่ส่งมา)
+  const dbContacts = await getRelatedContactsByCustomerId(customerId);
 
   if (!dbContacts || dbContacts.length === 0) {
     return [];

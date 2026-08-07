@@ -9,6 +9,7 @@
  *      customers_view.branch → alias เป็น branch_code
  */
 import { pool, type DbExecutor } from '../config/db.js';
+import { companyKeysSql, matchesKeysSql } from './companyIdentity.js';
 
 function logErr(fn: string, err: any): void {
   console.error(`[repo.${fn}]`, err?.message || err);
@@ -140,6 +141,36 @@ export async function getContactsByCustomerId(customerId: number | string): Prom
        ORDER BY contact_id`, [customerId]);
     return rows;
   } catch (err) { logErr('getContactsByCustomerId', err); return []; }
+}
+
+/**
+ * ผู้ติดต่อของ "นิติบุคคลเดียวกัน" ทั้งหมด ไม่ใช่แค่ company_id ที่ส่งมา
+ *
+ * ใช้ในเส้นทางแชท (findContactCandidates) เท่านั้น — เซลส์พิมพ์ชื่อบริษัทกว้าง ๆ มาแล้วระบบ
+ * ตกลงบริษัทได้ตัวเดียว แต่คนที่เซลส์หมายถึงอาจอยู่ใต้ company_id ของสาขาอื่นในนิติบุคคลเดียวกัน
+ * (Odoo แตกนิติบุคคลเป็นหลายรหัส — ดู db/companyIdentity.ts) ถ้าค้นแค่ company_id เดียว
+ * เซลส์จะเจอ "ไม่พบผู้ติดต่อ" ทั้งที่คนนั้นมีอยู่จริง แล้วไปต่อไม่ได้
+ *
+ * คืน company_id ของแต่ละคนมาด้วย เพราะผู้เรียกต้องผูกใบเสนอราคาเข้ากับบริษัทของคนที่เลือกจริง
+ * ไม่ใช่บริษัทที่ค้นเจอตอนแรก (ไม่งั้นคู่ (customer_id, contact_id) จะชี้แถวที่ไม่มีอยู่)
+ *
+ * เรียงให้ผู้ติดต่อของบริษัทที่ค้นเจอตอนแรกมาก่อนเสมอ — เป็นตัวเลือกที่ตรงเจตนาที่สุด
+ */
+export async function getRelatedContactsByCustomerId(customerId: number | string): Promise<any[]> {
+  try {
+    const { rows } = await pool.query(
+      `WITH me AS (
+         SELECT ${companyKeysSql('m')}
+           FROM customers_data_view m
+          WHERE m.company_id = $1
+       )
+       SELECT ${CONTACT_VIEW_COLS}, t.company_id
+         FROM customers_data_view t, me
+        WHERE t.contact_id > 0
+          AND (t.company_id = $1 OR ${matchesKeysSql('t', 'me')})
+        ORDER BY (t.company_id <> $1), t.company_id, t.contact_id`, [customerId]);
+    return rows;
+  } catch (err) { logErr('getRelatedContactsByCustomerId', err); return []; }
 }
 
 /** ผู้ติดต่อรายตัวจาก id */

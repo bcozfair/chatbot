@@ -1,12 +1,14 @@
 import { pool, withTransaction, type DbExecutor } from '../config/db.js';
-import { getCustomerByDisplayName, getFirstContact, getCompanyAddressRows, getContactById } from '../db/repositories.js';
+import { getCustomerByDisplayName, getCustomerById, getFirstContact, getCompanyAddressRows, getContactById } from '../db/repositories.js';
 import {
   findCustomerCandidates,
   findContactCandidates,
   findCustomerByContactName,
   formatLineLabel,
   cleanContactName,
-  splitCustomerContact
+  splitCustomerContact,
+  dedupeIdenticalCompanies,
+  buildCompanyOptionLabel
 } from './customerService.js';
 import { 
   createListFlexMessage, 
@@ -533,9 +535,18 @@ export async function insertDraftQuotations(
   if (companyName) {
     try {
       let custData = null;
+      // แถวที่ค้นเจอเป็น "ผู้ติดต่อคนที่ใบนี้พูดถึงจริง ๆ" หรือเป็นแค่ "แถวตัวแทนของบริษัท"
+      //
+      // 1 บริษัท = หลายแถวใน view (แถวละผู้ติดต่อ) เวลายังไม่รู้ว่าผู้ติดต่อคือใคร (สถานะ
+      // pending_*) การหยิบแถวไหนมาก็ได้แล้วเอา contact_name/เบอร์/อีเมลของแถวนั้นมาใส่
+      // = ยัดผู้ติดต่อคนอื่นให้ใบเสนอราคาแล้วทับชื่อที่เซลส์พิมพ์มาทิ้ง
+      // (เคสจริง 2026-08-07: เซลส์พิมพ์ "คุณขยัน" แต่ใบได้ "การตลาด" ซึ่งเป็นผู้ติดต่อคนแรก
+      //  ของบริษัทที่ชื่อพ้องกัน แล้วชื่อที่พิมพ์มาก็หายถาวรตั้งแต่ก่อนกดเลือกบริษัท)
+      // ธงนี้จึงกำหนดว่าแถวที่ได้มา "ใช้เป็นข้อมูลระดับบุคคลได้ไหม" — ระดับบริษัท
+      // (รหัสลูกค้า/เลขภาษี/เครดิต/ที่อยู่) ใช้ได้เสมอเพราะทุกแถวของบริษัทให้ค่าเดียวกัน
+      let custDataIsTheContact = false;
 
       // 2.1 ใช้ ID ดึงตรงจาก customers_data_view (ครอบคลุม orphan จาก sale_orders + enrich payment/type)
-      // เฉพาะ path ที่มี company_id (ID-based) → ใช้ view; path ค้นด้วยชื่อ (ด้านล่าง) คง customers เพราะเร็วกว่า
       // และ orphan มี customerId+contactId เสมอจึงเข้า path นี้ (view lookup by (company_id,contact_id) = ~3ms)
       if (customerId && contactId) {
         const custRes = await pool.query(
@@ -543,67 +554,93 @@ export async function insertDraftQuotations(
           [customerId, contactId]
         );
         custData = custRes.rows[0];
+        if (custData) custDataIsTheContact = true;   // ระบุ contact_id มาเอง = ชี้ตัวบุคคลแล้ว
       }
       if (customerId && !custData) {
         if (contactNameQuery) {
           const custRes = await pool.query(
-            'SELECT * FROM customers_data_view WHERE company_id = $1 AND TRIM(contact_name) = TRIM($2) LIMIT 1',
+            `SELECT * FROM customers_data_view WHERE company_id = $1 AND TRIM(contact_name) = TRIM($2)
+             ORDER BY contact_id LIMIT 1`,
             [customerId, contactNameQuery]
           );
           custData = custRes.rows[0];
+          if (custData) custDataIsTheContact = true; // ชื่อตรงกับที่เซลส์พิมพ์ = คนเดียวกัน
         }
         if (!custData) {
           const custRes = await pool.query(
-            'SELECT * FROM customers_data_view WHERE company_id = $1 LIMIT 1',
+            'SELECT * FROM customers_data_view WHERE company_id = $1 ORDER BY contact_id LIMIT 1',
             [customerId]
           );
-          custData = custRes.rows[0];
+          custData = custRes.rows[0];                // แถวตัวแทนบริษัทเท่านั้น — ไม่ใช่ผู้ติดต่อของใบนี้
         }
       }
 
-      // 2.2 Fallback: ค้นหาด้วยชื่อแบบ TRIM ป้องกันช่องว่างส่วนเกิน
+      // 2.2 Fallback: ยังไม่รู้ company_id → ค้นด้วยชื่อแบบ TRIM ป้องกันช่องว่างส่วนเกิน
+      // คง customers ไว้ (ไม่ใช้ view) เพราะเร็วกว่า และเป็นตารางที่มีเฉพาะบริษัทจริงจาก Odoo
+      // ซึ่งมีค่าระดับบริษัท (เครดิต/ประเภท) ครบ — แถวที่มีแต่ใน sale_orders ไม่มีค่าพวกนี้
+      // แต่ต้องมี ORDER BY เสมอ ไม่งั้นชื่อบริษัทที่ซ้ำกันหลาย company_id จะคืนแถวไม่คงที่ในแต่ละครั้ง
       if (!custData) {
         if (contactNameQuery) {
           const custRes = await pool.query(
-            'SELECT * FROM customers WHERE TRIM(customer_name) = TRIM($1) AND TRIM(contact_name) = TRIM($2) LIMIT 1',
+            `SELECT * FROM customers
+              WHERE TRIM(customer_name) = TRIM($1) AND TRIM(contact_name) = TRIM($2)
+              ORDER BY company_id, contact_id LIMIT 1`,
             [companyName, contactNameQuery]
           );
           custData = custRes.rows[0];
+          if (custData) custDataIsTheContact = true;
         }
         if (!custData) {
           const custRes = await pool.query(
-            'SELECT * FROM customers WHERE TRIM(customer_name) = TRIM($1) LIMIT 1',
+            `SELECT * FROM customers WHERE TRIM(customer_name) = TRIM($1)
+              ORDER BY company_id, contact_id LIMIT 1`,
             [companyName]
           );
-          custData = custRes.rows[0];
+          custData = custRes.rows[0];                // แถวตัวแทนบริษัทเท่านั้น
         }
       }
 
       if (custData) {
+        // ── ระดับบริษัท: ใช้ได้ไม่ว่าแถวที่ได้จะเป็นผู้ติดต่อคนไหน ──
         customerCode = custData.customer_reference || '';
         customerTaxId = custData.customer_tax_id || '';
-        contactName = custData.contact_name || contactNameQuery || '';
         paymentTerms = custData.customer_payment_terms || '';
 
-        if (custData.contact_mobile && custData.contact_mobile.trim()) {
-          contactPhone = custData.contact_mobile.trim();
-        } else if (custData.contact_phone && custData.contact_phone.trim()) {
-          contactPhone = custData.contact_phone.trim();
-        } else if (custData.phone && custData.phone.trim()) {
-          contactPhone = custData.phone.trim();
-        } else if (custData.mobile && custData.mobile.trim()) {
-          contactPhone = custData.mobile.trim();
-        }
+        // ── ระดับบุคคล: ใช้ได้เฉพาะเมื่อพิสูจน์แล้วว่าเป็นผู้ติดต่อของใบนี้จริง ──
+        // ไม่ใช่ → คงชื่อที่เซลส์พิมพ์ไว้ตามเดิม (ไม่มีให้พิมพ์ก็ปล่อยว่าง = ยังไม่รู้ว่าใคร
+        // ซึ่งตรงกับความจริง และใบสถานะ pending_* ยืนยันไม่ได้อยู่แล้ว)
+        if (custDataIsTheContact) {
+          contactName = custData.contact_name || contactNameQuery || '';
 
-        const emails = [];
-        if (custData.contact_email && custData.contact_email.trim()) {
-          emails.push(custData.contact_email.trim());
+          if (custData.contact_mobile && custData.contact_mobile.trim()) {
+            contactPhone = custData.contact_mobile.trim();
+          } else if (custData.contact_phone && custData.contact_phone.trim()) {
+            contactPhone = custData.contact_phone.trim();
+          } else if (custData.phone && custData.phone.trim()) {
+            contactPhone = custData.phone.trim();
+          } else if (custData.mobile && custData.mobile.trim()) {
+            contactPhone = custData.mobile.trim();
+          }
+
+          const emails = [];
+          if (custData.contact_email && custData.contact_email.trim()) {
+            emails.push(custData.contact_email.trim());
+          }
+          if (custData.email && custData.email.trim()) {
+            emails.push(custData.email.trim());
+          }
+          const uniqueEmails = Array.from(new Set(emails));
+          contactEmail = uniqueEmails.length > 0 ? uniqueEmails.join(', ') : '';
+        } else {
+          contactName = contactNameQuery || '';
+          // เบอร์/อีเมลของบริษัท (ไม่ใช่ของผู้ติดต่อคนใดคนหนึ่ง) ยังใช้ได้
+          if (custData.phone && custData.phone.trim()) {
+            contactPhone = custData.phone.trim();
+          } else if (custData.mobile && custData.mobile.trim()) {
+            contactPhone = custData.mobile.trim();
+          }
+          contactEmail = custData.email && custData.email.trim() ? custData.email.trim() : '';
         }
-        if (custData.email && custData.email.trim()) {
-          emails.push(custData.email.trim());
-        }
-        const uniqueEmails = Array.from(new Set(emails));
-        contactEmail = uniqueEmails.length > 0 ? uniqueEmails.join(', ') : '';
 
         // ที่อยู่ดึงจาก customers_data_view (ผ่าน getContactById) เพราะ view blend อำเภอ/ตำบลที่ขาดจาก sale_orders ล่าสุดให้
         let addrSrc: any = custData;
@@ -1162,8 +1199,8 @@ export async function processQuotationRequest(userId: string, rawCustomerQuery: 
     return createListFlexMessage(
       "🏢 เลือกบริษัทที่ถูกต้อง",
       `พบชื่อบริษัทใกล้เคียงกับ "${cleanCust}" หลายบริษัทเลยครับ กรุณาเลือกบริษัทที่ถูกต้องด้านล่างนี้ครับ 👇`,
-      customerCandidates.slice(0, 12).map((c: any) => ({
-        label: formatLineLabel(c.item.display_name),
+      dedupeIdenticalCompanies(customerCandidates).slice(0, 12).map((c: any) => ({
+        label: buildCompanyOptionLabel(c),
         data: `action=select_company&custId=${c.item.id}`,
         displayText: `เลือก ${c.item.display_name}`
       }))
@@ -1227,12 +1264,30 @@ export async function resolveContactFlow(
   if (finalCandidates.length === 1 && finalCandidates[0].score < 0.45) {
     const matchedContactName = finalCandidates[0].item.name;
     const contactId = finalCandidates[0].item.id;
-    const finalCustomerName = `${companyName} | ${matchedContactName}`;
+
+    // ผู้ติดต่อที่ค้นเจออาจอยู่ใต้ company_id ของสาขาอื่นในนิติบุคคลเดียวกัน
+    // (findContactCandidates ค้นข้ามสาขาให้ — ดู getRelatedContactsByCustomerId)
+    // ต้องผูกใบเข้ากับบริษัทของ "คนที่เลือกจริง" ไม่ใช่บริษัทที่ค้นเจอตอนแรก ไม่งั้นคู่
+    // (customer_id, contact_id) จะชี้แถวที่ไม่มีอยู่ → snapshot/ด่านตรวจ lookup ไม่เจอ
+    // เลือกผู้ติดต่อ = เลือกสาขาไปในตัว ชื่อบริษัทที่โชว์จึงต้องเปลี่ยนตามด้วย
+    let resolvedCustomerId = customerId;
+    let resolvedCompanyName = companyName;
+    const contactCompanyId = finalCandidates[0].item.company_id;
+    if (contactCompanyId && String(contactCompanyId) !== String(customerId)) {
+      const sibling = await getCustomerById(contactCompanyId);
+      if (sibling) {
+        resolvedCustomerId = contactCompanyId;
+        resolvedCompanyName = sibling.display_name || companyName;
+        console.log(`[resolveContactFlow] ผู้ติดต่อ "${matchedContactName}" อยู่ใต้บริษัทพี่น้อง → ผูกกับ ${resolvedCompanyName} (${resolvedCustomerId}) แทน ${customerId}`);
+      }
+    }
+    const finalCustomerName = `${resolvedCompanyName} | ${matchedContactName}`;
 
     // เพิ่งรู้ตัวผู้ติดต่อตรงนี้ — ด่านบนสุดตรวจได้แค่ระดับบริษัท ต้องตรวจระดับผู้ติดต่อซ้ำ
     // ก่อนเขียน DB (ครอบทั้ง updateQuotationCustomerSnapshot และ insertDraftQuotations ด้านล่าง)
+    // ใช้คู่ที่จะผูกจริง — บริษัทอาจเปลี่ยนไปเป็นสาขาอื่นจากบล็อกด้านบน
     try {
-      if (await isBlacklisted(customerId, contactId)) {
+      if (await isBlacklisted(resolvedCustomerId, contactId)) {
         return { text: buildViolationText([blacklistViolation()]) };
       }
     } catch (err) {
@@ -1243,9 +1298,9 @@ export async function resolveContactFlow(
     let quotes;
     if (existingQuoteIdsStr) {
       const ids = existingQuoteIdsStr.split(',').filter(Boolean);
-      quotes = await updateQuotationCustomerSnapshot(ids, finalCustomerName, 'draft', salesperson, customerId, contactId);
+      quotes = await updateQuotationCustomerSnapshot(ids, finalCustomerName, 'draft', salesperson, resolvedCustomerId, contactId);
     } else {
-      quotes = await insertDraftQuotations(userId, finalCustomerName, itemsForDb, 'draft', customerId, contactId);
+      quotes = await insertDraftQuotations(userId, finalCustomerName, itemsForDb, 'draft', resolvedCustomerId, contactId);
     }
 
     if (!quotes || quotes.length === 0) {
@@ -1313,30 +1368,70 @@ export async function resolveContactFlow(
     }
   }
 
-  const options: any[] = [];
-
-  if (contactCandidates.length > 0) {
-    contactCandidates.slice(0, 11).forEach((c: any) => {
-      options.push({
-        label: c.item.name.substring(0, 30),
-        data: `action=select_contact&contactId=${c.item.id}`,
-        displayText: `เลือกผู้ติดต่อ: ${c.item.name}`
-      });
-    });
+  // ═══ ปุ่มให้เลือกผู้ติดต่อ — ห้ามปล่อยให้เป็นทางตัน ═══
+  // ค้นด้วยชื่อไม่เจอ ไม่ได้แปลว่าบริษัทไม่มีผู้ติดต่อ — Fuse.js คืนศูนย์ผลลัพธ์ได้ง่าย ๆ
+  // เมื่อชื่อที่พิมพ์มาไม่ใกล้เคียงใครเลย (เช่นพิมพ์ชื่อคนที่อยู่คนละนิติบุคคล) เดิมกรณีนี้
+  // ตอบเป็นข้อความล้วนโดยไม่มีปุ่มสักปุ่ม ทั้งที่บริษัทนั้นมีผู้ติดต่ออยู่จริง เซลส์จึงไปต่อไม่ได้
+  // ต้องพิมพ์ "ยกเลิก" แล้วเริ่มใหม่ (วัดจากประวัติจริง 5 วัน: เจอ 6 เคส)
+  // → ค้นไม่เจอเมื่อไหร่ ให้ย้อนไปเอารายชื่อทั้งหมดของบริษัทมาให้เลือกแทน
+  let optionSource = contactCandidates;
+  let usedFallbackList = false;
+  if (optionSource.length === 0) {
+    optionSource = await findContactCandidates(customerId, '');
+    usedFallbackList = optionSource.length > 0;
   }
+
+  // สาขาของผู้ติดต่อแต่ละคน — จำเป็นเมื่อรายชื่อข้ามสาขา (ดู getRelatedContactsByCustomerId)
+  // ชื่อคนซ้ำกันข้ามสาขาได้จริง (เบียร์ทิพย์มี "คุณธนาพร"/"คุณอัญชลี" ทั้งที่สำนักงานใหญ่และสาขา
+  // 00001) ถ้าไม่บอกสาขา เซลส์จะเห็นปุ่มข้อความเหมือนกันเป๊ะสองปุ่มแล้วแยกไม่ออก
+  //
+  // ใช้ "รหัสลูกค้า" ไม่ใช่ชื่อบริษัท — สั้นกว่ามากจึงไม่ถูกตัดทิ้ง และเป็นตัวที่แยกสาขาได้จริง
+  // (ชื่อบริษัทของสาขาต่างกันแค่วงเล็บท้าย ซึ่งจะโดนตัดเป็นอย่างแรก)
+  const siblingIds = Array.from(new Set(
+    optionSource.slice(0, 11)
+      .map((c: any) => c.item.company_id)
+      .filter((id: any) => id && String(id) !== String(customerId))));
+  const siblingRefs = new Map<string, string>();
+  if (siblingIds.length > 0) {
+    try {
+      const { rows } = await pool.query(
+        `SELECT DISTINCT ON (company_id) company_id, customer_reference, customer_name
+           FROM customers_data_view WHERE company_id = ANY($1) ORDER BY company_id, contact_id`,
+        [siblingIds]);
+      rows.forEach((r: any) => siblingRefs.set(
+        String(r.company_id),
+        String(r.customer_reference || '').trim() || formatLineLabel(r.customer_name)));
+    } catch (err) {
+      console.error('[resolveContactFlow] fetch sibling company refs failed:', err);
+    }
+  }
+
+  const options: any[] = optionSource.slice(0, 11).map((c: any) => {
+    // ตัดเฉพาะชื่อคนที่ยาวผิดปกติ (บาง record ใส่หมายเหตุการวางบิลทั้งย่อหน้ามาเป็นชื่อ)
+    // แล้วค่อยต่อรหัสสาขา เพื่อไม่ให้ตัวแยกสาขาโดนตัดทิ้งไปด้วย
+    const name = String(c.item.name || '').slice(0, 30);
+    const branch = siblingRefs.get(String(c.item.company_id));
+    return {
+      label: branch ? `${name} · ${branch}` : name,
+      data: `action=select_contact&contactId=${c.item.id}`,
+      displayText: `เลือกผู้ติดต่อ: ${c.item.name}`
+    };
+  });
 
   // ไม่เพิ่มปุ่ม ใช้ชื่อ (Custom Contact Name) ตามคำสั่งของบริษัท เพื่อจำกัดให้เลือกเฉพาะที่มีอยู่ในฐานข้อมูลเท่านั้น
 
   let responseText = '';
   if (!contactQuery) {
-    if (contactCandidates.length > 0) {
+    if (options.length > 0) {
       responseText = `กรุณาเลือกผู้ติดต่อสำหรับบริษัท "${companyName}" จากรายการด้านล่างนี้ได้เลยครับ 👇`;
     } else {
       responseText = `ไม่พบข้อมูลผู้ติดต่อสำหรับบริษัท "${companyName}" ในระบบ\n\nรบกวนติดต่อแอดมินเพื่อเพิ่มข้อมูล หรือพิมพ์ "ยกเลิก" เพื่อยกเลิกใบเสนอราคาครับ`;
     }
   } else {
-    if (contactCandidates.length > 0) {
-      responseText = `ไม่พบชื่อผู้ติดต่อ "${contactQuery}" ที่ตรงกับฐานข้อมูลของบริษัท "${companyName}" ครับ\n\nกรุณาเลือกรายชื่อผู้ติดต่อจากรายการด้านล่างนี้ หรือติดต่อแอดมินเพื่อเพิ่มข้อมูลก่อนนะครับ 👇`;
+    if (options.length > 0) {
+      responseText = usedFallbackList
+        ? `ไม่พบชื่อผู้ติดต่อ "${contactQuery}" ในฐานข้อมูลของบริษัท "${companyName}" ครับ\n\nนี่คือรายชื่อผู้ติดต่อทั้งหมดที่มีอยู่ กรุณาเลือกจากรายการด้านล่าง หรือติดต่อแอดมินเพื่อเพิ่มข้อมูลครับ 👇`
+        : `ไม่พบชื่อผู้ติดต่อ "${contactQuery}" ที่ตรงกับฐานข้อมูลของบริษัท "${companyName}" ครับ\n\nกรุณาเลือกรายชื่อผู้ติดต่อจากรายการด้านล่างนี้ หรือติดต่อแอดมินเพื่อเพิ่มข้อมูลก่อนนะครับ 👇`;
     } else {
       responseText = `ไม่พบชื่อผู้ติดต่อ "${contactQuery}" ที่ตรงกับฐานข้อมูลของบริษัท "${companyName}" ในฐานข้อมูลครับ\n\nรบกวนติดต่อแอดมินเพื่อเพิ่มข้อมูลก่อนนะครับ`;
     }

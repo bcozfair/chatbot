@@ -31,8 +31,9 @@ import { findProduct } from '../services/productService.js';
 import { 
   findCustomerCandidates,
   findContactCandidates,
-  formatLineLabel,
-  splitCustomerContact
+  splitCustomerContact,
+  dedupeIdenticalCompanies,
+  buildCompanyOptionLabel
 } from '../services/customerService.js';
 import {
   confirmQuotationAtomic,
@@ -2046,8 +2047,8 @@ export async function handleEvent(
                   console.error("Error updating customer details in pending_company multi-candidate:", err);
                 }
 
-                const options = customerCandidates.slice(0, 12).map((c: any) => ({
-                  label: formatLineLabel(c.item.display_name),
+                const options = dedupeIdenticalCompanies(customerCandidates).slice(0, 12).map((c: any) => ({
+                  label: buildCompanyOptionLabel(c),
                   data: `action=select_company&custId=${c.item.id}`,
                   displayText: `เลือก ${c.item.display_name}`
                 }));

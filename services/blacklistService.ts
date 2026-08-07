@@ -11,6 +11,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { pool } from '../config/db.js';
+import {
+  companyKeysSql,
+  contactKeySql,
+  matchesKeysSql,
+  keysOverlapSql,
+} from '../db/companyIdentity.js';
 
 /**
  * ในตาราง blacklist "บล็อกทั้งบริษัท" เขียนด้วย contact_id = NULL เท่านั้น
@@ -25,69 +31,10 @@ function normalizeId(value: unknown): number | null {
   return Number.isInteger(n) && n > 0 ? n : null;
 }
 
-// ═════════════════════ นิยาม "เป็นรายเดียวกัน" ที่ใช้ร่วมทั้งไฟล์ ═════════════════════
-//
-// ── ทำไมต้องขยาย ไม่เทียบ company_id ตรง ๆ ──
-// Odoo แตกนิติบุคคลเดียวกันออกเป็นหลาย company_id เช่น "บริษัท ไพรมัส จำกัด" มีทั้ง
-// company_id 1 (A/00000), 969120 (A0010), 624570 (N/03953), 1001848 (สาขา 00012) ...
-// วัดจากข้อมูลจริง: เลขภาษี 2,021 เลขผูกกับ company_id มากกว่า 1 ตัว รวม 4,929 รหัส
-// มากสุด 50 รหัสต่อนิติบุคคลเดียว → บล็อกด้วย company_id ตรง ๆ เซลล์เลือกอีกรหัสก็หลุดทันที
-// (เกิดขึ้นจริงแล้ว 2026-08-07: บล็อก company_id 1 แต่ใบออกด้วย company_id 969120)
-//
-// และชั้นผู้ติดต่อก็มีปัญหาเดียวกัน — Odoo ให้ contact_id คนละเลขกับ "คนคนเดียวกัน"
-// ที่อยู่ใต้คนละ company_id เช่น "คุณสนธยา" เป็น contact 973133 ใต้ company 435106
-// และ contact 984909 ใต้ company 435114 ทั้งที่เลขภาษีเดียวกัน
-// วัดได้ 1,081 เคสที่ชื่อผู้ติดต่อเดียวกันโผล่ใต้หลาย company_id ในนิติบุคคลเดียวกัน
-// และทั้ง 1,081 เคสมี contact_id ต่างกันหมด ไม่มีเคสไหนใช้เลขเดียวกันเลย
-//
-// ── กติกา ──
-// บริษัท : ตรงกันแค่ข้อใดข้อหนึ่งใน 3 ข้อถือว่าเป็นรายเดียวกัน — เลขผู้เสียภาษี / รหัสอ้างอิง / ชื่อ
-// ผู้ติดต่อ: ชื่อผู้ติดต่อตรงกัน *ภายในกลุ่มบริษัทข้างบนแล้วเท่านั้น*
-//
-// ── ทำไมยุบเป็น array แทนที่จะ JOIN cdv กับตัวเอง ──
-// เคยเขียนเป็น `cdv q JOIN cdv t ON (เงื่อนไขตรงกัน)` แล้ววัดได้ 1,091 ms เพราะ planner
-// ตัดความสัมพันธ์กับตาราง blacklist ทิ้ง (de-correlate) เปลี่ยน EXISTS เป็น hashed SubPlan
-// ที่ต้อง scan cdv ทั้ง 82k แถวก่อนเสมอ ไม่ว่าบัญชีดำจะมีกี่แถว
-// รูปแบบปัจจุบันคือ "ยุบคีย์ของบริษัทเป็น array ด้วย index scan แล้วค่อยเทียบ array"
-// ทุกขั้นจึงเป็น index scan แน่นอน — วัดได้ 0.98 ms อ่านแค่ 28 buffers (ของเดิม 9,367)
-
-/** ยุบ "คีย์บ่งชี้นิติบุคคล" ของบริษัทหนึ่งเป็น array — ค่าว่างถูกคัดทิ้งก่อนเสมอ */
-function companyKeysSql(c: string): string {
-  return `
-    array_agg(DISTINCT NULLIF(TRIM(${c}.customer_tax_id),''))    FILTER (WHERE NULLIF(TRIM(${c}.customer_tax_id),'')    IS NOT NULL) AS taxes,
-    array_agg(DISTINCT NULLIF(TRIM(${c}.customer_reference),'')) FILTER (WHERE NULLIF(TRIM(${c}.customer_reference),'') IS NOT NULL) AS refs,
-    array_agg(DISTINCT NULLIF(TRIM(${c}.customer_name),''))      FILTER (WHERE NULLIF(TRIM(${c}.customer_name),'')      IS NOT NULL) AS nms`;
-}
-
-/**
- * ยุบ "ชื่อผู้ติดต่อที่เจาะจง" เป็น array (0 หรือ 1 ตัว) — `pin` คือเงื่อนไขเลือกแถวผู้ติดต่อ
- *
- * ⚠️ ค่าว่างและ 'none' ห้ามหลุดเข้ามา — 'none' คือค่าที่ Odoo ใส่แทนผู้ติดต่อที่ไม่มีชื่อ
- *    (4,397 แถว) รวมกับแถวที่ชื่อว่างเป็น 8,168 จาก 81,994 แถว ถ้าปล่อยให้ match กันเอง
- *    การบล็อกผู้ติดต่อไร้ชื่อคนเดียวจะกลายเป็นบล็อกผู้ติดต่อไร้ชื่อทั้งนิติบุคคล
- *    ซึ่งไม่ใช่สิ่งที่แอดมินสั่ง
- */
-function contactKeySql(c: string, pin: string): string {
-  return `
-    array_agg(DISTINCT NULLIF(TRIM(${c}.contact_name),'')) FILTER (
-      WHERE ${pin}
-        AND NULLIF(TRIM(${c}.contact_name),'') IS NOT NULL
-        AND lower(TRIM(${c}.contact_name)) <> 'none') AS cnms`;
-}
-
-/** แถว `t` ของ cdv เป็นนิติบุคคลเดียวกับชุดคีย์ `k` หรือไม่ */
-function matchesKeysSql(t: string, k: string): string {
-  return `(
-       NULLIF(TRIM(${t}.customer_tax_id),'')    = ANY(${k}.taxes)
-    OR NULLIF(TRIM(${t}.customer_reference),'') = ANY(${k}.refs)
-    OR NULLIF(TRIM(${t}.customer_name),'')      = ANY(${k}.nms)
-  )`;
-}
-
-/** ชุดคีย์สองชุดชี้ไปนิติบุคคลเดียวกันหรือไม่ */
-function keysOverlapSql(a: string, b: string): string {
-  return `(${a}.taxes && ${b}.taxes OR ${a}.refs && ${b}.refs OR ${a}.nms && ${b}.nms)`;
-}
+// นิยาม "เป็นนิติบุคคลเดียวกัน" ย้ายไป db/companyIdentity.ts แล้ว (import ด้านบน)
+// เพราะฝั่งค้นผู้ติดต่อให้เซลส์เลือกต้องใช้กติกาชุดเดียวกันเป๊ะ — ถ้านิยามแยกกันสองที่
+// จะเกิดช่องที่ "ค้นเจอแต่ด่านไม่เห็น" (เกิดขึ้นจริงแล้ว 2026-08-07: บล็อก company_id 1
+// แต่ใบออกด้วย company_id 969120 ซึ่งเป็นนิติบุคคลเดียวกัน)
 
 /**
  * CTE `bl` = ทุกแถวในบัญชีดำ พร้อมคีย์ของนิติบุคคลที่แถวนั้นชี้ถึง
