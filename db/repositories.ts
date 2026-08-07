@@ -51,15 +51,33 @@ const CDV_CONTACT_SUBQ =
 const CUSTOMER_VIEW_COLS =
   'id, display_name, reference, tax_id, phone, email, branch AS branch_code, salesperson, customer_type, customer_payment_terms';
 
-/** ค้นหาลูกค้าจาก reference codes (ILIKE ANY) — ใช้ใน reference fast-path */
+/**
+ * ค้นหาลูกค้าจาก reference codes (ILIKE ANY) — ใช้ใน reference fast-path
+ *
+ * ⚠️ ORDER BY ไม่ใช่เรื่องความสวยงาม แต่กันของจริงหลุด LIMIT
+ * รหัสอ้างอิงของ Odoo ใช้ base เดียวกันทั้งเครือ เช่น A001851(1..50) = 50 นิติบุคคลในเครือ
+ * ไทยเบฟ เมื่อเซลส์พิมพ์ "A001851(4)" ระบบจะค้นด้วยทั้ง A001851(4) / A001851 / 001851
+ * (ดู extractReferenceCodes) → ILIKE ชนทั้งเครือ แล้ว LIMIT ตัดทิ้งแบบสุ่ม
+ * เคสจริง 2026-08-07: บริษัทที่รหัสตรงเป๊ะถูกตัดออก เหลือแต่บริษัทแม่ที่ตรงกับ base
+ * ระบบเลยออกใบผิดบริษัท
+ *
+ * แถวที่รหัสตรงเป๊ะ (เทียบแบบตัดอักขระคั่น) จึงต้องมาก่อนเสมอ แล้วค่อยเรียงตัวสั้นก่อน
+ * (รหัสสั้น = ใกล้เคียงตัวที่พิมพ์มามากกว่า ตัวยาวคือสาขาที่ห้อยเลขต่อท้าย)
+ */
 export async function searchCustomersByReferencePatterns(refs: string[], limit = 30): Promise<any[]> {
   if (!refs.length) return [];
   try {
     const patterns = refs.map(r => `%${r}%`);
+    const exact = refs.map(r => r.toLowerCase().replace(/[^0-9a-z]/g, '')).filter(Boolean);
     const { rows } = await pool.query(
       `SELECT id, display_name, reference, branch AS branch_code, salesperson
-       FROM (${CDV_COMPANY_SUBQ}) v WHERE v.reference ILIKE ANY($1::text[]) LIMIT $2`,
-      [patterns, limit]);
+         FROM (${CDV_COMPANY_SUBQ}) v
+        WHERE v.reference ILIKE ANY($1::text[])
+           OR lower(regexp_replace(v.reference, '[^0-9A-Za-z]', '', 'g')) = ANY($2::text[])
+        ORDER BY (lower(regexp_replace(v.reference, '[^0-9A-Za-z]', '', 'g')) = ANY($2::text[])) DESC,
+                 length(v.reference), v.reference
+        LIMIT $3`,
+      [patterns, exact, limit]);
     return rows;
   } catch (err) { logErr('searchCustomersByReferencePatterns', err); return []; }
 }

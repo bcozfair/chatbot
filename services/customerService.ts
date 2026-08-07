@@ -606,6 +606,20 @@ export async function findCustomerCandidates(customerQuery: string, salesperson:
       } else {
         console.log(`[findCustomerCandidates] Found ${agreeing.length}/${refData.length} candidates by reference codes (Fast-path, ชื่อสอดคล้อง)!`);
 
+        // ═══ รหัสที่เซลส์พิมพ์ "ตรงตัวรวมวงเล็บสาขา" ต้องชนะ base ที่ระบบแตกเอง ═══
+        // extractReferenceCodes แตก "A001851(4)" ออกเป็น A001851(4) + A001851 + 001851
+        // ทั้งสาขาและบริษัทแม่จึง "ตรงเป๊ะ" พร้อมกัน ได้ 0.0 เท่ากัน แล้ว auto-select ก็ไม่ทำงาน
+        // (gap 0) หรือแย่กว่านั้นคือบริษัทแม่ขึ้นก่อนแล้วออกใบผิดบริษัท
+        // → ถ้าเซลส์ระบุเลขสาขามาและมีบริษัทที่รหัสตรงทั้งวงเล็บ ให้ตัวนั้นชนะเดี่ยว ๆ
+        const branchRefsClean = refArray
+          .filter(r => /\(\d+\)\s*$/.test(r))
+          .map(r => r.toLowerCase().replace(/[^a-z0-9]/g, ''))
+          .filter(Boolean);
+        const cleanRefOf = (c: any) =>
+          String(c.reference || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const hasBranchExact = branchRefsClean.length > 0
+          && agreeing.some((c: any) => branchRefsClean.includes(cleanRefOf(c)));
+
         const candidates = agreeing.map((c: any) => {
           const refLower = c.reference ? c.reference.toLowerCase().trim() : '';
           const refClean = refLower.replace(/[^a-z0-9]/g, '');
@@ -619,7 +633,11 @@ export async function findCustomerCandidates(customerQuery: string, salesperson:
           });
 
           if (isExact) {
-            score = 0.0; // ตรงเป๊ะ
+            // ตรงเป๊ะ — แต่ถ้ามีตัวที่ตรงถึงระดับสาขาอยู่ ตัวที่ตรงแค่ base ต้องถอยให้
+            // (0.06 > gate 0.05 จึงถ่างพอให้ auto-select เลือกสาขาที่ถูกได้)
+            score = (!hasBranchExact || branchRefsClean.includes(refClean))
+              ? 0.0
+              : NAME_ONLY_DEMOTED_SCORE;
           } else {
             // fuzzy (สาขา/เลขท้ายห้อย) ยอมเฉพาะรหัสที่จำเพาะพอ — มีตัวอักษรนำ หรือยาว ≥6
             // เลขสั้นๆ substring แล้วชนมั่วข้ามบริษัท
