@@ -39,9 +39,12 @@ import { confirmQuotationAtomic, enrichQuotationData, buildItemSnapshots } from 
 import {
   listBlacklist,
   addBlacklistEntry,
+  updateBlacklistEntry,
   removeBlacklistEntry,
   findBlockedCompanyIds,
   findBlockedContacts,
+  listRelatedCompanies,
+  listRelatedContacts,
 } from './services/blacklistService.js';
 import {
   buildOdooSaleOrderRows,
@@ -1820,6 +1823,30 @@ app.post('/api/admin/blacklist', adminAuthMiddleware, requireRole('admin', 'user
   }
 });
 
+app.put('/api/admin/blacklist/:id', adminAuthMiddleware, requireRole('admin', 'user'), express.json(), async (req: any, res: any) => {
+  const targetId = Number(req.params.id);
+  try {
+    if (!Number.isInteger(targetId)) {
+      return res.status(400).json({ error: 'รหัสรายการไม่ถูกต้อง' });
+    }
+
+    const updated = await updateBlacklistEntry(targetId, {
+      contactId: req.body?.contactId,
+      reason: req.body?.reason,
+    });
+    if (!updated) {
+      return res.status(404).json({ error: 'ไม่พบรายการที่ต้องการแก้ไข' });
+    }
+    res.json({ success: true });
+  } catch (err: any) {
+    if (err?.code === '23505') {
+      return res.status(409).json({ error: 'มีรายการที่ระงับขอบเขตนี้อยู่แล้ว' });
+    }
+    console.error("PUT /api/admin/blacklist error:", err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
 app.delete('/api/admin/blacklist/:id', adminAuthMiddleware, requireRole('admin', 'user'), async (req: any, res: any) => {
   const targetId = Number(req.params.id);
   try {
@@ -1845,6 +1872,27 @@ app.get('/api/admin/blacklist/customers', adminAuthMiddleware, requireRole('admi
     res.json(rows.map((r: any) => ({ id: r.id, display_name: r.display_name, reference: r.reference })));
   } catch (err: any) {
     console.error("GET /api/admin/blacklist/customers error:", err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// รหัสบริษัททั้งหมดที่จะถูกครอบถ้าบล็อกรหัสนี้ — ให้แอดมินเห็นก่อนกดบันทึก
+app.get('/api/admin/blacklist/customers/:id/related', adminAuthMiddleware, requireRole('admin', 'user'), async (req: any, res: any) => {
+  try {
+    res.json(await listRelatedCompanies(req.params.id));
+  } catch (err: any) {
+    console.error("GET /api/admin/blacklist/customers/:id/related error:", err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// คู่ (บริษัท, ผู้ติดต่อ) ที่จะถูกครอบเมื่อเลือก "ระงับเฉพาะผู้ติดต่อ" — ชั้นผู้ติดต่อขยายด้วยชื่อ
+// แอดมินจึงต้องเห็นก่อนกดบันทึกเหมือนกัน (ดู listRelatedContacts)
+app.get('/api/admin/blacklist/customers/:id/related-contacts', adminAuthMiddleware, requireRole('admin', 'user'), async (req: any, res: any) => {
+  try {
+    res.json(await listRelatedContacts(req.params.id, req.query.contactId));
+  } catch (err: any) {
+    console.error("GET /api/admin/blacklist/customers/:id/related-contacts error:", err);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });

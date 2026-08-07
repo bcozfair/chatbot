@@ -25,6 +25,90 @@ function normalizeId(value: unknown): number | null {
   return Number.isInteger(n) && n > 0 ? n : null;
 }
 
+// ═════════════════════ นิยาม "เป็นรายเดียวกัน" ที่ใช้ร่วมทั้งไฟล์ ═════════════════════
+//
+// ── ทำไมต้องขยาย ไม่เทียบ company_id ตรง ๆ ──
+// Odoo แตกนิติบุคคลเดียวกันออกเป็นหลาย company_id เช่น "บริษัท ไพรมัส จำกัด" มีทั้ง
+// company_id 1 (A/00000), 969120 (A0010), 624570 (N/03953), 1001848 (สาขา 00012) ...
+// วัดจากข้อมูลจริง: เลขภาษี 2,021 เลขผูกกับ company_id มากกว่า 1 ตัว รวม 4,929 รหัส
+// มากสุด 50 รหัสต่อนิติบุคคลเดียว → บล็อกด้วย company_id ตรง ๆ เซลล์เลือกอีกรหัสก็หลุดทันที
+// (เกิดขึ้นจริงแล้ว 2026-08-07: บล็อก company_id 1 แต่ใบออกด้วย company_id 969120)
+//
+// และชั้นผู้ติดต่อก็มีปัญหาเดียวกัน — Odoo ให้ contact_id คนละเลขกับ "คนคนเดียวกัน"
+// ที่อยู่ใต้คนละ company_id เช่น "คุณสนธยา" เป็น contact 973133 ใต้ company 435106
+// และ contact 984909 ใต้ company 435114 ทั้งที่เลขภาษีเดียวกัน
+// วัดได้ 1,081 เคสที่ชื่อผู้ติดต่อเดียวกันโผล่ใต้หลาย company_id ในนิติบุคคลเดียวกัน
+// และทั้ง 1,081 เคสมี contact_id ต่างกันหมด ไม่มีเคสไหนใช้เลขเดียวกันเลย
+//
+// ── กติกา ──
+// บริษัท : ตรงกันแค่ข้อใดข้อหนึ่งใน 3 ข้อถือว่าเป็นรายเดียวกัน — เลขผู้เสียภาษี / รหัสอ้างอิง / ชื่อ
+// ผู้ติดต่อ: ชื่อผู้ติดต่อตรงกัน *ภายในกลุ่มบริษัทข้างบนแล้วเท่านั้น*
+//
+// ── ทำไมยุบเป็น array แทนที่จะ JOIN cdv กับตัวเอง ──
+// เคยเขียนเป็น `cdv q JOIN cdv t ON (เงื่อนไขตรงกัน)` แล้ววัดได้ 1,091 ms เพราะ planner
+// ตัดความสัมพันธ์กับตาราง blacklist ทิ้ง (de-correlate) เปลี่ยน EXISTS เป็น hashed SubPlan
+// ที่ต้อง scan cdv ทั้ง 82k แถวก่อนเสมอ ไม่ว่าบัญชีดำจะมีกี่แถว
+// รูปแบบปัจจุบันคือ "ยุบคีย์ของบริษัทเป็น array ด้วย index scan แล้วค่อยเทียบ array"
+// ทุกขั้นจึงเป็น index scan แน่นอน — วัดได้ 0.98 ms อ่านแค่ 28 buffers (ของเดิม 9,367)
+
+/** ยุบ "คีย์บ่งชี้นิติบุคคล" ของบริษัทหนึ่งเป็น array — ค่าว่างถูกคัดทิ้งก่อนเสมอ */
+function companyKeysSql(c: string): string {
+  return `
+    array_agg(DISTINCT NULLIF(TRIM(${c}.customer_tax_id),''))    FILTER (WHERE NULLIF(TRIM(${c}.customer_tax_id),'')    IS NOT NULL) AS taxes,
+    array_agg(DISTINCT NULLIF(TRIM(${c}.customer_reference),'')) FILTER (WHERE NULLIF(TRIM(${c}.customer_reference),'') IS NOT NULL) AS refs,
+    array_agg(DISTINCT NULLIF(TRIM(${c}.customer_name),''))      FILTER (WHERE NULLIF(TRIM(${c}.customer_name),'')      IS NOT NULL) AS nms`;
+}
+
+/**
+ * ยุบ "ชื่อผู้ติดต่อที่เจาะจง" เป็น array (0 หรือ 1 ตัว) — `pin` คือเงื่อนไขเลือกแถวผู้ติดต่อ
+ *
+ * ⚠️ ค่าว่างและ 'none' ห้ามหลุดเข้ามา — 'none' คือค่าที่ Odoo ใส่แทนผู้ติดต่อที่ไม่มีชื่อ
+ *    (4,397 แถว) รวมกับแถวที่ชื่อว่างเป็น 8,168 จาก 81,994 แถว ถ้าปล่อยให้ match กันเอง
+ *    การบล็อกผู้ติดต่อไร้ชื่อคนเดียวจะกลายเป็นบล็อกผู้ติดต่อไร้ชื่อทั้งนิติบุคคล
+ *    ซึ่งไม่ใช่สิ่งที่แอดมินสั่ง
+ */
+function contactKeySql(c: string, pin: string): string {
+  return `
+    array_agg(DISTINCT NULLIF(TRIM(${c}.contact_name),'')) FILTER (
+      WHERE ${pin}
+        AND NULLIF(TRIM(${c}.contact_name),'') IS NOT NULL
+        AND lower(TRIM(${c}.contact_name)) <> 'none') AS cnms`;
+}
+
+/** แถว `t` ของ cdv เป็นนิติบุคคลเดียวกับชุดคีย์ `k` หรือไม่ */
+function matchesKeysSql(t: string, k: string): string {
+  return `(
+       NULLIF(TRIM(${t}.customer_tax_id),'')    = ANY(${k}.taxes)
+    OR NULLIF(TRIM(${t}.customer_reference),'') = ANY(${k}.refs)
+    OR NULLIF(TRIM(${t}.customer_name),'')      = ANY(${k}.nms)
+  )`;
+}
+
+/** ชุดคีย์สองชุดชี้ไปนิติบุคคลเดียวกันหรือไม่ */
+function keysOverlapSql(a: string, b: string): string {
+  return `(${a}.taxes && ${b}.taxes OR ${a}.refs && ${b}.refs OR ${a}.nms && ${b}.nms)`;
+}
+
+/**
+ * CTE `bl` = ทุกแถวในบัญชีดำ พร้อมคีย์ของนิติบุคคลที่แถวนั้นชี้ถึง
+ *
+ * ⚠️ ต้องเป็น CROSS JOIN LATERAL — LATERAL บังคับให้ `c.company_id = b.company_id`
+ *    เป็น index cond เสมอ planner จะเอาไปแปลงเป็น hashed subplan ที่ scan ทั้งตารางไม่ได้
+ *
+ * ตาราง blacklist เล็ก (หลักสิบ) การยิง index scan ต่อแถวจึงถูกกว่า scan cdv รอบเดียวมาก
+ */
+const BLACKLIST_KEYS_CTE = `
+  bl AS (
+    SELECT b.company_id, b.contact_id, k.taxes, k.refs, k.nms, k.cnms
+      FROM public.quotation_blacklist b
+      CROSS JOIN LATERAL (
+        SELECT ${companyKeysSql('c')},
+               ${contactKeySql('c', 'c.contact_id = b.contact_id')}
+          FROM public.customers_data_view c
+         WHERE c.company_id = b.company_id
+      ) k
+  )`;
+
 /**
  * ลูกค้ารายนี้ถูกห้ามเสนอราคาหรือไม่
  *
@@ -43,11 +127,27 @@ export async function isBlacklisted(
 
   const contact = normalizeId(contactId);
 
-  // contact_id = $2 เมื่อ $2 เป็น NULL จะได้ผลลัพธ์ NULL (ไม่ใช่ true) → เหลือแค่สาขา IS NULL
-  // ซึ่งเป็นพฤติกรรมที่ต้องการพอดี: ไม่รู้ผู้ติดต่อ = ตรวจได้แค่ระดับบริษัท
+  // เงื่อนไขท่อนล่างอ่านว่า "แถวนี้กินถึงผู้ติดต่อรายนี้ไหม":
+  //   contact_id IS NULL         → แถวระดับบริษัท กินทุกคนอยู่แล้ว
+  //   ตรงทั้ง company_id/contact_id → คนเดียวกันแบบไม่ต้องเดา
+  //   me.cnms && bl.cnms          → คนเดียวกันที่อยู่คนละรหัสบริษัทในนิติบุคคลเดียวกัน
+  //
+  // ไม่รู้ผู้ติดต่อ (contact เป็น null) → me.cnms เป็น NULL ผลของ && เป็น NULL ไม่ใช่ true
+  // จึงเหลือตรวจได้แค่ระดับบริษัท ซึ่งเป็นพฤติกรรมที่ต้องการพอดี
   const { rowCount } = await pool.query(
-    `SELECT 1 FROM public.quotation_blacklist
-      WHERE company_id = $1 AND (contact_id IS NULL OR contact_id = $2)
+    `WITH me AS (
+       SELECT ${companyKeysSql('m')},
+              ${contactKeySql('m', 'm.contact_id = $2::int')}
+         FROM public.customers_data_view m
+        WHERE m.company_id = $1
+     ),
+     ${BLACKLIST_KEYS_CTE}
+     SELECT 1
+       FROM bl, me
+      WHERE (bl.company_id = $1 OR ${keysOverlapSql('me', 'bl')})
+        AND (bl.contact_id IS NULL
+             OR (bl.company_id = $1 AND bl.contact_id = $2::int)
+             OR me.cnms && bl.cnms)
       LIMIT 1`,
     [company, contact]
   );
@@ -69,8 +169,16 @@ export async function findBlockedCompanyIds(companyIds: unknown[]): Promise<Set<
   if (ids.length === 0) return new Set();
 
   const { rows } = await pool.query(
-    `SELECT DISTINCT company_id FROM public.quotation_blacklist
-      WHERE contact_id IS NULL AND company_id = ANY($1::int[])`,
+    `WITH ${BLACKLIST_KEYS_CTE}
+     SELECT DISTINCT u.company_id
+       FROM unnest($1::int[]) AS u(company_id)
+       CROSS JOIN LATERAL (
+         SELECT ${companyKeysSql('m')}
+           FROM public.customers_data_view m
+          WHERE m.company_id = u.company_id
+       ) me
+       JOIN bl ON bl.contact_id IS NULL
+              AND (bl.company_id = u.company_id OR ${keysOverlapSql('me', 'bl')})`,
     [ids]
   );
 
@@ -82,6 +190,10 @@ export async function findBlockedCompanyIds(companyIds: unknown[]): Promise<Set<
  *
  * wholeCompany = true → ผู้ติดต่อทุกคนของบริษัทนี้ถูกระงับ (ฝั่งเรียกไม่ต้องดู contactIds อีก)
  * contactIds   = ผู้ติดต่อที่ถูกระงับเป็นรายคน
+ *
+ * ⚠️ contactIds ต้องเป็นรหัสของ "บริษัทที่ถาม" ($1) เท่านั้น ห้ามคืน contact_id ในบัญชีดำดิบ ๆ
+ *    เพราะรายการนั้นอาจถูกบันทึกไว้ใต้รหัสบริษัทพี่น้องคนละตัว แล้ว contact_id ของมัน
+ *    จะไม่มีวันตรงกับรหัสในรายชื่อที่ฝั่งเรียกกำลังจะเอาไปติดป้าย → ป้ายไม่ขึ้นทั้งที่โดนบล็อกจริง
  */
 export async function findBlockedContacts(
   companyId: unknown
@@ -89,8 +201,28 @@ export async function findBlockedContacts(
   const company = normalizeId(companyId);
   if (company === null) return { wholeCompany: false, contactIds: new Set() };
 
+  // NULL หนึ่งแถว = ถูกระงับทั้งบริษัท / แถวที่เหลือ = รหัสผู้ติดต่อของบริษัทนี้ที่โดนรายคน
   const { rows } = await pool.query(
-    'SELECT contact_id FROM public.quotation_blacklist WHERE company_id = $1',
+    `WITH ${BLACKLIST_KEYS_CTE},
+     me AS (
+       SELECT ${companyKeysSql('m')}
+         FROM public.customers_data_view m
+        WHERE m.company_id = $1
+     ),
+     hit AS (
+       SELECT bl.* FROM bl, me
+        WHERE bl.company_id = $1 OR ${keysOverlapSql('me', 'bl')}
+     )
+     SELECT DISTINCT contact_id FROM (
+       SELECT NULL::int AS contact_id FROM hit WHERE hit.contact_id IS NULL
+       UNION ALL
+       SELECT q.contact_id
+         FROM hit
+         JOIN public.customers_data_view q ON q.company_id = $1
+        WHERE hit.contact_id IS NOT NULL
+          AND ((hit.company_id = $1 AND q.contact_id = hit.contact_id)
+               OR NULLIF(TRIM(q.contact_name),'') = ANY(hit.cnms))
+     ) x`,
     [company]
   );
 
@@ -105,11 +237,98 @@ export async function findBlockedContacts(
 
 // ═══════════════════════════ หน้าจัดการฝั่งแอดมิน ═══════════════════════════
 
+export interface RelatedCompany {
+  company_id: number;
+  display_name: string | null;
+  reference: string | null;
+  tax_id: string | null;
+}
+
+/**
+ * รหัสบริษัททั้งหมดที่จะถูกครอบถ้าบล็อก companyId นี้ (รวมตัวมันเอง)
+ *
+ * มีไว้ให้หน้าแอดมินโชว์ก่อนกดบันทึก — เกณฑ์ "ชื่อตรงกัน" ครอบกว้างกว่าที่คนคาด
+ * โดยเฉพาะลูกค้าที่บันทึกชื่อเป็นชื่อบุคคล ("คุณไก่" ผูก 4 รหัสที่เป็นคนละคน)
+ * ถ้าไม่โชว์ แอดมินจะไม่มีทางรู้ว่ากดครั้งเดียวแล้วโดนใครบ้าง
+ *
+ * ตรงนี้ scan cdv รอบเดียวโดยตั้งใจ (~85 ms) — คำถาม "มีใครบ้าง" ไม่มี index รองรับ
+ * ต่างจากด่านตรวจที่ถามแค่ "รายนี้โดนไหม" ราคานี้จ่ายเฉพาะตอนแอดมินเปิดดู ไม่อยู่ในเส้นทางแชท
+ */
+export async function listRelatedCompanies(companyId: unknown): Promise<RelatedCompany[]> {
+  const company = normalizeId(companyId);
+  if (company === null) return [];
+
+  const { rows } = await pool.query(
+    `WITH me AS (
+       SELECT ${companyKeysSql('m')}
+         FROM public.customers_data_view m
+        WHERE m.company_id = $1
+     )
+     SELECT DISTINCT ON (t.company_id)
+            t.company_id,
+            NULLIF(TRIM(t.customer_name),'')      AS display_name,
+            NULLIF(TRIM(t.customer_reference),'') AS reference,
+            NULLIF(TRIM(t.customer_tax_id),'')    AS tax_id
+       FROM public.customers_data_view t, me
+      WHERE t.company_id = $1 OR ${matchesKeysSql('t', 'me')}
+      ORDER BY t.company_id, t.contact_id`,
+    [company]
+  );
+  return rows as RelatedCompany[];
+}
+
+export interface RelatedContact {
+  company_id: number;
+  contact_id: number;
+  contact_name: string | null;
+  company_name: string | null;
+  reference: string | null;
+}
+
+/**
+ * คู่ (บริษัท, ผู้ติดต่อ) ทั้งหมดที่จะถูกครอบถ้าบล็อกเฉพาะผู้ติดต่อรายนี้
+ *
+ * คู่กับ listRelatedCompanies แต่ใช้ตอนแอดมินเลือก "ระงับเฉพาะผู้ติดต่อ" — จำเป็นเพราะ
+ * การขยายชั้นผู้ติดต่ออาศัยชื่อ แอดมินต้องเห็นว่าไปโดนใครใต้รหัสไหนบ้างก่อนกดบันทึก
+ *
+ * คืนอย่างน้อยหนึ่งแถวเสมอเมื่อคู่นั้นมีอยู่จริง เพราะเงื่อนไขแรกคือตัวมันเอง
+ */
+export async function listRelatedContacts(
+  companyId: unknown,
+  contactId: unknown
+): Promise<RelatedContact[]> {
+  const company = normalizeId(companyId);
+  const contact = normalizeId(contactId);
+  if (company === null || contact === null) return [];
+
+  const { rows } = await pool.query(
+    `WITH me AS (
+       SELECT ${companyKeysSql('m')},
+              ${contactKeySql('m', 'm.contact_id = $2::int')}
+         FROM public.customers_data_view m
+        WHERE m.company_id = $1
+     )
+     SELECT t.company_id,
+            t.contact_id,
+            NULLIF(TRIM(t.contact_name),'')       AS contact_name,
+            NULLIF(TRIM(t.customer_name),'')      AS company_name,
+            NULLIF(TRIM(t.customer_reference),'') AS reference
+       FROM public.customers_data_view t, me
+      WHERE (t.company_id = $1 OR ${matchesKeysSql('t', 'me')})
+        AND ((t.company_id = $1 AND t.contact_id = $2::int)
+             OR NULLIF(TRIM(t.contact_name),'') = ANY(me.cnms))
+      ORDER BY t.company_id, t.contact_id`,
+    [company, contact]
+  );
+  return rows as RelatedContact[];
+}
+
 export interface BlacklistRow {
   id: number;
   company_id: number;
   contact_id: number | null;
   company_name: string | null;
+  company_reference: string | null;
   contact_name: string | null;
   reason: string | null;
   created_by_name: string | null;
@@ -122,13 +341,19 @@ export interface BlacklistRow {
  * ⚠️ ต้องเป็น LEFT JOIN เท่านั้น — customers_data_view ถูกสร้างใหม่ทั้งก้อนทุกรอบ sync
  * ลูกค้าที่ถูกลบจาก Odoo จะหายไปจากตารางนั้น ถ้าใช้ INNER JOIN รายการที่ยังบล็อกอยู่จริง
  * จะหายจากหน้าจอจนแอดมินปลดออกไม่ได้ → ชื่อเป็น null ให้ฝั่ง UI โชว์ id ดิบแทน
+ *
+ * ⚠️ ตั้งใจไม่นับ "ครอบกี่รหัสบริษัท" ตรงนี้ — เคยลองแล้ววัดได้ 2.7 วิ (LATERAL ต่อแถว)
+ * และ 12.5 วิ (CTE + UNION) เพราะการเทียบชื่อ/รหัสไม่มี index รองรับเลยต้อง scan cdv 82k แถว
+ * ความครอบไปแสดงในหน้าแก้ไขแทน ผ่าน listRelatedCompanies/listRelatedContacts
+ * ซึ่งจ่ายเฉพาะตอนแอดมินเปิดดู
  */
 export async function listBlacklist(): Promise<BlacklistRow[]> {
   const { rows } = await pool.query(
     `SELECT b.id, b.company_id, b.contact_id, b.reason, b.created_at,
             au.name AS created_by_name,
-            co.customer_name AS company_name,
-            ct.contact_name  AS contact_name
+            co.customer_name      AS company_name,
+            cr.customer_reference AS company_reference,
+            ct.contact_name       AS contact_name
        FROM public.quotation_blacklist b
        LEFT JOIN public.admin_users au ON au.id = b.created_by
        LEFT JOIN LATERAL (
@@ -136,6 +361,15 @@ export async function listBlacklist(): Promise<BlacklistRow[]> {
           WHERE company_id = b.company_id AND customer_name IS NOT NULL
           ORDER BY contact_id LIMIT 1
        ) co ON true
+       -- แยก lateral ของรหัสอ้างอิงออกจากชื่อ เพราะ cdv มี 1 แถวต่อผู้ติดต่อ และบางแถว
+       -- customer_reference เป็น NULL ทั้งที่แถวอื่นของบริษัทเดียวกันมีค่า — ถ้ารวมไว้ใน
+       -- lateral เดียวจะได้รหัสว่างตามแถวที่ถูกเลือกด้วยเงื่อนไขของ "ชื่อ"
+       LEFT JOIN LATERAL (
+         SELECT customer_reference FROM public.customers_data_view
+          WHERE company_id = b.company_id
+            AND customer_reference IS NOT NULL AND customer_reference <> ''
+          ORDER BY contact_id LIMIT 1
+       ) cr ON true
        LEFT JOIN LATERAL (
          SELECT contact_name FROM public.customers_data_view
           WHERE company_id = b.company_id AND contact_id = b.contact_id LIMIT 1
@@ -164,6 +398,30 @@ export async function addBlacklistEntry(input: {
     [company, contact, reason, input.createdBy]
   );
   return { id: rows[0].id };
+}
+
+/**
+ * แก้ไขขอบเขต (ทั้งบริษัท ↔ เฉพาะผู้ติดต่อ) และเหตุผล — คืน false เมื่อไม่มีแถวนั้น
+ *
+ * ไม่เปิดให้แก้ `company_id` โดยตั้งใจ: เปลี่ยนบริษัทคือคนละรายการ ให้ปลดแล้วเพิ่มใหม่
+ * จะได้ไม่เสียประวัติว่าใครเป็นคนขึ้นบัญชีบริษัทเดิมไว้เมื่อไหร่
+ *
+ * ชนกับรายการที่มีอยู่แล้ว (เช่นแก้เป็น "ทั้งบริษัท" ทั้งที่มีแถวนั้นอยู่) → โยน error รหัส 23505
+ */
+export async function updateBlacklistEntry(
+  id: number,
+  input: { contactId: unknown; reason: unknown }
+): Promise<boolean> {
+  const contact = normalizeId(input.contactId);
+  const reason = typeof input.reason === 'string' && input.reason.trim() ? input.reason.trim() : null;
+
+  const { rowCount } = await pool.query(
+    `UPDATE public.quotation_blacklist
+        SET contact_id = $1, reason = $2, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $3`,
+    [contact, reason, id]
+  );
+  return (rowCount ?? 0) > 0;
 }
 
 /** ปลดออกจากบัญชี — คืน false เมื่อไม่มีแถวนั้น (กดลบซ้ำ/คนอื่นลบไปก่อน) */
