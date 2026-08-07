@@ -1532,7 +1532,7 @@ app.get('/api/admin/verify', adminAuthMiddleware, (req: any, res: any) => {
 
 const BCRYPT_COST = 10;
 const MIN_PASSWORD_LENGTH = 8;
-const VALID_ROLES: Role[] = ['admin', 'user'];
+const VALID_ROLES: Role[] = ['admin', 'subadmin', 'user'];
 
 /** คอลัมน์ที่ส่งออก API ได้ — ระบุชื่อชัดเจนเพื่อไม่ให้ password_hash หลุดออกไปโดยไม่ตั้งใจ */
 const USER_PUBLIC_COLUMNS = 'id, username, name, role, created_at, updated_at';
@@ -2906,7 +2906,7 @@ const SP_CODE_SQL = `COALESCE(s.salesperson_id, q.employee_details->>'salesperso
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // --- API Endpoint: Admin Quotations List (with search, filter, pagination) ---
-app.get('/api/admin/quotations', adminAuthMiddleware, requireRole('admin'), async (req: any, res: any) => {
+app.get('/api/admin/quotations', adminAuthMiddleware, requireRole('admin', 'subadmin'), async (req: any, res: any) => {
   try {
     const search = req.query.search || '';
     const status = req.query.status || '';
@@ -3005,7 +3005,7 @@ app.get('/api/admin/quotations', adminAuthMiddleware, requireRole('admin'), asyn
 // และตัวกรอง exported ตั้งต้นเป็น 'no' ครั้งถัดไปจึงได้เฉพาะใบใหม่ (แอดมินถอยเครื่องหมายได้ถ้านำเข้าไม่ผ่าน)
 //
 // 1 ครั้ง = 1 บริษัท (company=qp|qt) เพราะ Odoo ของ PM กับ THT เป็นคนละระบบและใช้ชื่อภาษีคนละค่า
-app.get('/api/admin/quotations/export', adminAuthMiddleware, requireRole('admin'), async (req: any, res: any) => {
+app.get('/api/admin/quotations/export', adminAuthMiddleware, requireRole('admin', 'subadmin'), async (req: any, res: any) => {
   try {
     // บริษัทต้องส่งมาเสมอ ไม่มีค่าตั้งต้น — เดาผิดแปลว่าไฟล์ได้ชื่อภาษีของอีกบริษัท
     // แล้วใบชุดนั้นถูกมาร์ก "ส่งออกแล้ว" ไปเรียบร้อย กว่าจะรู้ตัวก็ตอนนำเข้า Odoo ไม่ผ่าน
@@ -3167,7 +3167,7 @@ app.get('/api/admin/quotations/export', adminAuthMiddleware, requireRole('admin'
 // --- API Endpoint: ยกเลิกเครื่องหมาย "ส่งออกแล้ว" ของใบเดียว ---
 //
 // ใช้ตอนนำเข้า Odoo ไม่ผ่าน หรือไฟล์หายระหว่างดาวน์โหลด — ใบจะกลับเข้าคิว export รอบถัดไป
-app.post('/api/admin/quotations/:id/unmark-export', adminAuthMiddleware, requireRole('admin'), async (req: any, res: any) => {
+app.post('/api/admin/quotations/:id/unmark-export', adminAuthMiddleware, requireRole('admin', 'subadmin'), async (req: any, res: any) => {
   try {
     const id = String(req.params.id || '').trim();
     if (!UUID_RE.test(id)) {
@@ -3186,7 +3186,7 @@ app.post('/api/admin/quotations/:id/unmark-export', adminAuthMiddleware, require
 });
 
 // --- API Endpoint: ประวัติชุดการส่งออก Odoo ---
-app.get('/api/admin/quotations/export-batches', adminAuthMiddleware, requireRole('admin'), async (req: any, res: any) => {
+app.get('/api/admin/quotations/export-batches', adminAuthMiddleware, requireRole('admin', 'subadmin'), async (req: any, res: any) => {
   try {
     const limit = Math.min(parseInt(req.query.limit) || 20, 100);
     const offset = parseInt(req.query.offset) || 0;
@@ -3199,7 +3199,7 @@ app.get('/api/admin/quotations/export-batches', adminAuthMiddleware, requireRole
 });
 
 // --- API Endpoint: ยกเลิกเครื่องหมายทั้งชุด (ไฟล์ทั้งไฟล์นำเข้า Odoo ไม่ผ่าน) ---
-app.post('/api/admin/quotations/export-batches/:batchId/unmark', adminAuthMiddleware, requireRole('admin'), async (req: any, res: any) => {
+app.post('/api/admin/quotations/export-batches/:batchId/unmark', adminAuthMiddleware, requireRole('admin', 'subadmin'), async (req: any, res: any) => {
   try {
     const batchId = String(req.params.batchId || '').trim();
     if (!UUID_RE.test(batchId)) {

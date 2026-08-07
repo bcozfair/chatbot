@@ -8,6 +8,7 @@ import {
   KeyRound,
   Shield,
   ShieldCheck,
+  FileText,
   Loader2,
   AlertTriangle,
   CheckCircle2,
@@ -26,14 +27,26 @@ interface AdminUserRow {
   updated_at: string;
 }
 
+/** ลำดับที่ใช้แสดงทุกที่ในหน้านี้ — ไล่จากสิทธิ์มากไปน้อย */
+const ROLE_ORDER: Role[] = ['admin', 'subadmin', 'user'];
+
 const ROLE_LABEL: Record<Role, string> = {
   admin: 'ผู้ดูแลระบบ',
+  subadmin: 'ผู้ดูแลใบเสนอราคา',
   user: 'ผู้ใช้ทั่วไป',
 };
 
 const ROLE_DESCRIPTION: Record<Role, string> = {
   admin: 'จัดการได้ทุกเมนู รวมถึงผู้ใช้',
-  user: 'สิทธิ์จำกัด ยังไม่มีเมนูของตัวเอง',
+  subadmin: 'เข้าได้เฉพาะหน้าประวัติใบเสนอราคา',
+  user: 'เข้าได้เฉพาะหน้าบัญชีห้ามเสนอราคา',
+};
+
+/** สีและไอคอนของป้ายสิทธิ์ในตาราง — แยกเป็น map เพื่อไม่ต้องไล่แก้ ternary ทุกครั้งที่เพิ่ม role */
+const ROLE_BADGE: Record<Role, { className: string; Icon: typeof Shield }> = {
+  admin: { className: 'bg-emerald-50 border-emerald-200 text-emerald-700', Icon: ShieldCheck },
+  subadmin: { className: 'bg-sky-50 border-sky-200 text-sky-700', Icon: FileText },
+  user: { className: 'bg-slate-50 border-slate-200 text-slate-500', Icon: Shield },
 };
 
 type FormMode = { kind: 'create' } | { kind: 'edit'; target: AdminUserRow };
@@ -157,6 +170,7 @@ export const Users: React.FC = () => {
               <tbody className="divide-y divide-slate-100 text-sm text-slate-700">
                 {users.map((row) => {
                   const isSelf = row.id === currentUser?.id;
+                  const badge = ROLE_BADGE[row.role];
                   return (
                     <tr key={row.id} className="hover:bg-slate-50/50 transition-colors">
                       <td className="px-4 py-2.5">
@@ -166,17 +180,9 @@ export const Users: React.FC = () => {
                       <td className="px-4 py-2.5">{row.name}</td>
                       <td className="px-4 py-2.5">
                         <span
-                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border ${
-                            row.role === 'admin'
-                              ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
-                              : 'bg-slate-50 border-slate-200 text-slate-500'
-                          }`}
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border ${badge.className}`}
                         >
-                          {row.role === 'admin' ? (
-                            <ShieldCheck className="w-3 h-3" />
-                          ) : (
-                            <Shield className="w-3 h-3" />
-                          )}
+                          <badge.Icon className="w-3 h-3" />
                           {ROLE_LABEL[row.role]}
                         </span>
                       </td>
@@ -319,8 +325,8 @@ const RoleSelect: React.FC<{
 }> = ({ value, onChange, disabled, disabledHint }) => (
   <div className="space-y-1">
     <label className="block text-xs font-semibold text-slate-600">สิทธิ์การใช้งาน</label>
-    <div className="grid grid-cols-2 gap-2">
-      {(['admin', 'user'] as Role[]).map((role) => (
+    <div className="grid grid-cols-1 gap-2">
+      {ROLE_ORDER.map((role) => (
         <label
           key={role}
           className={`flex items-start gap-2 p-2.5 rounded-xl border transition-colors ${

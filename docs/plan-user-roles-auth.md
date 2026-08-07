@@ -47,19 +47,27 @@
 
 ## 3. ข้อตัดสินใจที่ล็อกแล้ว
 
-### 3.1 โมเดลสิทธิ์: role ตายตัว 2 แบบ
+### 3.1 โมเดลสิทธิ์: role ตายตัว 3 แบบ
 
 ไม่ทำตาราง permission ต่อคน ใช้ `admin_users.role` ที่มีอยู่ + ตารางค่าคงที่ในโค้ดที่เดียว
 
 ```ts
 // config/auth.ts (backend) และ frontend/src/context/AuthContext.tsx (frontend) — ต้องตรงกันเสมอ
-export type Role = 'admin' | 'user';
+export type Role = 'admin' | 'subadmin' | 'user';
 ```
+
+| role | เมนูที่เข้าได้ |
+| --- | --- |
+| `admin` | ทุกเมนู รวมถึงจัดการผู้ใช้และกลุ่ม "ตั้งค่าเงื่อนไข & กฎ" |
+| `subadmin` | ประวัติใบเสนอราคา (ดู/กรอง/ส่งออก Odoo/ถอยเครื่องหมายส่งออก) |
+| `user` | บัญชีห้ามเสนอราคา |
+
 เก็บ type ไว้คู่กับ `requireRole` ใน `config/auth.ts` แทนการแยกไฟล์ `permissions.ts` ตามที่เคยร่างไว้ — มีแค่ type เดียว ไม่คุ้มกับไฟล์ใหม่
 ฝั่ง DB มี CHECK constraint `admin_users_role_check` เป็นด่านสุดท้าย ใส่ค่าอื่นไม่ผ่านแม้จะเลี่ยง API ได้
 
-เหตุผล: มีแค่ 2 role และเส้นแบ่งชัด ("ทุกอย่าง" กับ "blacklist อย่างเดียว") การทำ permission ต่อคนตอนนี้คือเพิ่มตาราง + UI ติ๊ก + งานอีก 2 เท่า โดยยังไม่มีเคสใช้จริง
-วันหน้าถ้าต้องการ role ที่ 3 — เพิ่มค่าใน union แล้วไล่ `requireRole` ตามจุด ไม่ต้อง migrate ข้อมูล
+เหตุผล: เส้นแบ่งของแต่ละ role ชัดและตายตัว การทำ permission ต่อคนคือเพิ่มตาราง + UI ติ๊ก + งานอีก 2 เท่า โดยยังไม่มีเคสใช้จริง
+เพิ่ม role ใหม่ = เพิ่มค่าใน union (2 ที่) + `VALID_ROLES` ใน `index.ts` + migration แก้ CHECK + `ROLE_ORDER`/`ROLE_LABEL`/`ROLE_DESCRIPTION`/`ROLE_BADGE` ใน `Users.tsx` แล้วไล่ `requireRole` ตามจุด ไม่ต้อง migrate ข้อมูล
+(`subadmin` เพิ่มเมื่อ 2026-08-07 ตาม [`migrations/changes/2026-08-07_02_admin_users_subadmin_role.sql`](../migrations/changes/2026-08-07_02_admin_users_subadmin_role.sql) — ต้องรัน migration ก่อน deploy โค้ดเสมอ)
 
 ### 3.2 การจัดการรหัสผ่าน — **ไม่ใช้ .env**
 

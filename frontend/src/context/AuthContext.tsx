@@ -2,7 +2,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 
 /** ต้องตรงกับ Role ฝั่ง backend (config/auth.ts) และ CHECK constraint admin_users_role_check */
-export type Role = 'admin' | 'user';
+export type Role = 'admin' | 'subadmin' | 'user';
 
 export interface AdminUser {
   id: number;

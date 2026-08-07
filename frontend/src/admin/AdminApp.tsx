@@ -56,7 +56,7 @@ const BRAND_BORDER = 'rgba(0, 144, 50, 0.24)';
 // roles = สิทธิ์ที่เห็นเมนูนี้ — เป็นแค่การซ่อน UI เท่านั้น ตัวบังคับจริงคือ requireRole ฝั่ง backend
 const NAV_ITEMS: { key: MainTab; label: string; icon: typeof LayoutDashboard; roles: Role[] }[] = [
   { key: 'dashboard', label: 'แผงควบคุม', icon: LayoutDashboard, roles: ['admin'] },
-  { key: 'quotations', label: 'ประวัติใบเสนอราคา', icon: FileText, roles: ['admin'] },
+  { key: 'quotations', label: 'ประวัติใบเสนอราคา', icon: FileText, roles: ['admin', 'subadmin'] },
   { key: 'promotions', label: 'จัดการโปรโมชันส่วนลด', icon: Tag, roles: ['admin'] },
   { key: 'salespersons', label: 'จัดการข้อมูลพนักงาน', icon: UserCheck, roles: ['admin'] },
   { key: 'users', label: 'จัดการผู้ใช้งานระบบ', icon: UsersIcon, roles: ['admin'] },

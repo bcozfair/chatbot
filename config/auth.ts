@@ -5,11 +5,12 @@ import { pool } from './db.js';
 
 /**
  * สิทธิ์ของผู้ใช้ Admin Portal — ตรงกับ CHECK constraint admin_users_role_check
- *   admin = เข้าถึงและจัดการได้ทุกอย่าง รวมถึงจัดการผู้ใช้คนอื่น
- *   user  = สิทธิ์จำกัด เข้าได้เฉพาะเมนูที่เปิดให้ชัดเจน
+ *   admin    = เข้าถึงและจัดการได้ทุกอย่าง รวมถึงจัดการผู้ใช้คนอื่น
+ *   subadmin = เข้าได้เฉพาะหน้าประวัติใบเสนอราคา (ดู/กรอง/ส่งออก/ถอยเครื่องหมายส่งออก)
+ *   user     = สิทธิ์จำกัด เข้าได้เฉพาะเมนูที่เปิดให้ชัดเจน (ตอนนี้คือบัญชีห้ามเสนอราคา)
  * เพิ่ม role ใหม่ต้องแก้ทั้งที่นี่และ CHECK constraint ใน DB ให้ตรงกัน
  */
-export type Role = 'admin' | 'user';
+export type Role = 'admin' | 'subadmin' | 'user';
 
 export interface AdminIdentity {
   id: number;
