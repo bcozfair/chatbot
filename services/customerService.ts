@@ -304,7 +304,11 @@ export async function searchCustomersNormalized(variants: string[], limit = NORM
  * limit 25 แล้วระบบไปออกใบให้ "บริษัท เคพีเอส จำกัด" ที่ชื่อสั้นกว่าและไม่มีคุณประสิทธิ์)
  *
  * สแกนกว้างขึ้นในการเรียกครั้งเดียว (ไม่เพิ่มรอบ CPU) แล้วดึงเฉพาะแถวส่วนเกินที่ผู้ติดต่อ
- * ตรงเป๊ะเข้ามา — ชื่อยังต้องเข้าเค้ากับที่เซลส์พิมพ์อยู่แล้ว จึงไม่เปิดประตูให้บริษัทมั่ว
+ * ตรง (เป๊ะ "หรือใกล้เคียง") เข้ามา — ชื่อยังต้องเข้าเค้ากับที่เซลส์พิมพ์อยู่แล้ว จึงไม่เปิดประตูให้บริษัทมั่ว
+ *
+ * ทำไมต้องรับ "ใกล้เคียง" ด้วย: เซลส์พิมพ์ชื่อคนตกตัวอักษรบ่อยมาก (เคสจริง 2026-08-10:
+ * "คุณบพิต" ↔ "คุณบพิตร" ในระบบ) ถ้ากรองแค่ตรงเป๊ะ บริษัทที่ถูกก็ยังหลุด limit เหมือนเดิม
+ * — แถวที่เก็บตกมาไม่ได้ถูก auto-select ทันที ยังต้องผ่านการชั่งหลักฐานขั้นถัดไปอยู่ดี
  */
 async function searchCompaniesWithContactSeed(
   variants: string[], contactQuery: string
@@ -319,13 +323,16 @@ async function searchCompaniesWithContactSeed(
   const contactRows = await getContactNamesByCustomerIds(overflow.map(r => r.id));
   const matchedIds = new Set(
     contactRows
-      .filter((r: any) => contactNamesMatch(contactQuery, r.name).exact)
+      .filter((r: any) => {
+        const m = contactNamesMatch(contactQuery, r.name);
+        return m.exact || m.partial;
+      })
       .map((r: any) => r.customer_id)
   );
   const seeded = overflow.filter(r => matchedIds.has(r.id));
   seeded.forEach(r => seededIds.add(r.id));
   if (seeded.length > 0) {
-    console.log(`[searchCompaniesWithContactSeed] เก็บตก ${seeded.length} บริษัทที่ผู้ติดต่อ "${contactQuery}" ตรง: ${seeded.map(r => r.display_name).join(' | ')}`);
+    console.log(`[searchCompaniesWithContactSeed] เก็บตก ${seeded.length} บริษัทที่ผู้ติดต่อ "${contactQuery}" ตรง/ใกล้เคียง: ${seeded.map(r => r.display_name).join(' | ')}`);
   }
   return { rows: head.concat(seeded), seededIds };
 }
@@ -343,10 +350,28 @@ async function searchCompaniesWithContactSeed(
  */
 const NAME_ONLY_DEMOTED_SCORE = 0.06;
 
-/** น้ำหนักหลักฐานตอนคะแนนเท่ากัน: ชื่อตรงเป๊ะทั้งบรรทัด > ผู้ติดต่อตรง > ชื่อตรงแบบ normalize */
+/**
+ * คะแนนที่ให้ candidate ที่ "ผู้ติดต่อใกล้เคียง (ไม่เป๊ะ) ตัวเดียวในลิสต์"
+ *
+ * ตั้งไว้ > auto-select gate (0.05) โดยตั้งใจ — ให้ขึ้นเป็นตัวเลือกแรกที่เซลส์เห็น
+ * แต่ "ห้ามเลือกให้อัตโนมัติ" เพราะหลักฐานชั้นนี้อ่อนกว่าชื่อตรง/ผู้ติดต่อตรง:
+ * ชื่อบริษัทพิมพ์คลาดจนเทียบไม่ติด + ชื่อคนก็ตกตัวอักษร = เดาแทนเซลส์ไม่ได้
+ * (เคสจริง 2026-08-10: "บริษัท เอเชีย แปซิฟิต" + "คุณบพิต" ↔ ตัวจริงคือ
+ *  "บริษัท เอเซีย แปซิฟิค พาราวู้ด จำกัด" + "คุณบพิตร" — ชื่อคล้ายแค่ 33%)
+ */
+const PARTIAL_CONTACT_ONLY_SCORE = 0.055;
+
+/**
+ * น้ำหนักหลักฐานตอนคะแนนเท่ากัน:
+ * ชื่อตรงเป๊ะทั้งบรรทัด > ผู้ติดต่อตรง > ผู้ติดต่อใกล้เคียง > ชื่อตรงแบบ normalize
+ *
+ * "ผู้ติดต่อใกล้เคียง" (1.5) แทรกอยู่ระหว่างผู้ติดต่อตรง (2) กับชื่อ norm-exact (1) —
+ * ชื่อคนที่พิมพ์ตกตัวอักษรยังชี้บริษัทได้แม่นกว่าชื่อบริษัทที่ normalize แล้วบังเอิญตรง
+ */
 const evidenceWeight = (c: any) =>
   (c.evidence?.isExactRaw ? 4 : 0) +
   ((c.evidence?.matchedContacts?.length ?? 0) > 0 ? 2 : 0) +
+  ((c.evidence?.partialContacts?.length ?? 0) > 0 ? 1.5 : 0) +
   (c.evidence?.isExactNorm ? 1 : 0);
 
 /**
@@ -428,9 +453,20 @@ export function dedupeIdenticalCompanies(candidates: any[]): any[] {
 export function buildCompanyOptionLabel(c: any): string {
   const base = formatLineLabel(c.item?.display_name);
   const ref = String(c.item?.reference || '').trim();
-  const matched = c.evidence?.matchedContacts?.[0];
   const head = ref ? `${base} · ${ref}` : base;
-  return matched ? `${head}\n👤 ${matched}` : head;
+
+  const matched = c.evidence?.matchedContacts?.[0];
+  if (matched) return `${head}\n👤 ${matched}`;
+
+  // ไม่มีคนที่ตรงเป๊ะ แต่มีคนที่ชื่อใกล้เคียง (เซลส์พิมพ์ตกตัวอักษร) — ตัวชี้ขาดที่แรงที่สุด
+  // ที่เซลส์ใช้ตัดสินใจได้ ต้องโชว์ พร้อมบอกให้ชัดว่า "ไม่ตรงเป๊ะ" จะได้ไม่กดผิดโดยเข้าใจว่าตรง
+  // เลือกชื่อที่สั้นที่สุด = ชื่อคนล้วน ไม่ใช่แถวหมายเหตุยาวๆ ("คุณขวัญสกุล cc. คุณบพิตร")
+  const partials: string[] = c.evidence?.partialContacts ?? [];
+  if (partials.length > 0) {
+    const shortest = partials.reduce((a, b) => (b.length < a.length ? b : a));
+    return `${head}\n👤 ${shortest} (ชื่อใกล้เคียง)`;
+  }
+  return head;
 }
 
 /**
@@ -1059,6 +1095,18 @@ export async function findCustomerCandidates(customerQuery: string, salesperson:
       only(exactContacts) ||
       (rawExacts.length === 0 ? only(normExacts) : null);
 
+    // ═══ ไม่มีหลักฐานชี้ขาด แต่มี "ผู้ติดต่อใกล้เคียง" อยู่บริษัทเดียว → ดันขึ้นอันดับ 1 ═══
+    // เซลส์พิมพ์ผิดทั้งชื่อบริษัทและชื่อคน สัญญาณชื่อจึงอ่อนจนตัวจริงโดน slice(0,8) ตัดทิ้ง
+    // ทั้งที่ระบบ "ตรวจเจอ" ความใกล้เคียงของชื่อคนแล้ว แค่ไม่เคยเอามาใช้ถ่วงน้ำหนัก
+    // ให้ PARTIAL_CONTACT_ONLY_SCORE (> gate) = ขึ้นเป็นตัวเลือกแรกแต่ไม่ auto-select
+    const partialOnly = finalCandidates.filter(c =>
+      c.evidence.matchedContacts.length === 0 && c.evidence.partialContacts.length > 0);
+    const partialWinner = !decisive ? only(partialOnly) : null;
+    if (partialWinner && (partialWinner.score ?? 1) > PARTIAL_CONTACT_ONLY_SCORE) {
+      partialWinner.score = PARTIAL_CONTACT_ONLY_SCORE;
+      console.log(`[findCustomerCandidates] 🔎 ผู้ติดต่อใกล้เคียงตัวเดียว: "${partialWinner.item.display_name}" (${partialWinner.evidence.partialContacts.join(', ')}) → ดันขึ้นอันดับ 1 แต่ให้เซลส์ยืนยันเอง`);
+    }
+
     if (decisive) {
       decisive.score = 0.0;
       // ═══ "ผู้ติดต่อตรง" ต้องชนะ "ชื่อตรงอย่างเดียว" ═══
@@ -1078,8 +1126,10 @@ export async function findCustomerCandidates(customerQuery: string, salesperson:
     finalCandidates.sort(compareCandidates);
 
     // ═══ คัดกรองรายชื่อ: ตัดตัวที่สัญญาณต่ำและไม่มี evidence อื่นเลย ═══
+    // "ผู้ติดต่อใกล้เคียง" นับเป็น evidence ด้วย — เคสพิมพ์ผิดหนักๆ ตัวจริงจะมีแค่หลักฐานชั้นนี้
     const curated = finalCandidates.filter(c =>
-      (c.score ?? 1) <= 0.32 || c.evidence.isExact || c.evidence.matchedContacts.length > 0);
+      (c.score ?? 1) <= 0.32 || c.evidence.isExact ||
+      c.evidence.matchedContacts.length > 0 || c.evidence.partialContacts.length > 0);
     if (curated.length > 0) finalCandidates = curated;
     finalCandidates = finalCandidates.slice(0, 8);
   }
