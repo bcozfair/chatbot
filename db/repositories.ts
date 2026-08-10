@@ -814,3 +814,193 @@ export async function deleteApiLogsOlderThan(
     [days, limit]);
   return res.rowCount ?? 0;
 }
+
+// ── อ่าน api_logs สำหรับหน้า Admin Portal ────────────────────────────────────
+//
+// กลุ่มนี้กลับมาใช้กติกาหัวไฟล์ (กลืน error คืน []/null) เพราะเป็น SELECT ที่เรียกจาก endpoint ตรง ๆ
+// ไม่ได้อยู่ใน transaction — หน้าจอที่ว่างเปล่าดีกว่าหน้าจอที่ระเบิด 500
+
+/**
+ * ขอบเขตวันแบบ "วันไทย" เขียนซ้ำจาก createdAtFrom/ToThaiDayCondition ที่ผูกกับ alias q. ไว้
+ * ตั้งใจไม่ไป generalize ตัวนั้นเพื่อไม่ให้กระทบโค้ดที่ diag:date-filter คุมอยู่
+ * ⚠️ ต้อง cast ::timestamp ก่อน AT TIME ZONE เสมอ ไม่งั้น PostgreSQL เลือก overload ผิดแล้ว
+ *    ขอบเขตจะเลื่อนตาม TimeZone ของ session (บน production ที่เป็น UTC จะเพี้ยนไป 7 ชั่วโมง)
+ */
+const apiLogFromThaiDay = (i: number) =>
+  `created_at >= (($${i}::date)::timestamp AT TIME ZONE 'Asia/Bangkok')`;
+const apiLogToThaiDay = (i: number) =>
+  `created_at < ((($${i}::date)::timestamp + INTERVAL '1 day') AT TIME ZONE 'Asia/Bangkok')`;
+
+/**
+ * จัดกลุ่ม endpoint สำหรับหน้าสถิติ — ทำ "ตอนอ่าน" ไม่ใช่ตอนเขียน
+ *
+ * ใช้ค่า route ที่ Express บอกมาถ้ามี ไม่มี (404 / route ที่ประกาศเป็น array) ก็ย่อ path เอง
+ * โดยแทน uuid และเลขล้วนด้วย :id — ไม่งั้นใบเสนอราคา 243 ใบจะกลายเป็น 243 กลุ่ม กลุ่มละ 1 request
+ * และตารางสถิติจะยาวเป็นหางว่าวจนบอกอะไรไม่ได้
+ *
+ * ที่ตั้งใจให้สูตรนี้อยู่ในคำสั่ง SQL ไม่ใช่เก็บเป็นคอลัมน์: ถ้าสูตรไม่ดีก็แก้ตรงนี้จบ
+ * ไม่ต้อง UPDATE ข้อมูลย้อนหลัง ไม่ต้อง deploy โค้ดใหม่ และไม่มีทางเก็บค่าที่เดาผิดค้างใน DB
+ */
+export const API_LOG_ROUTE_GROUP = `COALESCE(route, regexp_replace(
+  regexp_replace(path, '/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', '/:id', 'gi'),
+  '/[0-9]+(?=/|$)', '/:id', 'g'))`;
+
+export interface ApiLogFilters {
+  dateFrom?: string; dateTo?: string; method?: string; status?: string;
+  path?: string; route?: string; adminUserId?: number; lineUserId?: string;
+  minDuration?: number; requestId?: string;
+}
+
+/** แปลงตัวกรองเป็น WHERE + params — ใช้ร่วมกันระหว่าง list กับ count ให้ผลตรงกันเสมอ */
+function buildApiLogWhere(f: ApiLogFilters): { where: string; params: any[] } {
+  const conds: string[] = [];
+  const params: any[] = [];
+  const add = (sql: (i: number) => string, value: any) => {
+    params.push(value);
+    conds.push(sql(params.length));
+  };
+
+  // ค้นด้วย request_id = ตามรอยจาก id ที่ผู้ใช้แคปหน้าจอมาโดยไม่รู้วันที่ → ข้ามเงื่อนไขวันทั้งหมด
+  if (f.requestId) {
+    add(i => `request_id = $${i}`, f.requestId);
+    return { where: `WHERE ${conds.join(' AND ')}`, params };
+  }
+
+  if (f.dateFrom) add(apiLogFromThaiDay, f.dateFrom);
+  if (f.dateTo) add(apiLogToThaiDay, f.dateTo);
+  if (f.method) add(i => `method = $${i}`, f.method);
+  if (f.path) add(i => `path ILIKE '%' || $${i} || '%'`, f.path);
+  if (f.route) add(i => `${API_LOG_ROUTE_GROUP} = $${i}`, f.route);
+  if (typeof f.adminUserId === 'number') add(i => `admin_user_id = $${i}`, f.adminUserId);
+  if (f.lineUserId) add(i => `line_user_id = $${i}`, f.lineUserId);
+  if (typeof f.minDuration === 'number') add(i => `duration_ms >= $${i}`, f.minDuration);
+
+  if (f.status && f.status !== 'all') {
+    if (/^[1-5]xx$/.test(f.status)) {
+      const base = Number(f.status[0]) * 100;
+      params.push(base, base + 100);
+      conds.push(`status_code >= $${params.length - 1} AND status_code < $${params.length}`);
+    } else if (/^\d{3}$/.test(f.status)) {
+      add(i => `status_code = $${i}`, Number(f.status));
+    }
+  }
+
+  return { where: conds.length ? `WHERE ${conds.join(' AND ')}` : '', params };
+}
+
+/** รายการ log สำหรับตาราง — ไม่คืนคอลัมน์ที่หน้ารายการไม่ใช้ เพื่อลดขนาด payload */
+export async function listApiLogs(
+  f: ApiLogFilters, limit: number, offset: number
+): Promise<any[]> {
+  try {
+    const { where, params } = buildApiLogWhere(f);
+    // ไม่ JOIN admin_users แต่ใช้ scalar subquery — admin_users มีคอลัมน์ id/created_at ชื่อซ้ำกัน
+    // การ JOIN จะทำให้ชื่อคอลัมน์กำกวมและต้องเติม alias ให้ทุกที่รวมถึงใน where ที่ประกอบมาจาก
+    // buildApiLogWhere ด้วย · admin_users มีแค่ไม่กี่แถว subquery จึงถูกกว่าความเสี่ยงนั้นมาก
+    const { rows } = await pool.query(
+      `SELECT id::text AS id, created_at, request_id, method,
+              ${API_LOG_ROUTE_GROUP} AS route_group,
+              route, path, status_code, duration_ms, resp_bytes, admin_user_id,
+              (SELECT username FROM admin_users u WHERE u.id = api_logs.admin_user_id) AS admin_username,
+              line_user_id, inflight, db_waiting, queue_waited_ms
+         FROM api_logs
+         ${where}
+        ORDER BY created_at DESC, id DESC
+        LIMIT ${limit} OFFSET ${offset}`,
+      params);
+    return rows;
+  } catch (err) { logErr('listApiLogs', err); return []; }
+}
+
+/** จำนวนทั้งหมดตามตัวกรองเดียวกัน — ใช้ทำเลขหน้า */
+export async function countApiLogs(f: ApiLogFilters): Promise<number> {
+  try {
+    const { where, params } = buildApiLogWhere(f);
+    const { rows } = await pool.query(
+      `SELECT count(*)::int AS n FROM api_logs ${where}`, params);
+    return rows[0]?.n ?? 0;
+  } catch (err) { logErr('countApiLogs', err); return 0; }
+}
+
+/** รายละเอียด 1 แถว + แถวอื่นที่ใช้ request_id เดียวกัน (ทำให้ /callback ack + TASK โผล่คู่กัน) */
+export async function getApiLogById(id: string): Promise<any | null> {
+  try {
+    const { rows } = await pool.query(
+      `SELECT api_logs.*, id::text AS id,
+              (SELECT username FROM admin_users u WHERE u.id = api_logs.admin_user_id) AS admin_username
+         FROM api_logs WHERE id = $1::bigint`, [id]);
+    if (!rows.length) return null;
+
+    const related = await pool.query(
+      `SELECT id::text AS id, created_at, method, path, status_code, duration_ms, queue_waited_ms
+         FROM api_logs WHERE request_id = $1 AND id <> $2::bigint ORDER BY id`,
+      [rows[0].request_id, id]);
+    return { ...rows[0], related: related.rows };
+  } catch (err) { logErr('getApiLogById', err); return null; }
+}
+
+/**
+ * สถิติสำหรับหน้า "ภาพรวม" — 4 ก้อนที่ตอบคำถาม "ช้าตรงไหน / ทรัพยากรพอไหม"
+ *
+ * ทุก query บังคับมีขอบเขตเวลาเสมอ (endpoint ใส่ค่าตั้งต้น 7 วันให้) จึงไม่มี query ไหนสแกนทั้งตาราง
+ */
+export async function getApiLogStats(dateFrom: string, dateTo: string): Promise<any> {
+  try {
+    const range = `${apiLogFromThaiDay(1)} AND ${apiLogToThaiDay(2)}`;
+    const p = [dateFrom, dateTo];
+
+    // เรียงด้วย total_ms ไม่ใช่ p95 — endpoint ที่กิน CPU ของเครื่องรวมมากที่สุดคือตัวที่ควร
+    // optimize ก่อน ไม่ใช่ตัวที่ช้าที่สุดแต่ถูกเรียกวันละครั้ง
+    const byRoute = await pool.query(
+      `SELECT ${API_LOG_ROUTE_GROUP} AS route, count(*)::int AS count,
+              percentile_disc(0.5)  WITHIN GROUP (ORDER BY duration_ms)::int AS p50,
+              percentile_disc(0.95) WITHIN GROUP (ORDER BY duration_ms)::int AS p95,
+              percentile_disc(0.99) WITHIN GROUP (ORDER BY duration_ms)::int AS p99,
+              max(duration_ms)::int AS max_ms, sum(duration_ms)::bigint::text AS total_ms,
+              count(*) FILTER (WHERE status_code >= 400)::int AS errors
+         FROM api_logs WHERE ${range}
+        GROUP BY 1 ORDER BY sum(duration_ms) DESC LIMIT 100`, p);
+
+    // กราฟรายชั่วโมง: จำนวน + p95 + จุดสูงสุดของ inflight/db_waiting ในชั่วโมงนั้น
+    // คืน hour เป็นสตริงที่จัดรูปแล้ว ไม่ใช่ timestamp — date_trunc(... AT TIME ZONE) ให้
+    // timestamp without time zone ซึ่ง node-postgres จะแปลงเป็น Date ตาม TZ ของโปรเซส
+    // แล้ว JSON.stringify ทับด้วย offset อีกชั้น กลายเป็นเวลาเพี้ยนโดยไม่มีใครรู้ตัว
+    const byHour = await pool.query(
+      `SELECT to_char(date_trunc('hour', created_at AT TIME ZONE 'Asia/Bangkok'),
+                      'YYYY-MM-DD HH24:MI') AS hour,
+              count(*)::int AS count,
+              percentile_disc(0.95) WITHIN GROUP (ORDER BY duration_ms)::int AS p95,
+              max(inflight)::int AS max_inflight, max(db_waiting)::int AS max_db_waiting,
+              count(*) FILTER (WHERE status_code >= 400)::int AS errors
+         FROM api_logs WHERE ${range}
+        GROUP BY 1 ORDER BY 1`, p);
+
+    const slowest = await pool.query(
+      `SELECT id::text AS id, created_at, request_id, method, path,
+              status_code, duration_ms, queue_waited_ms, line_user_id,
+              (SELECT username FROM admin_users u WHERE u.id = api_logs.admin_user_id) AS admin_username
+         FROM api_logs WHERE ${range}
+        ORDER BY duration_ms DESC LIMIT 20`, p);
+
+    // 4 ตัวเลขที่ตอบ "ทรัพยากร server พอไหม" ได้ตรงที่สุด
+    const sat = await pool.query(
+      `SELECT count(*)::int AS total,
+              COALESCE(max(inflight), 0)::int AS max_inflight,
+              COALESCE(max(db_waiting), 0)::int AS max_db_waiting,
+              count(*) FILTER (WHERE db_waiting > 0)::int AS db_wait_hits,
+              count(*) FILTER (WHERE status_code >= 400)::int AS errors,
+              count(*) FILTER (WHERE method = 'TASK' AND status_code = 499)::int AS webhook_dropped,
+              count(*) FILTER (WHERE method = 'TASK' AND status_code = 504)::int AS webhook_timeout,
+              COALESCE(percentile_disc(0.95) WITHIN GROUP (ORDER BY duration_ms), 0)::int AS p95,
+              COALESCE(max(queue_waited_ms), 0)::int AS max_queue_waited
+         FROM api_logs WHERE ${range}`, p);
+
+    return {
+      byRoute: byRoute.rows, byHour: byHour.rows,
+      slowest: slowest.rows, saturation: sat.rows[0],
+    };
+  } catch (err) {
+    logErr('getApiLogStats', err);
+    return { byRoute: [], byHour: [], slowest: [], saturation: null };
+  }
+}

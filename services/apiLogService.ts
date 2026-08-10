@@ -96,6 +96,58 @@ async function flushOnce(): Promise<void> {
   }
 }
 
+/** ผลลัพธ์ของการประมวลผล 1 event ของ webhook — map เป็น status code ในตาราง */
+export type WebhookOutcome = 'replied' | 'timeout' | 'dropped' | 'failed';
+
+const WEBHOOK_STATUS: Record<WebhookOutcome, number> = {
+  replied: 200,
+  timeout: 504,   // งานเกินงบเวลา — abort ไปแล้ว
+  dropped: 499,   // ถูกทิ้งตั้งแต่ยังไม่เริ่มเพราะคิวตัน (client ฝั่ง LINE เลิกรอไปแล้ว)
+  failed: 500,
+};
+
+/**
+ * บันทึก "แถวที่สอง" ของ POST /callback — แถวที่บอกเวลาทำงานจริง
+ *
+ * ทำไมต้องมี: /callback ตอบ 200 กลับ LINE ทันทีก่อนเริ่มทำงาน (index.ts) แถว HTTP ปกติจึงวัดได้
+ * ~1ms ทุกครั้ง ทั้งที่งานจริงกิน 10-40 วินาที ถ้ามีแต่แถวนั้น ตัวเลข duration จะโกหก
+ * และ webhook คือภาระที่หนักที่สุดของระบบพอดี = จุดที่ต้องดูที่สุดตอนวิเคราะห์ทรัพยากร
+ *
+ * ทำไมไม่ UPDATE แถวเดิม: ตอนงานจบ แถว HTTP อาจยังกองอยู่ใน buffer ไม่มี id ให้ update
+ * และการมี 2 แถวก็ตรงความจริงกว่า — LINE ยิง HTTP มา 1 ครั้ง (จบใน 1ms) แล้วเราทำงานต่อ n ชิ้น
+ * ทั้งสองแถวใช้ request_id เดียวกัน จึงจับคู่กันได้ผ่าน idx_api_logs_request_id
+ */
+export function recordWebhookProcessing(info: {
+  requestId: string | undefined;
+  lineUserId: string;
+  outcome: WebhookOutcome;
+  /** เวลานั่งรอในคิวก่อนได้เริ่มทำงาน */
+  waitedMs: number;
+  /** เวลาทั้งหมดนับจากตอนรับ webhook = เวลาที่ผู้ใช้รอจริง (รวมเวลารอคิว) */
+  totalMs: number;
+}): void {
+  // ไม่มี requestId = ปิด log อยู่ (API_LOG_ENABLED=false) → ไม่ต้องบันทึกอะไร
+  if (!info.requestId) return;
+
+  enqueueApiLog({
+    createdAt: new Date(),
+    requestId: info.requestId,
+    method: 'TASK',
+    route: '/callback (async)',
+    path: '/callback (async)',
+    statusCode: WEBHOOK_STATUS[info.outcome],
+    durationMs: info.totalMs,
+    respBytes: null,
+    adminUserId: null,
+    lineUserId: info.lineUserId.slice(0, 40),
+    inflight: null,
+    dbWaiting: null,
+    // duration_ms - queue_waited_ms = เวลาประมวลผลจริง
+    // ค่านี้สูง = คิวตัน ต้องเพิ่มเครื่อง · ส่วนต่างสูง = โค้ด/LLM ช้า ต้อง optimize
+    queueWaitedMs: info.waitedMs,
+  });
+}
+
 /**
  * อ่านจำนวนวันที่เก็บย้อนหลังจาก env — ฟังก์ชันบริสุทธิ์ แยกออกมาให้ diag เทสได้โดยไม่ต้องตั้ง env จริง
  * (เลียนแบบ shouldRunNow ใน syncService)

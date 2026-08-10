@@ -241,9 +241,15 @@ API_LOG_ENABLED=false        # ⚠️ ขึ้นครั้งแรกให
 API_LOG_RETENTION_DAYS=30
 ```
 - **ขึ้นครั้งแรกให้ปิดไว้ก่อน** แล้วทำขั้น 5-6 ให้ผ่าน = พิสูจน์ว่าโค้ดใหม่ขึ้นแล้วระบบเหมือนเดิมทุกอย่าง
-  จากนั้นค่อยแก้เป็น `true` แล้ว `docker compose restart app` — **ไม่ต้อง build ใหม่**
+  จากนั้นค่อยแก้ `.env` เป็น `true` แล้ว **ไม่ต้อง build ใหม่** แค่สร้างคอนเทนเนอร์ใหม่:
+  ```bash
+  docker compose up -d --force-recreate app
+  ```
+  ⚠️ **ห้ามใช้ `docker compose restart app`** — compose ผูกค่า env เข้ากับคอนเทนเนอร์ตอน *สร้าง*
+  ไม่ใช่ตอนสตาร์ท `restart` จึงรันด้วยค่าเดิมทั้งที่แก้ `.env` ไปแล้ว (ดูเหมือนสำเร็จแต่ไม่มีอะไรเปลี่ยน)
+  เช็คได้ด้วย `docker compose exec app sh -c 'echo $API_LOG_ENABLED'`
   แยกตัวแปรสองอย่าง (โค้ดใหม่ / การเก็บ log) คนละครั้ง ถ้ามีอะไรผิดจะรู้ทันทีว่าเกิดจากอะไร
-  ถ้าเปิดแล้วมีปัญหา กลับเป็น `false` + restart = ระบบกลับไปเหมือนเดิมทุกประการภายใน 10 วินาที
+  ถ้าเปิดแล้วมีปัญหา กลับเป็น `false` + `up -d --force-recreate app` = ระบบกลับไปเหมือนเดิมภายใน 10 วินาที
 - ไม่ตั้งทั้งสองคีย์ก็รันได้ โค้ดมีค่าตั้งต้น (เปิด, 30 วัน)
 - **เช็คขนาดตารางหลังเปิดใช้จริง ~14 วัน** แล้วคูณ ~2 เพื่อประมาณค่าที่ 30 วัน:
   ```bash
@@ -273,6 +279,7 @@ docker compose exec app npx tsx scripts/diag/odooExportSmoke.ts --company qp
 docker compose exec app npx tsx scripts/diag/odooExportSmoke.ts --company qt
 docker compose exec app npx tsx scripts/diag/dateFilterSmoke.ts
 docker compose exec app npx tsx scripts/diag/quoteValidationSmoke.ts
+docker compose exec app npx tsx scripts/diag/apiLogSmoke.ts
 ```
 > ❌ ห้ามรันบน prod: `diag:export-tracking`, `diag:shipping-fee`, `diag:confirm-race` — สามตัวนี้เขียนข้อมูลทดสอบลง DB
 

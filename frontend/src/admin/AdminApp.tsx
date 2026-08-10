@@ -14,6 +14,7 @@ import { StockRules } from './StockRules';
 import { ProductMoqRules } from './ProductMoqRules';
 import { ShippingFee } from './ShippingFee';
 import { SyncPanel } from './SyncPanel';
+import { ApiLogs } from './ApiLogs';
 import {
   LogOut,
   User as UserIcon,
@@ -33,9 +34,10 @@ import {
   Users as UsersIcon,
   KeyRound,
   Ban,
+  Activity,
 } from 'lucide-react';
 
-type MainTab = 'dashboard' | 'quotations' | 'salespersons' | 'promotions' | 'users' | 'blacklist' | 'settings';
+type MainTab = 'dashboard' | 'quotations' | 'salespersons' | 'promotions' | 'users' | 'blacklist' | 'apilogs' | 'settings';
 type SubTab = 'quotation' | 'optional' | 'stock' | 'moq' | 'shipping';
 
 interface AdminStats {
@@ -61,6 +63,7 @@ const NAV_ITEMS: { key: MainTab; label: string; icon: typeof LayoutDashboard; ro
   { key: 'salespersons', label: 'จัดการข้อมูลพนักงาน', icon: UserCheck, roles: ['admin'] },
   { key: 'users', label: 'จัดการผู้ใช้งานระบบ', icon: UsersIcon, roles: ['admin'] },
   { key: 'blacklist', label: 'บัญชีห้ามเสนอราคา', icon: Ban, roles: ['admin', 'user'] },
+  { key: 'apilogs', label: 'บันทึกการเรียก API', icon: Activity, roles: ['admin'] },
 ];
 
 const SETTINGS_SUBITEMS: { key: SubTab; label: string }[] = [
@@ -78,6 +81,7 @@ const PAGE_TITLES: Record<MainTab, string> = {
   salespersons: 'จัดการข้อมูลพนักงาน',
   users: 'จัดการผู้ใช้งานระบบ',
   blacklist: 'บัญชีห้ามเสนอราคา',
+  apilogs: 'บันทึกการเรียก API',
   settings: 'ตั้งค่าเงื่อนไข & กฎ',
 };
 
@@ -448,6 +452,10 @@ function AdminContent() {
           ) : effectiveTab === 'quotations' ? (
             <div className="animate-fade-in">
               <Quotations />
+            </div>
+          ) : effectiveTab === 'apilogs' ? (
+            <div className="animate-fade-in">
+              <ApiLogs />
             </div>
           ) : effectiveTab === 'dashboard' ? (
             <div className="grid grid-cols-1 gap-6">

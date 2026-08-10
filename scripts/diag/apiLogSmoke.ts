@@ -215,20 +215,24 @@ try {
     console.log('   (ตารางยังว่าง — ข้ามการตรวจ retention)');
   }
 
-  // แผน query ของหน้ารายการต้องใช้ index ไม่ใช่สแกนทั้งตาราง
-  // ตารางเล็กมาก planner จะเลือก Seq Scan เป็นเรื่องปกติและถูกต้อง → assert เฉพาะตอนมีข้อมูลพอ
-  const plan = await pool.query(`
-    EXPLAIN SELECT id, created_at, method, path, status_code, duration_ms
-      FROM public.api_logs
-     WHERE created_at >= CURRENT_TIMESTAMP - INTERVAL '7 day'
-     ORDER BY created_at DESC, id DESC LIMIT 50`);
-  const planText = plan.rows.map((r: any) => r['QUERY PLAN']).join(' | ');
-  if (s.rows >= 1000) {
-    ok('query หน้ารายการใช้ index ไม่ใช่ Seq Scan',
-      /Index Scan/.test(planText) && !/Seq Scan on api_logs/.test(planText), planText);
-  } else {
-    console.log(`   (แถวน้อยเกินกว่าจะบังคับ index ได้ — แผนตอนนี้: ${planText})`);
-  }
+  // index ต้อง "รองรับรูป query ของหน้ารายการได้" — ตรวจด้วยการปิด Seq Scan แล้วดูว่า planner
+  // ใช้ idx_api_logs_created_at ได้จริงและ "ไม่ต้องมี Sort" (= index เรียงตรงกับ ORDER BY อยู่แล้ว)
+  //
+  // ที่ไม่ assert ว่า "planner ต้องเลือก index" ตรง ๆ เพราะตอนตารางยังเล็ก Seq Scan เร็วกว่าจริง
+  // และ planner ก็ถูกแล้วที่เลือกมัน → assert แบบนั้นจะ fail แบบไร้สาระตอนตารางว่าง
+  // สิ่งที่ต้องเฝ้าคือ "index ยังตรงกับ query อยู่ไหม" ซึ่งพังได้จริงถ้ามีคนแก้ ORDER BY
+  // หรือลบคอลัมน์ id ออกจาก index
+  await withTransaction(async (client) => {
+    await client.query('SET LOCAL enable_seqscan = off');
+    const plan = await client.query(`
+      EXPLAIN SELECT id, created_at, method, path, status_code, duration_ms
+        FROM public.api_logs
+       WHERE created_at >= CURRENT_TIMESTAMP - INTERVAL '7 day'
+       ORDER BY created_at DESC, id DESC LIMIT 50`);
+    const planText = plan.rows.map((r: any) => r['QUERY PLAN']).join(' | ');
+    ok('index รองรับ query ของหน้ารายการ', /idx_api_logs_created_at/.test(planText), planText.slice(0, 90));
+    ok('ไม่ต้อง Sort (index เรียงตรงกับ ORDER BY อยู่แล้ว)', !/Sort/.test(planText));
+  });
 } catch (err: any) {
   failures++;
   console.log('✗ FAIL  ตรวจ DB ล้มเหลว:', err?.message ?? err);

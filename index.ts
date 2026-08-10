@@ -34,6 +34,10 @@ import {
   unmarkExportBatch,
   getExportBatches,
   countExportBatches,
+  listApiLogs,
+  countApiLogs,
+  getApiLogById,
+  getApiLogStats,
 } from './db/repositories.js';
 import { confirmQuotationAtomic, enrichQuotationData, buildItemSnapshots } from './services/quotationService.js';
 import {
@@ -80,11 +84,14 @@ import {
 } from './config/loginRateLimit.js';
 import { sumLineTotals } from './utils/pricing.js';
 import { isCustomerInfoIncomplete } from './utils/flexTemplates.js';
-import { apiLogMiddleware } from './config/apiLogger.js';
+import { thaiDateParts } from './utils/thaiTime.js';
+import { apiLogMiddleware, getRequestId } from './config/apiLogger.js';
 import {
   initApiLogWriter,
   stopApiLogWriter,
   flushApiLogs,
+  recordWebhookProcessing,
+  type WebhookOutcome,
 } from './services/apiLogService.js';
 import {
   startSync,
@@ -153,6 +160,10 @@ app.post('/callback', line.middleware(lineConfig), (req: any, res: any) => {
   //   ทั้งที่ token ตายไปตั้งแต่ก่อนตัวจับเวลาเริ่มนับแล้ว
   const receivedAt = Date.now();
 
+  // อ่าน id ของ request นี้ก่อน res ปิด — ใช้ผูกแถว "งานจริง" (method=TASK) เข้ากับแถว HTTP นี้
+  // เพราะแถว HTTP จะบันทึก duration ~1ms เสมอ (ตอบก่อนทำงาน) ซึ่งไม่ใช่เวลาที่ผู้ใช้รอจริง
+  const reqId = getRequestId(req);
+
   res.sendStatus(200);
 
   console.log(">>> Webhook Received! Events:", JSON.stringify(req.body.events, null, 2));
@@ -178,11 +189,20 @@ app.post('/callback', line.middleware(lineConfig), (req: any, res: any) => {
         if (expired) {
           queueMetrics.droppedBeforeStart++;
           console.warn(`[queue] DROP ก่อนเริ่ม (รอคิว ${waited}ms > งบ ${BUDGET_MS}ms) ${who} · สะสม ${queueMetrics.droppedBeforeStart}`);
+          // ต้องบันทึกก่อน return ด้วย — event ที่ถูกทิ้งเพราะคิวตันคือหลักฐานสำคัญที่สุด
+          // ว่าทรัพยากรไม่พอ ถ้าไม่บันทึกตรงนี้มันจะหายไปจากสถิติทั้งที่เป็นเคสที่ต้องเห็นที่สุด
+          recordWebhookProcessing({
+            requestId: reqId, lineUserId: queueKey, outcome: 'dropped',
+            waitedMs: waited, totalMs: Date.now() - receivedAt,
+          });
           return;
         }
         if (waited > 5_000) console.warn(`[queue] รอคิวนาน ${waited}ms ${who}`);
 
         const startedAt = Date.now();
+        // ผลลัพธ์ที่ finally ต้องใช้บันทึกลง api_logs — ตั้งต้นเป็น failed เพื่อให้กรณีที่
+        // runWithDeadline โยน error ออกมาเองโดยไม่คืน outcome ถูกนับเป็นล้มเหลว ไม่ใช่หายเงียบ
+        let outcome: WebhookOutcome = 'failed';
         try {
           // timeout = งบที่เหลือจริงหลังหักเวลารอคิว ไม่ใช่ 25,000 คงที่เหมือนเดิม
           // (งานที่เข้าคิวได้ทันทีจึงได้เวลามากกว่าเดิม — ตั้งใจ: มีงบก็ควรได้ใช้ ดีกว่าถูกตัดที่ 25 วิ
@@ -202,7 +222,9 @@ app.post('/callback', line.middleware(lineConfig), (req: any, res: any) => {
 
           if (res.outcome === 'ok') {
             queueMetrics.replied++;
+            outcome = 'replied';
           } else if (res.outcome === 'timeout') {
+            outcome = 'timeout';
             // ห้าม replyMessage ที่นี่ — reply token เป็น single-use และ handler เดิม (handleEvent)
             // อาจกำลังจะตอบสำเร็จอยู่พอดี (abort หยุดมันได้แค่ที่ "ด่านตรวจถัดไป" ไม่ตัดกลางคัน)
             // การยิงซ้ำจะแย่ง token กัน ทำให้ผู้ใช้เห็นข้อความผิด และ Push Message ก็ถูกห้ามอยู่แล้ว
@@ -217,10 +239,14 @@ app.post('/callback', line.middleware(lineConfig), (req: any, res: any) => {
           const total = now - receivedAt;
           const m = queueMetrics;
           console.log(
-            `[queue] ${who} waited=${waited}ms processed=${now - startedAt}ms total=${total}ms` +
+            `[queue] reqId=${reqId ?? '-'} ${who} waited=${waited}ms processed=${now - startedAt}ms total=${total}ms` +
             `${total > BUDGET_MS ? ' ⚠️เกินงบ' : ''}` +
             ` [replied=${m.replied} timedOut=${m.timedOut} dropped=${m.droppedBeforeStart} failed=${m.failed}]`
           );
+          // แถวที่บอกเวลาทำงานจริง — total นับจาก receivedAt จึงเป็นเวลาที่ผู้ใช้รอทั้งหมด
+          recordWebhookProcessing({
+            requestId: reqId, lineUserId: queueKey, outcome, waitedMs: waited, totalMs: total,
+          });
         }
       });
     });
@@ -3624,6 +3650,84 @@ app.delete('/api/admin/moq-rules/:internal_reference', adminAuthMiddleware, requ
     res.json({ success: true });
   } catch (err: any) {
     console.error("DELETE /api/admin/moq-rules error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  บันทึกการเรียก API — เฉพาะ role admin (subadmin/user ไม่เห็นเมนูและยิงตรงก็ไม่ผ่าน)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** ค่าตั้งต้น 7 วันล่าสุด — ทุก query ต้องมีขอบเขตเวลาเสมอ ไม่งั้นจะสแกนทั้งตาราง */
+function apiLogDateRange(q: any): { dateFrom: string; dateTo: string } {
+  const today = thaiDateParts();
+  const todayStr = `${today.year}-${today.month}-${today.day}`;
+  const d = new Date(`${todayStr}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - 6);                       // รวมวันนี้ด้วย = 7 วัน
+  const defaultFrom = d.toISOString().slice(0, 10);
+  const valid = (s: any) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s);
+  return {
+    dateFrom: valid(q.dateFrom) ? q.dateFrom : defaultFrom,
+    dateTo: valid(q.dateTo) ? q.dateTo : todayStr,
+  };
+}
+
+const API_LOG_METHODS = new Set(['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'TASK']);
+
+app.get('/api/admin/api-logs', adminAuthMiddleware, requireRole('admin'), async (req: any, res: any) => {
+  try {
+    const q = req.query;
+    const { dateFrom, dateTo } = apiLogDateRange(q);
+    const limit = Math.min(Math.max(parseInt(q.limit) || 50, 1), 200);
+    const offset = Math.min(Math.max(parseInt(q.offset) || 0, 0), 10000);
+
+    const filters = {
+      // ระบุ requestId = ตามรอยจาก id ที่ผู้ใช้แคปมา ไม่รู้วันที่ → ต้องไม่ถูกกรองด้วยช่วงวัน
+      ...(q.requestId ? { requestId: String(q.requestId) } : { dateFrom, dateTo }),
+      method: API_LOG_METHODS.has(String(q.method)) ? String(q.method) : undefined,
+      status: q.status ? String(q.status) : undefined,
+      path: q.path ? String(q.path) : undefined,
+      route: q.route ? String(q.route) : undefined,
+      adminUserId: q.adminUserId ? parseInt(q.adminUserId) : undefined,
+      lineUserId: q.lineUserId ? String(q.lineUserId) : undefined,
+      minDuration: q.minDuration ? parseInt(q.minDuration) : undefined,
+    };
+
+    const [data, total] = await Promise.all([
+      listApiLogs(filters, limit, offset),
+      countApiLogs(filters),
+    ]);
+    res.json({ data, total, limit, offset, dateFrom, dateTo });
+  } catch (err: any) {
+    console.error('GET /api/admin/api-logs error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/api-logs/stats', adminAuthMiddleware, requireRole('admin'), async (req: any, res: any) => {
+  try {
+    const { dateFrom, dateTo } = apiLogDateRange(req.query);
+    const stats = await getApiLogStats(dateFrom, dateTo);
+    res.json({ ...stats, dateFrom, dateTo });
+  } catch (err: any) {
+    console.error('GET /api/admin/api-logs/stats error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/api-logs/:id', adminAuthMiddleware, requireRole('admin'), async (req: any, res: any) => {
+  try {
+    // ต้องตรวจก่อน ไม่งั้น cast เป็น bigint จะพังเป็น 500 แทนที่จะเป็น 400
+    if (!/^\d+$/.test(req.params.id)) {
+      return res.status(400).json({ error: 'id ต้องเป็นตัวเลข' });
+    }
+    const row = await getApiLogById(req.params.id);
+    if (!row) {
+      return res.status(404).json({ error: 'ไม่พบรายการนี้ (อาจถูกลบไปแล้วตามอายุการเก็บ)' });
+    }
+    res.json(row);
+  } catch (err: any) {
+    console.error('GET /api/admin/api-logs/:id error:', err);
     res.status(500).json({ error: err.message });
   }
 });
