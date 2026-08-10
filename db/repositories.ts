@@ -213,29 +213,38 @@ export async function getContactNamesByCustomerIds(customerIds: any[]): Promise<
   } catch (err) { logErr('getContactNamesByCustomerIds', err); return []; }
 }
 
+/** เพดานแถวของ reverse lookup — ILIKE สแกนทั้งตารางอยู่แล้ว การขยับเพดานจึงแทบไม่มีผลกับเวลา
+ *  (วัดจริง: limit 50 vs 500 vs ไม่จำกัด ต่างกันอยู่ในช่วง noise)
+ *  ที่ยังต้องมีเพดานเพราะกันฝั่ง Node — pattern กว้างตรงได้เป็นหมื่นแถวแล้วไปหนักที่ Fuse.js */
+export const CONTACT_LOOKUP_LIMIT = 300;
+
+/** pattern สั้นกว่านี้กว้างเกินจะมีความหมาย เช่น "ณ" ตรง ~70,000 ผู้ติดต่อ — ตัดตั้งแต่ต้นทาง ไม่ยิง DB */
+const CONTACT_LOOKUP_MIN_LEN = 2;
+
 /**
  * reverse lookup: หาบริษัทจากชื่อผู้ติดต่อ (JOIN ผู้ติดต่อ ↔ บริษัท จาก customers_data_view)
  * คืนรูป { name, customer_id, customers: { id, display_name, salesperson, branch_code } } ตาม shape เดิม
+ *
+ * ไม่กรอง branch โดยตั้งใจ — ให้สอดคล้องกับ findCustomerCandidates ที่ค้นข้ามเขตได้
+ * ORDER BY ต้องนิ่ง (deterministic) เพราะ LIMIT ตัดแถวทิ้ง ถ้าไม่เรียงจะได้คนละชุดในแต่ละครั้ง
  */
 export async function findContactsWithCustomerByName(
-  namePattern: string, branchCodes: string[] | null, limit = 50
+  namePattern: string, limit = CONTACT_LOOKUP_LIMIT
 ): Promise<any[]> {
   try {
-    const params: any[] = [`%${namePattern}%`];
-    let branchFilter = '';
-    if (branchCodes && branchCodes.length > 0) {
-      params.push(branchCodes);
-      branchFilter = `AND cust.branch = ANY($${params.length})`;
-    }
-    params.push(limit);
+    const bare = (namePattern || '').trim();
+    if (bare.length < CONTACT_LOOKUP_MIN_LEN) return [];
     const { rows } = await pool.query(
       `SELECT c.name, c.customer_id,
               cust.id AS cust_id, cust.display_name, cust.salesperson, cust.branch AS branch_code
        FROM (${CDV_CONTACT_SUBQ}) c
        INNER JOIN (${CDV_COMPANY_SUBQ}) cust ON c.customer_id = cust.id
-       WHERE c.name ILIKE $1 ${branchFilter}
-       LIMIT $${params.length}`,
-      params);
+       WHERE c.name ILIKE $1
+       ORDER BY length(c.name),                          -- ชื่อสั้น = ส่วนที่ตรงกินสัดส่วนมาก = ใกล้เคียงกว่า
+                strpos(lower(c.name), lower($2)),        -- ตรงตั้งแต่ต้นชื่อดีกว่าตรงกลาง
+                c.name, c.id, c.customer_id              -- tie-break ให้ผลนิ่ง 100% (id ซ้ำข้ามบริษัทได้)
+       LIMIT $3`,
+      [`%${bare}%`, bare, limit]);
     return rows.map(r => ({
       name: r.name,
       customer_id: r.customer_id,

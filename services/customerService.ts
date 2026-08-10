@@ -1371,17 +1371,12 @@ export async function findContactCandidates(customerId: any, contactQuery: strin
   }));
 }
 
-export async function findCustomerByContactName(contactQuery: string, salesperson: any): Promise<any[]> {
+/** salesperson รับไว้เพื่อคง signature เดิม — จงใจไม่ใช้กรอง branch ให้ตรงกับ findCustomerCandidates ที่ค้นข้ามเขตได้ */
+export async function findCustomerByContactName(contactQuery: string, _salesperson?: any): Promise<any[]> {
   const cleaned = cleanContactName(contactQuery);
   if (!cleaned) return [];
 
-  let branchCodes: string[] | null = null;
-  if (salesperson && salesperson.branch_code) {
-    const codes = salesperson.branch_code.split(',').map((c: any) => c.trim()).filter(Boolean);
-    if (codes.length > 0) branchCodes = codes;
-  }
-
-  const dbContacts = await findContactsWithCustomerByName(cleaned, branchCodes, 50);
+  const dbContacts = await findContactsWithCustomerByName(cleaned);
   if (!dbContacts || dbContacts.length === 0) {
     return [];
   }
