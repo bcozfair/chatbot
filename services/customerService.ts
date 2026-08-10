@@ -227,6 +227,14 @@ export function clearCustomerSearchCache(): void {
   customerCacheLoading = null;
 }
 
+/** จำนวนแถวจากการค้นด้วยชื่อที่ส่งต่อเข้า pipeline ปกติ */
+const NORM_ROWS_LIMIT = 25;
+/**
+ * เพดานการสแกนเมื่อเซลส์พิมพ์ชื่อผู้ติดต่อมาด้วย — แถวที่เกิน NORM_ROWS_LIMIT จะถูกคัด
+ * ด้วย "ผู้ติดต่อตรงไหม" ก่อนเข้า pipeline (ดู searchCompaniesWithContactSeed)
+ */
+const CONTACT_SEED_SCAN_LIMIT = 200;
+
 /**
  * searchCustomersNormalized — stage ค้นหาใหม่ (normalized + trigram)
  * เทียบชื่อแบบ normalize สองฝั่งด้วยกติกาเดียวกัน:
@@ -234,7 +242,7 @@ export function clearCustomerSearchCache(): void {
  *  - trigram similarity รองรับสะกดต่าง ("แมสชีนเนอรี่" ↔ "แมชชินเนอรี่")
  * คืน rows: { id, display_name, reference, branch_code, salesperson, norm_name, max_sim, has_exact, has_substr }
  */
-export async function searchCustomersNormalized(variants: string[]): Promise<any[]> {
+export async function searchCustomersNormalized(variants: string[], limit = NORM_ROWS_LIMIT): Promise<any[]> {
   const t0 = Date.now();
   const queryNorms = Array.from(new Set(
     variants.map(v => normalizeCompanyNameTS(v)).filter(n => n.length >= 2)
@@ -281,9 +289,45 @@ export async function searchCustomersNormalized(variants: string[]): Promise<any
     Number(b.has_exact) - Number(a.has_exact) ||
     b.best_signal - a.best_signal
   );
-  const limited = results.slice(0, 25);
+  const limited = results.slice(0, limit);
   console.log(`[searchCustomersNormalized] ${limited.length}/${results.length} rows in ${Date.now() - t0}ms | norms: ${JSON.stringify(queryNorms)}`);
   return limited;
+}
+
+/**
+ * ค้นบริษัทด้วยชื่อ แล้ว "เก็บตก" บริษัทที่ชื่อไม่เด่นแต่มีผู้ติดต่อตรงกับที่เซลส์พิมพ์มา
+ *
+ * ทำไมต้องมี: อันดับของ searchCustomersNormalized วัดจาก coverage (ความยาวคำค้น ÷ ความยาวชื่อ)
+ * ชื่อยิ่งยาวยิ่งได้สัญญาณต่ำ — บริษัทชื่อยาวที่เป็นตัวจริงจึงตกท้ายแถวและโดน limit ตัดทิ้ง
+ * ตั้งแต่ยังไม่ทันคำนวณหลักฐานผู้ติดต่อ (เคสจริง 2026-08-10: เซลส์พิมพ์ "เค.พี.เอส" +
+ * "คุณประสิทธิ์" — "หจก. เค.พี.เอส. ออโตเมชั่น แอนด์ เซอร์วิส" ติดอันดับ 26 จาก 31 จึงหลุด
+ * limit 25 แล้วระบบไปออกใบให้ "บริษัท เคพีเอส จำกัด" ที่ชื่อสั้นกว่าและไม่มีคุณประสิทธิ์)
+ *
+ * สแกนกว้างขึ้นในการเรียกครั้งเดียว (ไม่เพิ่มรอบ CPU) แล้วดึงเฉพาะแถวส่วนเกินที่ผู้ติดต่อ
+ * ตรงเป๊ะเข้ามา — ชื่อยังต้องเข้าเค้ากับที่เซลส์พิมพ์อยู่แล้ว จึงไม่เปิดประตูให้บริษัทมั่ว
+ */
+async function searchCompaniesWithContactSeed(
+  variants: string[], contactQuery: string
+): Promise<{ rows: any[]; seededIds: Set<any> }> {
+  const seededIds = new Set<any>();
+  const wantSeed = !!contactQuery.trim();
+  const scanned = await searchCustomersNormalized(variants, wantSeed ? CONTACT_SEED_SCAN_LIMIT : NORM_ROWS_LIMIT);
+  const head = scanned.slice(0, NORM_ROWS_LIMIT);
+  const overflow = scanned.slice(NORM_ROWS_LIMIT);
+  if (!wantSeed || overflow.length === 0) return { rows: head, seededIds };
+
+  const contactRows = await getContactNamesByCustomerIds(overflow.map(r => r.id));
+  const matchedIds = new Set(
+    contactRows
+      .filter((r: any) => contactNamesMatch(contactQuery, r.name).exact)
+      .map((r: any) => r.customer_id)
+  );
+  const seeded = overflow.filter(r => matchedIds.has(r.id));
+  seeded.forEach(r => seededIds.add(r.id));
+  if (seeded.length > 0) {
+    console.log(`[searchCompaniesWithContactSeed] เก็บตก ${seeded.length} บริษัทที่ผู้ติดต่อ "${contactQuery}" ตรง: ${seeded.map(r => r.display_name).join(' | ')}`);
+  }
+  return { rows: head.concat(seeded), seededIds };
 }
 
 /**
@@ -673,6 +717,8 @@ export async function findCustomerCandidates(customerQuery: string, salesperson:
   // เก็บผลไว้ merge เข้า resultsMap ตอนท้าย; ถ้าเจอชื่อตรงเป๊ะบริษัทเดียว → เลือกเลยไม่ต้องเรียก AI
   let normRows: any[] = [];
   const normVariantSet = new Set<string>();
+  // id ของบริษัทที่เข้ามาเพราะ "ผู้ติดต่อตรง" (ไม่ใช่เพราะชื่อเด่น) — ต้องกันไม่ให้หลุด pool ตอนตัด 40
+  const contactSeededIds = new Set<any>();
   // แยก "บ.X คุณY" ที่พิมพ์มาบรรทัดเดียว: ใช้ส่วนบริษัทค้นหา และถ้าไม่มี contactQuery ให้ใช้ส่วน คุณY เป็นหลักฐาน
   let inferredContact = '';
   const customerLines = rawLines.map(l => {
@@ -691,7 +737,9 @@ export async function findCustomerCandidates(customerQuery: string, salesperson:
       initialVariants.push(line, noPhone, cleanCompanyName(noPhone));
       initialVariants.push(...buildDotInitialVariants(noPhone));
     }
-    normRows = await searchCustomersNormalized(initialVariants);
+    const seeded = await searchCompaniesWithContactSeed(initialVariants, effectiveContactQuery);
+    normRows = seeded.rows;
+    seeded.seededIds.forEach(id => contactSeededIds.add(id));
     initialVariants.forEach(v => { const n = normalizeCompanyNameTS(v); if (n) normVariantSet.add(n); });
 
     // Exact short-circuit: user พิมพ์ชื่อเต็มตรงเป๊ะกับ DB (เทียบแบบยุบช่องว่าง) และไม่มีบริษัทพี่น้อง
@@ -759,9 +807,10 @@ export async function findCustomerCandidates(customerQuery: string, salesperson:
     const aiNorm = normalizeCompanyNameTS(aiExtractedName);
     if (aiNorm && !normVariantSet.has(aiNorm)) {
       normVariantSet.add(aiNorm);
-      const extraRows = await searchCustomersNormalized([aiExtractedName]);
+      const extra = await searchCompaniesWithContactSeed([aiExtractedName], effectiveContactQuery);
+      extra.seededIds.forEach(id => contactSeededIds.add(id));
       const byId = new Map(normRows.map((r: any) => [r.id, r]));
-      for (const r of extraRows) {
+      for (const r of extra.rows) {
         const ex = byId.get(r.id);
         if (!ex || normRowScore(r) < normRowScore(ex)) byId.set(r.id, r);
       }
@@ -919,6 +968,15 @@ export async function findCustomerCandidates(customerQuery: string, salesperson:
     .sort((a, b) => (a.score ?? 0) - (b.score ?? 0))
     .slice(0, 40);
 
+  // บริษัทที่ถูกเก็บตกมาเพราะ "มีคนที่เซลส์พิมพ์ชื่อมาอยู่จริง" ต้องอยู่ใน pool เสมอ —
+  // คะแนนจากชื่ออย่างเดียวของมันต่ำ (ชื่อยาว = coverage ต่ำ) จึงมีสิทธิ์โดน slice ตัดทิ้งซ้ำอีกรอบ
+  if (contactSeededIds.size > 0) {
+    const inPool = new Set(finalCandidates.map(c => c.item.id));
+    for (const [id, c] of resultsMap) {
+      if (contactSeededIds.has(id) && !inPool.has(id)) finalCandidates.push(c);
+    }
+  }
+
   // ═══ Evidence stage: คำนวณหลักฐานเชิงข้อเท็จจริงต่อ candidate (deterministic) ═══
   if (finalCandidates.length > 0) {
     const normRowById = new Map(normRows.map((r: any) => [r.id, r]));
@@ -976,36 +1034,46 @@ export async function findCustomerCandidates(customerQuery: string, salesperson:
 
     // ═══ Deterministic evidence boost: หลักฐานชี้ขาดได้เพียงตัวเดียว → ดันขึ้นอันดับ 1 ═══
     // ต้องทำก่อน slice 8 ไม่งั้นตัวถูกที่สัญญาณชื่ออ่อน (เช่น พีเคยู กับ query "เคยู") โดนตัดทิ้งก่อน
-    // ลำดับความแข็งของหลักฐาน: raw-exact (รวมสาขา/วงเล็บ) > norm-exact > contact ตรง
     // boost เป็น 0.0 โดยไม่ penalty ตัวอื่น → ยังไม่ auto-select (gap แคบ) แต่ขึ้นอันดับ 1 ของ picker/AI
+    //
+    // ลำดับความแข็งของหลักฐาน (บนสุดชนะ):
+    //  1. ชื่อตรงเป๊ะทั้งบรรทัดรวมสาขา/วงเล็บ — เซลส์พิมพ์ชื่อเต็มมาเองจึงเถียงไม่ได้
+    //  2. ชื่อตรง + ผู้ติดต่อตรง — หลักฐานสองชั้น
+    //  3. ผู้ติดต่อที่เซลส์พิมพ์มา อยู่ในบริษัทนี้บริษัทเดียวในลิสต์
+    //  4. ชื่อตรงเมื่อไม่นับคำนำหน้า/สาขา/วงเล็บ
+    //
+    // (3) ต้องมาก่อน (4): ชื่อย่อที่เซลส์พิมพ์ ("เค.พี.เอส") พอ normalize แล้วไป "ตรงเป๊ะ" กับ
+    // บริษัทชื่อสั้นที่ไม่เกี่ยวกันได้ง่ายมาก ("บริษัท เคพีเอส จำกัด") ส่วนชื่อคนที่เซลส์พิมพ์มา
+    // ด้วยนั้นชี้บริษัทได้ตรงกว่า (เคสจริง 2026-08-10: คุณประสิทธิ์ อยู่ที่ "หจก. เค.พี.เอส.
+    // ออโตเมชั่น แอนด์ เซอร์วิส" แต่ระบบเสนอ "บริษัท เคพีเอส จำกัด" ที่มีแต่คุณคำพอง)
+    const only = (list: any[]) => (list.length === 1 ? list[0] : null);
     const rawExacts = finalCandidates.filter(c => c.evidence.isExactRaw);
     const normExacts = finalCandidates.filter(c => c.evidence.isExactNorm);
     const exactContacts = finalCandidates.filter(c => c.evidence.matchedContacts.length > 0);
-    if (rawExacts.length === 1) {
-      rawExacts[0].score = 0.0;
-    } else if (rawExacts.length === 0 && normExacts.length === 1) {
-      normExacts[0].score = 0.0;
-    } else if (exactContacts.length === 1) {
-      // contact ชี้ขาดได้แม้มี record ชื่อซ้ำหลายตัว (เช่น ย่งฮง 2 แถว — ผู้ติดต่ออยู่แถวเดียว)
-      exactContacts[0].score = 0.0;
-    }
-
-    // ═══ "ชื่อตรง + ผู้ติดต่อตรง" ต้องชนะ "ชื่อตรงอย่างเดียว" ═══
-    // record ชื่อซ้ำ (บริษัทเดียวกันหลายสาขา เช่น TPCS 3 สาขา) ได้ 0.0 พร้อมกันจาก cleanName-exact
-    // การ boost ตัวที่ผู้ติดต่อตรงเป็น 0.0 จึงไม่มีผล — คะแนนเสมอกัน ไม่มีใครชนะ
-    // ต้องถ่างคู่แข่งที่ "ตรงแค่ชื่อ" ออกไปให้เกิน auto-select gap ด้วย หลักฐาน 2 ชั้นจึงจะชี้ขาดได้จริง
     const nameAndContact = finalCandidates.filter(c =>
       c.evidence.isExact && c.evidence.matchedContacts.length > 0);
-    if (nameAndContact.length === 1) {
-      const winner = nameAndContact[0];
-      winner.score = 0.0;
-      for (const c of finalCandidates) {
-        if (c === winner) continue;
-        // ไม่ถ่างตัวที่หลักฐานแข็งพอกัน: มีผู้ติดต่อตรงด้วย หรือชื่อตรงเป๊ะทั้งบรรทัด (แข็งกว่า norm-exact)
-        if (c.evidence.matchedContacts.length > 0 || c.evidence.isExactRaw) continue;
-        if ((c.score ?? 1) < NAME_ONLY_DEMOTED_SCORE) c.score = NAME_ONLY_DEMOTED_SCORE;
+
+    const decisive =
+      only(rawExacts) ||
+      only(nameAndContact) ||
+      only(exactContacts) ||
+      (rawExacts.length === 0 ? only(normExacts) : null);
+
+    if (decisive) {
+      decisive.score = 0.0;
+      // ═══ "ผู้ติดต่อตรง" ต้องชนะ "ชื่อตรงอย่างเดียว" ═══
+      // record ชื่อซ้ำ (บริษัทเดียวกันหลายสาขา เช่น TPCS 3 สาขา) ได้ 0.0 พร้อมกันจาก cleanName-exact
+      // การ boost ตัวที่ผู้ติดต่อตรงเป็น 0.0 จึงไม่มีผล — คะแนนเสมอกัน ไม่มีใครชนะ
+      // ต้องถ่างคู่แข่งที่ "ตรงแค่ชื่อ" ออกไปให้เกิน auto-select gap ตัวชี้ขาดจึงจะชี้ขาดได้จริง
+      if (decisive.evidence.matchedContacts.length > 0) {
+        for (const c of finalCandidates) {
+          if (c === decisive) continue;
+          // ไม่ถ่างตัวที่หลักฐานแข็งพอกัน: มีผู้ติดต่อตรงด้วย หรือชื่อตรงเป๊ะทั้งบรรทัด (แข็งกว่า norm-exact)
+          if (c.evidence.matchedContacts.length > 0 || c.evidence.isExactRaw) continue;
+          if ((c.score ?? 1) < NAME_ONLY_DEMOTED_SCORE) c.score = NAME_ONLY_DEMOTED_SCORE;
+        }
+        console.log(`[findCustomerCandidates] ✅ ผู้ติดต่อชี้ขาดตัวเดียว: "${decisive.item.display_name}" (${decisive.evidence.matchedContacts.join(', ')}) → ถ่างคู่แข่งที่ตรงแค่ชื่อ`);
       }
-      console.log(`[findCustomerCandidates] ✅ ชื่อ+ผู้ติดต่อตรงตัวเดียว: "${winner.item.display_name}" → ถ่างคู่แข่งที่ตรงแค่ชื่อ`);
     }
     finalCandidates.sort(compareCandidates);
 
