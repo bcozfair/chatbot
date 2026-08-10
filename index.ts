@@ -5,7 +5,7 @@ import path from 'path';
 import fs from 'fs';
 dotenv.config();
 
-import { lineConfig, lineClient } from './config/clients.js';
+import { lineConfig, lineClient, newLlmTiming, withLlmTiming } from './config/clients.js';
 import { KeyedTaskQueue, replyBudget, runWithDeadline, BUDGET_MS } from './services/webhookQueue.js';
 import {
   searchCustomersAdmin,
@@ -203,11 +203,15 @@ app.post('/callback', line.middleware(lineConfig), (req: any, res: any) => {
         // ผลลัพธ์ที่ finally ต้องใช้บันทึกลง api_logs — ตั้งต้นเป็น failed เพื่อให้กรณีที่
         // runWithDeadline โยน error ออกมาเองโดยไม่คืน outcome ถูกนับเป็นล้มเหลว ไม่ใช่หายเงียบ
         let outcome: WebhookOutcome = 'failed';
+        // P4a — ตัวสะสมเวลา LLM ของ "งานนี้" โดยเฉพาะ ต้องประกาศนอก try เพราะ finally ต้องอ่าน
+        const llm = newLlmTiming();
         try {
           // timeout = งบที่เหลือจริงหลังหักเวลารอคิว ไม่ใช่ 25,000 คงที่เหมือนเดิม
           // (งานที่เข้าคิวได้ทันทีจึงได้เวลามากกว่าเดิม — ตั้งใจ: มีงบก็ควรได้ใช้ ดีกว่าถูกตัดที่ 25 วิ
           //  ทั้งที่ตอบทันที่ 30 วิ ส่วนเพดานของ LLM คุมด้วย timeout ของ SDK ใน C.2 อีกชั้น)
-          const res = await runWithDeadline(
+          // ห่อด้วย withLlmTiming: ทุก createChatCompletion ที่เกิดใต้บรรทัดนี้ (ไม่ว่าจะลึกกี่ชั้น)
+          // จะสะสมเวลาลง llm ของงานนี้ ไม่ปนกับอีก 11 งานที่รันพร้อมกันอยู่ในคิว
+          const res = await withLlmTiming(llm, () => runWithDeadline(
             remaining,
             // signal = ธงยกเลิกของ C.3: Promise.race ตัดได้แค่ "การรอ" ไม่ได้หยุดงานที่รันอยู่
             // ธงนี้คือช่องทางเดียวที่จะบอก handler ว่าอย่าเริ่มขั้นตอนหนักขั้นถัดไป
@@ -218,7 +222,7 @@ app.post('/callback', line.middleware(lineConfig), (req: any, res: any) => {
               signal
             }),
             (e: any) => console.error(`[queue] งานที่ถูก abort พังหลังหมดเวลา ${who}:`, e?.message || e)
-          );
+          ));
 
           if (res.outcome === 'ok') {
             queueMetrics.replied++;
@@ -238,8 +242,16 @@ app.post('/callback', line.middleware(lineConfig), (req: any, res: any) => {
           const now = Date.now();
           const total = now - receivedAt;
           const m = queueMetrics;
+          const processed = now - startedAt;
+          // P4a — แยก "รอ LLM" ออกจาก "งานของเราเอง (DB + LINE API + โค้ด)" ในบรรทัดเดียวกัน
+          // own สูง = ไปไล่โค้ด/query · llm สูง = ไปลดจำนวนการเรียกหรือแก้ prompt
+          // calls บอกด้วยว่าเรียกซ้อนกันกี่ครั้งต่อ 1 ข้อความ ซึ่งเป็นตัวคูณที่มองไม่เห็นมาตลอด
+          // หมายเหตุ: งานที่ถูก abort ยังรันต่อเบื้องหลังและบวกเวลาเข้า llm ต่อได้หลังบรรทัดนี้
+          // ค่าที่พิมพ์จึงเป็น "เท่าที่นับได้ ณ ตอนจบงาน" ซึ่งตรงกับ processed พอดี
           console.log(
-            `[queue] reqId=${reqId ?? '-'} ${who} waited=${waited}ms processed=${now - startedAt}ms total=${total}ms` +
+            `[queue] reqId=${reqId ?? '-'} ${who} waited=${waited}ms processed=${processed}ms` +
+            ` llm=${llm.ms}ms/${llm.calls}call${llm.errors > 0 ? `/${llm.errors}err` : ''}` +
+            ` own=${processed - llm.ms}ms total=${total}ms` +
             `${total > BUDGET_MS ? ' ⚠️เกินงบ' : ''}` +
             ` [replied=${m.replied} timedOut=${m.timedOut} dropped=${m.droppedBeforeStart} failed=${m.failed}]`
           );

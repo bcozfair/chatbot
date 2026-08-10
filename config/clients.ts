@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'async_hooks';
 import * as line from '@line/bot-sdk';
 import * as dotenv from 'dotenv';
 import { OpenAI } from 'openai';
@@ -44,12 +45,60 @@ export const LLM_MODEL = 'deepseek-v4-flash';
  * (ถ้าอยากเปิด thinking หรือเพิ่มความหลากหลายเฉพาะจุด ส่ง thinking/temperature มา override ได้)
  */
 export async function createChatCompletion(params: Record<string, any>): Promise<any> {
-  return openai.chat.completions.create({
-    model: LLM_MODEL,
-    thinking: { type: 'disabled' },
-    temperature: 0,
-    ...params,
-  } as any);
+  const timing = llmTimingStore.getStore();
+  const t0 = timing ? Date.now() : 0;
+  try {
+    return await openai.chat.completions.create({
+      model: LLM_MODEL,
+      thinking: { type: 'disabled' },
+      temperature: 0,
+      ...params,
+    } as any);
+  } catch (err) {
+    if (timing) timing.errors++;
+    throw err;
+  } finally {
+    // นับทั้งครั้งที่สำเร็จและครั้งที่พัง — ครั้งที่พังคือครั้งที่กินเวลานานที่สุด (timeout 20 วิ + retry)
+    // ถ้าไม่นับ ตัวเลขจะสวยกว่าความจริงพอดีตอนที่ระบบมีปัญหา ซึ่งเป็นตอนที่ต้องการตัวเลขที่สุด
+    if (timing) { timing.ms += Date.now() - t0; timing.calls++; }
+  }
+}
+
+/**
+ * ─── เวลาที่หมดไปกับ LLM ต่อ "1 งานของคิว webhook" (P4a) ─────────────────────────────
+ *
+ * ที่มา: api_logs บอกได้แค่ว่างาน /callback ใช้เวลา 17.8 วิ แต่บอกไม่ได้ว่าเป็น LLM / DB / LINE API
+ * ซึ่งเป็นภาระที่หนักที่สุดของระบบ (45% ของเวลาเครื่องรวม) และกิน 37% ของงบ 48 วิที่ replyToken มีให้
+ * ⇒ ยังตัดสินใจไม่ได้เลยว่าต้องไปแก้ prompt, ลดจำนวนการเรียก, หรือแก้โค้ดฝั่งเรา
+ *
+ * ทำไมต้องใช้ AsyncLocalStorage ไม่ใช่ตัวแปรนับรวมทั้งโมดูล: คิวรันพร้อมกันได้ 12 งาน
+ * (KeyedTaskQueue(12) ใน index.ts) ตัวนับก้อนเดียวจะเอาเวลาของงานคนอื่นมาปนจนตัวเลขไร้ความหมาย
+ * และไม่ร้อยพารามิเตอร์ผ่าน handleEvent เพราะจุดเรียก createChatCompletion กระจายอยู่ 4 ที่ใน 3 ไฟล์
+ *
+ * เฟสนี้ยังไม่แตะ schema ของ api_logs โดยตั้งใจ — ออกทาง console.log ของ [queue] ก่อน
+ * ให้ข้อมูลจริงตอบว่าคุ้มไหมที่จะเพิ่มคอลัมน์ (P4b)
+ */
+export interface LlmTiming {
+  /** เวลารวมที่รออยู่ใน createChatCompletion (รวมครั้งที่พัง) */
+  ms: number;
+  calls: number;
+  errors: number;
+}
+
+const llmTimingStore = new AsyncLocalStorage<LlmTiming>();
+
+export function newLlmTiming(): LlmTiming {
+  return { ms: 0, calls: 0, errors: 0 };
+}
+
+/**
+ * รัน fn โดยให้ทุก createChatCompletion ที่เกิดข้างในสะสมเวลาลง store ที่ผู้เรียกถือไว้เอง
+ *
+ * ผู้เรียกเป็นเจ้าของ object เพื่อให้บล็อก finally อ่านค่าได้แม้ fn จะโยน error ออกมา
+ * นอกบริบทนี้ getStore() คืน undefined แล้วทุกอย่างทำงานเหมือนเดิม — ไม่มีใครพังเพราะไม่ได้ห่อ
+ */
+export function withLlmTiming<T>(store: LlmTiming, fn: () => Promise<T>): Promise<T> {
+  return llmTimingStore.run(store, fn);
 }
 
 export const lineConfig = {

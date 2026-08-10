@@ -949,9 +949,13 @@ export async function getApiLogStats(dateFrom: string, dateTo: string): Promise<
     const range = `${apiLogFromThaiDay(1)} AND ${apiLogToThaiDay(2)}`;
     const p = [dateFrom, dateTo];
 
+    // ยิงทั้ง 4 พร้อมกัน — ไม่มีตัวไหนใช้ผลของอีกตัว การ await เรียงกันคือการบวกเวลาเปล่า ๆ
+    // (หน้านี้ถูกเปิดถี่ที่สุดในกลุ่ม admin) · ใช้ connection พร้อมกัน 4 เส้นจาก pool ที่มี 40
+    // ถ้า query ไหนพัง Promise.all จะโยนออกไปให้ catch ข้างล่างจัดการเหมือนเดิมทุกประการ
+    const [byRoute, byHour, slowest, sat] = await Promise.all([
     // เรียงด้วย total_ms ไม่ใช่ p95 — endpoint ที่กิน CPU ของเครื่องรวมมากที่สุดคือตัวที่ควร
     // optimize ก่อน ไม่ใช่ตัวที่ช้าที่สุดแต่ถูกเรียกวันละครั้ง
-    const byRoute = await pool.query(
+    pool.query(
       `SELECT ${API_LOG_ROUTE_GROUP} AS route, count(*)::int AS count,
               percentile_disc(0.5)  WITHIN GROUP (ORDER BY duration_ms)::int AS p50,
               percentile_disc(0.95) WITHIN GROUP (ORDER BY duration_ms)::int AS p95,
@@ -959,13 +963,13 @@ export async function getApiLogStats(dateFrom: string, dateTo: string): Promise<
               max(duration_ms)::int AS max_ms, sum(duration_ms)::bigint::text AS total_ms,
               count(*) FILTER (WHERE status_code >= 400)::int AS errors
          FROM api_logs WHERE ${range}
-        GROUP BY 1 ORDER BY sum(duration_ms) DESC LIMIT 100`, p);
+        GROUP BY 1 ORDER BY sum(duration_ms) DESC LIMIT 100`, p),
 
     // กราฟรายชั่วโมง: จำนวน + p95 + จุดสูงสุดของ inflight/db_waiting ในชั่วโมงนั้น
     // คืน hour เป็นสตริงที่จัดรูปแล้ว ไม่ใช่ timestamp — date_trunc(... AT TIME ZONE) ให้
     // timestamp without time zone ซึ่ง node-postgres จะแปลงเป็น Date ตาม TZ ของโปรเซส
     // แล้ว JSON.stringify ทับด้วย offset อีกชั้น กลายเป็นเวลาเพี้ยนโดยไม่มีใครรู้ตัว
-    const byHour = await pool.query(
+    pool.query(
       `SELECT to_char(date_trunc('hour', created_at AT TIME ZONE 'Asia/Bangkok'),
                       'YYYY-MM-DD HH24:MI') AS hour,
               count(*)::int AS count,
@@ -973,17 +977,17 @@ export async function getApiLogStats(dateFrom: string, dateTo: string): Promise<
               max(inflight)::int AS max_inflight, max(db_waiting)::int AS max_db_waiting,
               count(*) FILTER (WHERE status_code >= 400)::int AS errors
          FROM api_logs WHERE ${range}
-        GROUP BY 1 ORDER BY 1`, p);
+        GROUP BY 1 ORDER BY 1`, p),
 
-    const slowest = await pool.query(
+    pool.query(
       `SELECT id::text AS id, created_at, request_id, method, path,
               status_code, duration_ms, queue_waited_ms, line_user_id,
               (SELECT username FROM admin_users u WHERE u.id = api_logs.admin_user_id) AS admin_username
          FROM api_logs WHERE ${range}
-        ORDER BY duration_ms DESC LIMIT 20`, p);
+        ORDER BY duration_ms DESC LIMIT 20`, p),
 
     // 4 ตัวเลขที่ตอบ "ทรัพยากร server พอไหม" ได้ตรงที่สุด
-    const sat = await pool.query(
+    pool.query(
       `SELECT count(*)::int AS total,
               COALESCE(max(inflight), 0)::int AS max_inflight,
               COALESCE(max(db_waiting), 0)::int AS max_db_waiting,
@@ -993,7 +997,8 @@ export async function getApiLogStats(dateFrom: string, dateTo: string): Promise<
               count(*) FILTER (WHERE method = 'TASK' AND status_code = 504)::int AS webhook_timeout,
               COALESCE(percentile_disc(0.95) WITHIN GROUP (ORDER BY duration_ms), 0)::int AS p95,
               COALESCE(max(queue_waited_ms), 0)::int AS max_queue_waited
-         FROM api_logs WHERE ${range}`, p);
+         FROM api_logs WHERE ${range}`, p),
+    ]);
 
     return {
       byRoute: byRoute.rows, byHour: byHour.rows,

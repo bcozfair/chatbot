@@ -62,6 +62,42 @@ export async function closePdfBrowser(): Promise<void> {
   }
 }
 
+/** เพดานเวลารอฟอนต์ — สั้นกว่าเวลาที่ Google Fonts ตอบปกติ (วัดได้ 40-111 ms) หลายสิบเท่า */
+const FONTS_READY_TIMEOUT_MS = 3_000;
+
+/**
+ * รอให้ webfont โหลดเสร็จก่อนสั่งพิมพ์ — คู่กับ waitUntil: "load"
+ *
+ * ทำไมต้องมี: "load" การันตีแค่ว่า <script>/<link> โหลดเสร็จ ไม่ได้การันตีว่าไฟล์ .woff2 ที่ CSS
+ * สั่งโหลดต่ออีกทอดมาถึงแล้ว ถ้าไม่รอตรงนี้ ผลจะไปขึ้นกับว่า "สคริปต์ Tailwind บังเอิญโหลดนานกว่า
+ * ฟอนต์หรือเปล่า" ซึ่งเป็นการแข่งกันที่ชนะบ้างแพ้บ้าง — ทดลองแล้วเห็นจริง: ตัดตัวถ่วงออกแล้วยิง 3 รอบ
+ * ได้ screenshot 124,682 / 122,735 / 124,682 ไบต์ คือฟอนต์มาไม่ทันบางรอบ แล้ว PDF เพี้ยนแบบเงียบ ๆ
+ * ไม่มี error ให้จับ · พอรอ document.fonts.ready ผลนิ่งทุกรอบ
+ *
+ * ทำไมต้องมี timeout ของตัวเอง: ของเดิม networkidle0 มี timeout 30 วิของ puppeteer คุมอยู่ในตัว
+ * แต่ page.evaluate ไม่มีเพดานเวลา ⇒ ถ้า Google Fonts ไม่ตอบ การเจน PDF จะค้างถาวร
+ * หมดเวลาแล้วพิมพ์ต่อด้วยฟอนต์ fallback — ได้ PDF หน้าตาเพี้ยนยังดีกว่าผู้ใช้กดแล้วค้าง
+ */
+async function waitForFontsReady(page: import("puppeteer").Page): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      // ส่งเป็นสตริงเพราะ tsconfig ไม่ได้เปิด lib DOM — และ .then(() => true) กันไม่ให้ puppeteer
+      // ต้อง serialize ตัว FontFaceSet กลับมา (ส่งข้ามไม่ได้ ค่าที่ต้องการคือ "เสร็จแล้ว" เฉย ๆ)
+      page.evaluate("document.fonts.ready.then(() => true)"),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("fonts.ready timeout")), FONTS_READY_TIMEOUT_MS);
+      }),
+    ]);
+  } catch (err: any) {
+    console.warn(
+      `[pdfGenerator] ฟอนต์ยังโหลดไม่เสร็จใน ${FONTS_READY_TIMEOUT_MS}ms — พิมพ์ต่อด้วยฟอนต์ที่มี:`,
+      err?.message ?? err);
+  } finally {
+    if (timer) clearTimeout(timer);   // ไม่เคลียร์ = timer ค้างถ่วง event loop ทุกครั้งที่เจน PDF
+  }
+}
+
 // แยก sales_description เป็นบรรทัดตาม \n เดิมในข้อมูล (trim + ตัดบรรทัดว่างทิ้ง)
 function splitSalesDescriptionLines(desc: string): string[] {
   return String(desc)
@@ -938,7 +974,13 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
   const browser = await getBrowser();
   const page = await browser.newPage();
   try {
-    await page.setContent(finalHtml, { waitUntil: "networkidle0" as any });
+    // "load" ไม่ใช่ "networkidle0" — วัดจริงกับ HTML ใบเสนอราคาของจริงในคอนเทนเนอร์ prod:
+    //   networkidle0 = 1,930 ms คงที่ · load = 620 ms · ผลลัพธ์เหมือนกันทุก pixel (ยิงซ้ำ 15 รอบ
+    //   screenshot เต็มหน้า 122,110 ไบต์ทั้ง 15 รอบ + bounding rect ของ 207 element ตรงกันหมด)
+    // networkidle0 คือ "รอจนไม่มี connection ค้าง 500 ms" ซึ่งกินเวลาเท่าเดิมแม้หน้าไม่มี network
+    // เลยสักเส้น (ทดสอบกับหน้าเปล่า: 1,948 ms) ⇒ เป็นเวลารอเปล่าล้วน ๆ ต่อการเจน PDF ทุกใบ
+    await page.setContent(finalHtml, { waitUntil: "load" as any });
+    await waitForFontsReady(page);
     return await page.pdf({
       format: "A4",
       printBackground: true,
