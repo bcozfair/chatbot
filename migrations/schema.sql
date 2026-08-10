@@ -78,6 +78,52 @@ ALTER SEQUENCE public.admin_users_id_seq OWNED BY public.admin_users.id;
 
 
 --
+-- Name: api_logs; Type: TABLE; Schema: public; Owner: -
+--
+
+-- บันทึกการเรียก API ทุกครั้ง (ใครเรียกอะไร ได้ status อะไร ใช้เวลาเท่าไหร่)
+-- จงใจไม่เก็บ request body — ดูเหตุผลเต็มใน migrations/changes/2026-08-10_01_api_logs.sql
+-- route เก็บเฉพาะที่ Express บอกมาเป็น string ไม่บอกก็ NULL (จัดกลุ่มตอนอ่านแทน)
+-- inflight/db_waiting/queue_waited_ms = ตัวเลขสำหรับวิเคราะห์ทรัพยากร
+CREATE TABLE public.api_logs (
+    id bigint NOT NULL,
+    created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    request_id character varying(16) NOT NULL,
+    method character varying(6) NOT NULL,
+    route character varying(120),
+    path character varying(200) NOT NULL,
+    status_code smallint NOT NULL,
+    duration_ms integer NOT NULL,
+    resp_bytes integer,
+    admin_user_id integer,
+    line_user_id character varying(40),
+    inflight smallint,
+    db_waiting smallint,
+    queue_waited_ms integer
+)
+WITH (autovacuum_vacuum_scale_factor='0.02', autovacuum_analyze_scale_factor='0.01');
+
+
+--
+-- Name: api_logs_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.api_logs_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: api_logs_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.api_logs_id_seq OWNED BY public.api_logs.id;
+
+
+--
 -- Name: customers; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -795,6 +841,13 @@ ALTER TABLE ONLY public.admin_users ALTER COLUMN id SET DEFAULT nextval('public.
 
 
 --
+-- Name: api_logs id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.api_logs ALTER COLUMN id SET DEFAULT nextval('public.api_logs_id_seq'::regclass);
+
+
+--
 -- Name: product_optional_links id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -836,6 +889,14 @@ ALTER TABLE ONLY public.admin_users
 
 ALTER TABLE ONLY public.admin_users
     ADD CONSTRAINT admin_users_username_key UNIQUE (username);
+
+
+--
+-- Name: api_logs api_logs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.api_logs
+    ADD CONSTRAINT api_logs_pkey PRIMARY KEY (id);
 
 
 --
@@ -972,6 +1033,20 @@ ALTER TABLE ONLY public.shipping_fee_config
 
 ALTER TABLE ONLY public.sync_state
     ADD CONSTRAINT sync_state_pkey PRIMARY KEY (resource);
+
+
+--
+-- Name: idx_api_logs_created_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_api_logs_created_at ON public.api_logs USING btree (created_at DESC, id DESC);
+
+
+--
+-- Name: idx_api_logs_request_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_api_logs_request_id ON public.api_logs USING btree (request_id);
 
 
 --

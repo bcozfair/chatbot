@@ -80,6 +80,12 @@ import {
 } from './config/loginRateLimit.js';
 import { sumLineTotals } from './utils/pricing.js';
 import { isCustomerInfoIncomplete } from './utils/flexTemplates.js';
+import { apiLogMiddleware } from './config/apiLogger.js';
+import {
+  initApiLogWriter,
+  stopApiLogWriter,
+  flushApiLogs,
+} from './services/apiLogService.js';
 import {
   startSync,
   isRunning,
@@ -95,6 +101,16 @@ import {
 getJwtSecret();
 
 const app = express();
+
+// ── บันทึกการเรียก API (ตาราง api_logs) — ต้องเป็น middleware ตัวแรกสุด ────────────────────
+// วางบนสุดเพราะ app.use() ที่วางไว้ล่างสุดจะทำงานเฉพาะ request ที่ไม่มี route ไหนรับ (เห็นแค่ 404)
+// ส่วนวางบนสุดเห็นทุก request แล้วรอเก็บผลตอน res.on('finish') · และเวลาที่วัดต้องเริ่มก่อนทุกอย่าง
+//
+// ⚠️ ห้ามเติม express.json() หรือ body parser ตัวใดก็ตามแบบ global ตรงนี้เด็ดขาด
+//    line.middleware(lineConfig) ที่ POST /callback ต้องได้เนื้อ request แบบดิบไปคำนวณ HMAC ของ
+//    x-line-signature ถ้ามีใคร parse ก่อน ลายเซ็นจะตรวจไม่ผ่าน = บอทหยุดตอบทั้งระบบ
+//    (middleware ตัวนี้ปลอดภัยเพราะไม่แตะ stream ของ request เลย — ดู config/apiLogger.ts)
+app.use(apiLogMiddleware);
 
 // Serve static files from the public folder
 app.use(express.static(path.join(process.cwd(), 'public')));
@@ -3617,6 +3633,8 @@ const server = app.listen(port, () => {
   console.log(`listening on ${port}`);
   // เริ่มตัวตั้งเวลา auto-sync (อ่าน config จากตาราง sync_settings)
   initScheduler().catch((err) => console.error('[scheduler] init ล้มเหลว:', err));
+  // เริ่มตัวเขียน api_logs แบบ batch + ตัวลบของเก่า (ทั้งคู่เป็น timer แยก ไม่แตะเส้นทางของ request)
+  initApiLogWriter();
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3667,6 +3685,14 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
         `pending=${webhookQueue.pendingCount} · ข้อความเหล่านี้จะหายเงียบ`
       );
     }
+
+    // 3.5 เขียน api_logs ที่ยังกองอยู่ใน memory ลง DB ให้หมด
+    //     ต้องทำ "หลัง" drain เพราะงานที่เพิ่งตอบจบไปก็สร้างแถวใหม่เข้ามาเหมือนกัน
+    //     (ปิดปกติ/deploy จึงไม่มี log หาย — จะหายเฉพาะตอนโดน SIGKILL/OOM เหมือนคิว webhook)
+    stopApiLogWriter();
+    await flushApiLogs().catch((e: any) =>
+      console.error('[api-log] flush ตอนปิดล้มเหลว:', e?.message || e)
+    );
 
     // 4. ปิด Chrome ที่ pdfGenerator ใช้ร่วมกัน ไม่งั้นจะค้างเป็น process กำพร้าทุกครั้งที่ restart
     //    (ต้องทำ "หลัง" drain — งานที่กำลังออก PDF อยู่ยังต้องใช้ browser ตัวนี้)

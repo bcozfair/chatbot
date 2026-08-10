@@ -736,3 +736,81 @@ export async function getConfirmedQuotationCounts(customerIds: any[]): Promise<M
     return new Map(rows.map((r: any) => [r.customer_id, r.n]));
   } catch (err) { logErr('getConfirmedQuotationCounts', err); return new Map(); }
 }
+
+// ═══════════════════════════ api_logs ═══════════════════════════
+//
+// ⚠️ กลุ่มนี้ "โยน error ออกไป" ต่างจากกติกาหัวไฟล์ที่ให้กลืน error แล้วคืน []/null
+//    เพราะผู้เรียกคือตัวเขียน batch ใน services/apiLogService.ts ซึ่งต้องรู้ว่า flush ล้มเหลว
+//    เพื่อจะนับจำนวนแถวที่ทิ้งและ log เตือน — ถ้ากลืนไว้เงียบ ๆ log จะหายโดยไม่มีใครรู้
+
+/** 1 แถวของ api_logs ที่พร้อม insert — ชื่อฟิลด์ตรงกับคอลัมน์ 1:1 */
+export interface ApiLogInsertRow {
+  createdAt: Date;
+  requestId: string;
+  method: string;
+  route: string | null;
+  path: string;
+  statusCode: number;
+  durationMs: number;
+  respBytes: number | null;
+  adminUserId: number | null;
+  lineUserId: string | null;
+  inflight: number | null;
+  dbWaiting: number | null;
+  queueWaitedMs: number | null;
+}
+
+/**
+ * insert หลายแถวด้วย UNNEST ครั้งเดียว ไม่วนยิงทีละแถว (house style เดียวกับ insertExportLogRows)
+ *
+ * ส่ง created_at เป็นสตริง ISO ไม่ใช่ Date object — ตัดความกำกวมของการ serialize Date[] ของ pg ทิ้ง
+ * (คอลัมน์เป็น timestamptz และ ISO string มี offset ในตัวอยู่แล้ว จึงไม่ขึ้นกับ TZ ของ session)
+ */
+export async function insertApiLogRows(db: DbExecutor, rows: ApiLogInsertRow[]): Promise<void> {
+  if (!rows.length) return;
+  await db.query(
+    `INSERT INTO api_logs
+       (created_at, request_id, method, route, path, status_code, duration_ms,
+        resp_bytes, admin_user_id, line_user_id, inflight, db_waiting, queue_waited_ms)
+     SELECT * FROM UNNEST(
+       $1::timestamptz[], $2::varchar[], $3::varchar[], $4::varchar[], $5::varchar[],
+       $6::smallint[], $7::int[], $8::int[], $9::int[], $10::varchar[],
+       $11::smallint[], $12::smallint[], $13::int[])`,
+    [
+      rows.map(r => r.createdAt.toISOString()),
+      rows.map(r => r.requestId),
+      rows.map(r => r.method),
+      rows.map(r => r.route),
+      rows.map(r => r.path),
+      rows.map(r => r.statusCode),
+      rows.map(r => r.durationMs),
+      rows.map(r => r.respBytes),
+      rows.map(r => r.adminUserId),
+      rows.map(r => r.lineUserId),
+      rows.map(r => r.inflight),
+      rows.map(r => r.dbWaiting),
+      rows.map(r => r.queueWaitedMs),
+    ]);
+}
+
+/**
+ * ลบ log ที่เก่ากว่า N วัน ทีละก้อน — คืนจำนวนแถวที่ลบจริงในรอบนี้
+ *
+ * ทำไมต้อง ctid + LIMIT แทน DELETE ... WHERE created_at < X ตรง ๆ:
+ *   pool ใน config/db.ts ตั้ง statement_timeout 15 วิ ถ้าลบทีเดียวหลายแสนแถวจะชนเพดานแล้ว
+ *   rollback ทั้งก้อน = ลบไม่ได้เลยสักแถวและวนพังทุกชั่วโมง
+ *   subquery เดินจากปลายเก่าสุดผ่าน idx_api_logs_created_at (หลักสิบ ms) แล้ว DELETE เป็น TID scan ตรง
+ *   → 5,000 แถวต่อ statement ใช้เวลาระดับ 100-500 ms ห่างจากเพดานหลายสิบเท่า แม้ตารางมีเป็นล้านแถว
+ */
+export async function deleteApiLogsOlderThan(
+  db: DbExecutor, days: number, limit: number
+): Promise<number> {
+  const res = await db.query(
+    `DELETE FROM api_logs WHERE ctid IN (
+       SELECT ctid FROM api_logs
+        WHERE created_at < (CURRENT_TIMESTAMP - ($1::int * INTERVAL '1 day'))
+        ORDER BY created_at
+        LIMIT $2)`,
+    [days, limit]);
+  return res.rowCount ?? 0;
+}

@@ -203,7 +203,8 @@ SELECT to_regclass('public.customers_data_view') AS matview,
               WHERE table_name='salesperson' AND column_name='employee_quotation_id')         AS employee_qid,
        EXISTS(SELECT 1 FROM information_schema.columns
               WHERE table_name='quotations' AND column_name='odoo_exported_at')               AS exported_at,
-       to_regclass('public.quotation_export_batches')                                         AS export_batches;"
+       to_regclass('public.quotation_export_batches')                                         AS export_batches,
+       to_regclass('public.api_logs')                                                         AS api_logs;"
 ```
 รันเฉพาะไฟล์ที่ผลข้างบนบอกว่ายังไม่มี เรียงตามชื่อไฟล์ (วันที่):
 ```bash
@@ -219,6 +220,7 @@ done
 - **ไฟล์ที่สร้าง matview ทับกัน ให้รันแค่ตัวล่าสุด** — เช่น `2026-08-05_02` `DROP` แล้วสร้างใหม่ทั้งก้อนอยู่แล้ว
   ไม่ต้องรัน `_01` ก่อน (รันสองรอบ = ค้นหาลูกค้าล่มนานเป็นเท่าตัวเปล่า ๆ)
 - **มีช่วงที่ค้นหาลูกค้าพัง** — ระหว่างสร้าง matview ใหม่ (ราว 1–3 นาที) `customers_data_view` หายชั่วคราว → ทำนอกเวลาใช้งาน
+- **ข้อยกเว้น: `2026-08-10_01_api_logs.sql` รันได้ทุกเวลา** — สร้างตารางใหม่ล้วน ไม่ ALTER ตารางเดิม ไม่แตะ matview จบในไม่กี่ ms
 
 ### ขั้น 4.5 — เปลี่ยนชื่อค่าภาษีใน `.env` (ครั้งเดียว ตอนขึ้น export แยก QP/QT)
 export แยกไฟล์ตามบริษัทแล้ว ชื่อภาษีจึงแยกเป็น 2 คีย์ — คีย์เดิม `ODOO_EXPORT_TAX` ไม่ถูกอ่านอีกต่อไป
@@ -232,6 +234,26 @@ ODOO_EXPORT_TAX_QT="Output VAT 7%(Exc)"
 ```
 - ⚠️ QT **ไม่มีเว้นวรรค** หน้าวงเล็บ ส่วน QP มี — ต่างกันจริง ห้ามแก้ให้เหมือนกัน
 - ไม่แก้ก็ไม่พัง โค้ดมีค่าตั้งต้นสองตัวนี้อยู่แล้ว แต่คีย์เดิมที่ค้างใน `.env` จะกลายเป็นค่าที่ไม่มีใครอ่าน
+
+### ขั้น 4.6 — ตั้งค่า API log (ครั้งเดียว ตอนขึ้นตาราง `api_logs`)
+```
+API_LOG_ENABLED=false        # ⚠️ ขึ้นครั้งแรกให้ตั้ง false ก่อน
+API_LOG_RETENTION_DAYS=30
+```
+- **ขึ้นครั้งแรกให้ปิดไว้ก่อน** แล้วทำขั้น 5-6 ให้ผ่าน = พิสูจน์ว่าโค้ดใหม่ขึ้นแล้วระบบเหมือนเดิมทุกอย่าง
+  จากนั้นค่อยแก้เป็น `true` แล้ว `docker compose restart app` — **ไม่ต้อง build ใหม่**
+  แยกตัวแปรสองอย่าง (โค้ดใหม่ / การเก็บ log) คนละครั้ง ถ้ามีอะไรผิดจะรู้ทันทีว่าเกิดจากอะไร
+  ถ้าเปิดแล้วมีปัญหา กลับเป็น `false` + restart = ระบบกลับไปเหมือนเดิมทุกประการภายใน 10 วินาที
+- ไม่ตั้งทั้งสองคีย์ก็รันได้ โค้ดมีค่าตั้งต้น (เปิด, 30 วัน)
+- **เช็คขนาดตารางหลังเปิดใช้จริง ~14 วัน** แล้วคูณ ~2 เพื่อประมาณค่าที่ 30 วัน:
+  ```bash
+  docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" -c "
+  SELECT pg_size_pretty(pg_total_relation_size('public.api_logs')) AS size,
+         count(*) AS rows, min(created_at) AS oldest FROM public.api_logs;"
+  ```
+  เกินคาดเมื่อไหร่ให้ลด `API_LOG_RETENTION_DAYS` แล้ว restart — ตัวลบจะเก็บกวาดให้เองในรอบถัดไป
+- ตารางนี้ **ไม่มี PII** (เก็บแค่ user id, path, status, เวลา — ไม่เก็บ request body ไม่มีชื่อ/เบอร์ลูกค้า
+  ไม่มีข้อความแชท) จึงไม่เพิ่มข้อจำกัดเรื่องการส่งไฟล์ dump
 
 ### ขั้น 5 — rebuild + up
 ```bash
