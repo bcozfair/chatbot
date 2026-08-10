@@ -1,7 +1,7 @@
 import { randomBytes } from 'crypto';
 import type { Request, Response, NextFunction } from 'express';
 import type { AdminRequest } from './auth.js';
-import { pool } from './db.js';
+import { pool, POOL_MAX } from './db.js';
 import { enqueueApiLog } from '../services/apiLogService.js';
 
 /**
@@ -66,6 +66,30 @@ export function extractLineUserId(
     params?.userId;                                                // GET /api/salesperson/:userId
 
   return typeof cand === 'string' && cand.trim() ? cand.trim() : null;
+}
+
+/**
+ * ค่าที่ควรบันทึกลง db_waiting — ฟังก์ชันบริสุทธิ์ แยกออกมาให้ diag เทสได้
+ *
+ * ⚠️ pool.waitingCount ดิบ ๆ ใช้ไม่ได้ เพราะ pg-pool push ทุกคำขอลง _pendingQueue "ก่อนเสมอ"
+ * แล้วค่อยระบายใน process.nextTick ต่อให้มี client ว่างรออยู่ (pg-pool/index.js)
+ * ⇒ ใครก็ตามที่อ่าน waitingCount ภายใน tick เดียวกันจะเห็น > 0 แม้ pool ว่างสนิท
+ *
+ * วัดจริงจาก api_logs 533 แถว: 70 แถวมี db_waiting > 0 และ "ทั้ง 70 แถว" มี inflight = 1
+ * (= ตอนนั้นมี request ตัวเดียวในทั้งระบบ) ส่วน inflight สูงสุดที่เคยเกิดคือ 3 จากเพดาน 40
+ * ⇒ สัญญาณผิด 100% ซึ่งแพงกว่าไม่มีสัญญาณเลย เพราะสักวันจะพาไปขยาย pool/DB ทั้งที่ไม่มีปัญหา
+ *
+ * การตันจริงต้องครบ 3 ข้อพร้อมกัน — ตรงกับเงื่อนไขที่ pg-pool ใช้เข้าคิวเป๊ะ ๆ
+ *   1. มีคนรออยู่จริง                 (waiting > 0)
+ *   2. จ่าย connection ใหม่ไม่ได้แล้ว  (total ถึงเพดาน — ตรงกับ _isFull())
+ *   3. ไม่มีตัวว่างให้หยิบ            (idle = 0)
+ * ขาดข้อไหนก็เป็นการรอชั่วขณะที่จะหายไปเองใน tick ถัดไป ไม่ใช่ปัญหาทรัพยากร
+ * ข้อ 3 สำคัญไม่แพ้ข้อ 2: pool ที่เต็มแต่มีตัวว่างค้างอยู่ก็เข้าคิวเหมือนกัน (ดู `_isFull() || _idle.length`)
+ */
+export function dbWaitingSignal(
+  s: { waiting: number; total: number; idle: number; max: number }
+): number {
+  return s.waiting > 0 && s.total >= s.max && s.idle === 0 ? s.waiting : 0;
 }
 
 interface ApiLogState {
@@ -210,8 +234,10 @@ function collect(req: Request, res: Response): void {
     lineUserId: clamp(
       extractLineUserId(req.body, req.query, req.params, st.lineUserIdOverride), 40),
     inflight: clampSmallInt(st.inflightAtStart),
-    // > 0 เมื่อไหร่แปลว่า pool 40 connection ไม่พอ — สัญญาณตรงที่สุดว่าต้องขยาย DB หรือลด query
-    dbWaiting: clampSmallInt(pool.waitingCount),
+    // > 0 เมื่อไหร่แปลว่า pool 40 connection ไม่พอ "จริง ๆ" — ดูเหตุผลที่ dbWaitingSignal
+    dbWaiting: clampSmallInt(dbWaitingSignal({
+      waiting: pool.waitingCount, total: pool.totalCount, idle: pool.idleCount, max: POOL_MAX,
+    })),
     queueWaitedMs: null,                           // ใช้เฉพาะแถว TASK ของ webhook (เฟส 2)
   });
 }

@@ -5,14 +5,23 @@ dotenv.config();
 
 const { Pool } = pg;
 
+/**
+ * เพดานจำนวน connection ของ pool
+ * webhook 12 + REST จาก LIFF ~15 + PDF ~3 + สำรอง ยังต่ำกว่า max_connections=100 ของ PostgreSQL
+ *
+ * แยกออกมาเป็นค่าที่ export ได้เพราะ config/apiLogger.ts ต้องใช้ตัดสินว่า "pool ตันจริงหรือยัง"
+ * คือ pool.totalCount ถึงเพดานนี้หรือยัง (อ่านจาก pool.options.max ก็ได้ แต่เป็น property ที่
+ * ไม่ได้อยู่ในสัญญาที่ pg ประกาศไว้ — ค่าคงที่ตัวเดียวที่ทั้งสองฝั่งใช้ร่วมกันตรงไปตรงมากว่า)
+ */
+export const POOL_MAX = 40;
+
 const dbConfig = {
   host: process.env.PG_HOST,
   port: process.env.PG_PORT ? parseInt(process.env.PG_PORT) : undefined,
   database: process.env.PG_DATABASE,
   user: process.env.PG_USER,
   password: process.env.PG_PASSWORD,
-  // webhook 12 + REST จาก LIFF ~15 + PDF ~3 + สำรอง ยังต่ำกว่า max_connections=100 ของ PostgreSQL
-  max: 40,
+  max: POOL_MAX,
   min: 4,
   idleTimeoutMillis: 30000,
   // ถ้า pool หมด ให้ throw เร็ว (5 วิ) แทนการค้างสะสมจน request ถล่มกันเอง

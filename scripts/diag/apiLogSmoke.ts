@@ -9,11 +9,12 @@
 //    (ค) UNNEST 13 คอลัมน์ต้องไม่สลับตำแหน่งกัน (เคสพลาดที่พบบ่อยที่สุดของ UNNEST หลายคอลัมน์)
 //    (ง) ค่า retention ที่อ่านไม่ออกต้องตกกลับเป็นค่าตั้งต้น ไม่ใช่ 0 ซึ่งแปลว่า "ลบทุกแถวทันที"
 //    (จ) ตัวลบของเก่าต้องทำงานจริง — ไม่มีแถวที่เก่ากว่า retention ค้างอยู่
+//    (ฉ) สัญญาณ "pool ไม่พอ" ต้องไม่ขึ้นตอน pool ว่าง — สัญญาณเตือนที่ผิดแพงกว่าไม่มีสัญญาณ
 //
 //  ให้รันซ้ำทุกครั้งที่แตะ config/apiLogger.ts, services/apiLogService.ts
 //  หรือฟังก์ชันกลุ่ม api_logs ใน db/repositories.ts
 // ─────────────────────────────────────────────────────────────────────────────
-import { pool, withTransaction } from '../../config/db.js';
+import { pool, withTransaction, POOL_MAX } from '../../config/db.js';
 import {
   insertApiLogRows,
   deleteApiLogsOlderThan,
@@ -23,6 +24,7 @@ import {
   shouldSkipLogging,
   extractLineUserId,
   apiLogMiddleware,
+  dbWaitingSignal,
 } from '../../config/apiLogger.js';
 import {
   parseRetentionDays,
@@ -91,13 +93,41 @@ ok("'7' → 7", parseRetentionDays('7') === 7);
 ok("'30.9' → 30 (ปัดลง)", parseRetentionDays('30.9') === 30);
 ok("'99999' → 3650 (เพดาน)", parseRetentionDays('99999') === 3650);
 
-// ── 4. ต้นทุนต่อ request — ข้อกำหนดคือ "การเก็บ log ต้องไม่ทำให้ระบบช้าลง" ────
+// ── 4. dbWaitingSignal — สัญญาณ "pool ไม่พอ" ต้องไม่ขึ้นตอน pool ว่าง ──────────
+console.log('\n── 4. สัญญาณ pool ไม่พอ ──');
+const sig = (waiting: number, total: number, idle: number) =>
+  dbWaitingSignal({ waiting, total, idle, max: POOL_MAX });
+
+ok('ไม่มีใครรอ → 0', sig(0, POOL_MAX, 0) === 0);
+ok('มีคนรอ แต่ pool ยังไม่เต็ม → 0 (เคสสัญญาณปลอมที่เจอจริง 70/70 แถว)', sig(1, 1, 1) === 0);
+ok('มีคนรอ pool เต็ม แต่ยังมีตัวว่าง → 0', sig(3, POOL_MAX, 2) === 0);
+ok('มีคนรอ pool เต็ม ไม่มีตัวว่าง → รายงานตามจริง', sig(3, POOL_MAX, 0) === 3);
+ok('total เกินเพดาน (ไม่ควรเกิด แต่ต้องไม่กลบ) → รายงาน', sig(5, POOL_MAX + 1, 0) === 5);
+
+// พิสูจน์กับ pool จริง ไม่ใช่แค่ truth table — ยิง query พร้อมกันในหนึ่ง tick แล้วอ่านค่าทันที
+// คือลำดับเดียวกับที่ res.on('finish') อ่าน pool ตอน request จบ (จุดที่เกิดสัญญาณปลอม)
+await pool.query('SELECT 1');                     // อุ่นให้มี client ว่างอยู่ใน pool ก่อน
+const probes = [pool.query('SELECT 1'), pool.query('SELECT 1'), pool.query('SELECT 1')];
+const live = {
+  waiting: pool.waitingCount, total: pool.totalCount, idle: pool.idleCount, max: POOL_MAX,
+};
+const liveSignal = dbWaitingSignal(live);
+await Promise.all(probes);
+
+const poolIsIdle = live.total < POOL_MAX;
+ok('ทำสัญญาณปลอมซ้ำได้จริง (waitingCount > 0 ทั้งที่ pool ว่าง)',
+  live.waiting > 0 && poolIsIdle,
+  `waiting=${live.waiting} total=${live.total}/${POOL_MAX} idle=${live.idle}`);
+ok('ของเดิมจะบันทึกเป็น "pool ไม่พอ"', live.waiting > 0, `ค่าดิบ = ${live.waiting}`);
+ok('ของใหม่บันทึก 0', liveSignal === 0, `ได้ ${liveSignal}`);
+
+// ── 5. ต้นทุนต่อ request — ข้อกำหนดคือ "การเก็บ log ต้องไม่ทำให้ระบบช้าลง" ────
 // วัดเส้นทางจริงทั้งเส้น: middleware ขาเข้า → res.on('finish') → สร้างแถว → enqueue
 //
 // ⚠️ ต้องรัน "ก่อน" การทดสอบ buffer ล้น และจำนวนรอบต้องน้อยกว่าเพดาน buffer
 //    ไม่งั้นจะไปวัดเส้นทาง drop ที่มี console.warn ทุก 100 ครั้ง ซึ่งกลบต้นทุนจริงจนหมด
 //    (เคยวัดได้ 19.59 µs เพราะเหตุนี้ ทั้งที่เส้นทางจริงถูกกว่านั้นสิบเท่า)
-console.log('\n── 4. ต้นทุนต่อ request ──');
+console.log('\n── 5. ต้นทุนต่อ request ──');
 // 200 อุ่นเครื่อง + 400×10 รอบ = 4,200 ครั้ง ต้องต่ำกว่าเพดาน buffer (5,000) เสมอ
 // ไม่งั้นจะไปวัดเส้นทาง drop ที่มี console.warn ทุก 100 ครั้ง ซึ่งกลบต้นทุนจริงจนหมด
 const N = 400;
@@ -153,8 +183,8 @@ console.log(
 console.log(
   `   ที่ 5,000 req/วัน = ${(perReqUs * 5000 / 1000).toFixed(0)} ms/วัน รวมทั้งวัน`);
 
-// ── 5. buffer ต้องมีเพดาน ไม่โตไม่จำกัดจนกิน memory ──────────────────────────
-console.log('\n── 5. เพดาน buffer ──');
+// ── 6. buffer ต้องมีเพดาน ไม่โตไม่จำกัดจนกิน memory ──────────────────────────
+console.log('\n── 6. เพดาน buffer ──');
 const sampleRow = (): ApiLogInsertRow => ({
   createdAt: new Date(), requestId: 'aabbccddeeff0011', method: 'GET',
   route: '/api/x', path: '/api/x', statusCode: 200, durationMs: 1,
@@ -172,8 +202,8 @@ const afterOverflow = getApiLogMetrics();
 ok('buffer หยุดที่ 5000', afterOverflow.buffered === MAX_BUFFER, `ได้ ${afterOverflow.buffered}`);
 ok('นับแถวที่ทิ้ง = 1', afterOverflow.droppedOverflow === 1, `ได้ ${afterOverflow.droppedOverflow}`);
 
-// ── 6. ตรวจ DB (อ่านอย่างเดียว) ───────────────────────────────────────────────
-console.log('\n── 6. สถานะตารางใน DB ──');
+// ── 7. ตรวจ DB (อ่านอย่างเดียว) ───────────────────────────────────────────────
+console.log('\n── 7. สถานะตารางใน DB ──');
 try {
   const t = await pool.query(`SELECT to_regclass('public.api_logs') AS t`);
   ok('ตาราง api_logs มีอยู่จริง', t.rows[0].t !== null);
@@ -238,9 +268,9 @@ try {
   console.log('✗ FAIL  ตรวจ DB ล้มเหลว:', err?.message ?? err);
 }
 
-// ── 7. insert/delete จริง (--write) — ทำใน transaction แล้ว ROLLBACK เสมอ ─────
+// ── 8. insert/delete จริง (--write) — ทำใน transaction แล้ว ROLLBACK เสมอ ─────
 if (WRITE_MODE) {
-  console.log('\n── 7. insert/delete จริง (ROLLBACK ทุกกรณี) ──');
+  console.log('\n── 8. insert/delete จริง (ROLLBACK ทุกกรณี) ──');
   try {
     await withTransaction(async (client) => {
       const now = new Date();
@@ -320,7 +350,7 @@ if (WRITE_MODE) {
     `SELECT count(*)::int AS n FROM api_logs WHERE request_id LIKE 'ffffffffffff%'`);
   ok('ROLLBACK สะอาด ไม่เหลือแถวทดสอบ', left.rows[0].n === 0, `เหลือ ${left.rows[0].n}`);
 } else {
-  console.log('\n(ข้ามข้อ 7 — ใส่ --write เพื่อทดสอบ insert/delete จริงแบบ ROLLBACK)');
+  console.log('\n(ข้ามข้อ 8 — ใส่ --write เพื่อทดสอบ insert/delete จริงแบบ ROLLBACK)');
 }
 
 console.log(`\n${failures === 0 ? '✓ ผ่านทั้งหมด' : `✗ ล้มเหลว ${failures} ข้อ`}`);

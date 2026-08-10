@@ -55,7 +55,9 @@ CREATE TABLE IF NOT EXISTS public.api_logs (
 --                   ที่ไม่ใส่ FK เพราะ DELETE /api/admin/users/:id มีจริง ถ้าผู้ใช้ถูกลบ log ต้องไม่หายตาม
 --   inflight        จำนวน request ที่ค้างอยู่ในระบบ ณ วินาทีที่ request นี้เริ่ม (counter ++/-- ตัวเดียว)
 --                   แยกได้ว่า "ช้าเพราะโหลดเยอะ" หรือ "endpoint นั้นช้าเอง" = คำถามแรกของการ sizing
---   db_waiting      pool.waitingCount ตอนจบ — > 0 เมื่อไหร่แปลว่า pool 40 connection ไม่พอ
+--   db_waiting      > 0 เมื่อไหร่แปลว่า pool 40 connection ไม่พอจริง ๆ ตอนที่ request นี้จบ
+--                   ไม่ใช่ pool.waitingCount ดิบ ๆ ซึ่งเป็นสัญญาณปลอมเกือบทั้งหมด —
+--                   ดูเงื่อนไขและเหตุผลที่ dbWaitingSignal ใน config/apiLogger.ts
 --   queue_waited_ms เฉพาะแถว method='TASK' ของ webhook (NULL สำหรับ HTTP ปกติ) = เวลานั่งรอในคิว
 --                   duration_ms - queue_waited_ms = เวลาประมวลผลจริง → แยกได้ว่าต้องเพิ่มเครื่อง
 --                   (รอคิวนาน) หรือแก้โค้ด/LLM (ประมวลผลนาน)
