@@ -220,7 +220,10 @@ SELECT to_regclass('public.customers_data_view')  AS matview,
        to_regclass('public.quotation_export_batches')                                         AS export_batches,
        to_regclass('public.api_logs')                                                         AS api_logs,
        EXISTS(SELECT 1 FROM information_schema.columns
-              WHERE table_name='api_logs' AND column_name='ip')                               AS api_logs_ip;"
+              WHERE table_name='api_logs' AND column_name='ip')                               AS api_logs_ip,
+       to_regclass('public.quotation_credit_policy')                                          AS credit_policy,
+       EXISTS(SELECT 1 FROM information_schema.columns
+              WHERE table_name='customers_data_view' AND column_name='last_order_at')         AS cdv_last_order;"
 ```
 > คอลัมน์ `clean_text` ต้องใช้ **`to_regprocedure`** ไม่ใช่ `to_regproc` — `to_regproc` รับได้แค่ชื่อฟังก์ชันเปล่า
 > ใส่ `(text)` ต่อท้ายจะคืน null ทุกครั้งแม้ฟังก์ชันมีอยู่จริง = สัญญาณเตือนหลอกว่า migration ขาด
@@ -239,6 +242,14 @@ done
   ไม่ต้องรัน `_01` ก่อน (รันสองรอบ = ค้นหาลูกค้าล่มนานเป็นเท่าตัวเปล่า ๆ)
 - **มีช่วงที่ค้นหาลูกค้าพัง** — ระหว่างสร้าง matview ใหม่ (ราว 1–3 นาที) `customers_data_view` หายชั่วคราว → ทำนอกเวลาใช้งาน
 - **ข้อยกเว้น: `2026-08-10_01_api_logs.sql` รันได้ทุกเวลา** — สร้างตารางใหม่ล้วน ไม่ ALTER ตารางเดิม ไม่แตะ matview จบในไม่กี่ ms
+- **ข้อยกเว้น: `2026-08-20_04_quotation_credit_policy.sql` รันได้ทุกเวลา และรัน "ก่อน" deploy โค้ดใหม่ได้**
+  สร้างตารางใหม่ + `CREATE OR REPLACE VIEW` (แก้แค่ catalog) + `ADD COLUMN` แบบ nullable ไม่มี DEFAULT
+  → ไม่ rebuild `customers_data_view` ในไฟล์ ไม่มีช่วงที่ค้นหาลูกค้าพัง จบในไม่กี่ ms
+  ⚠️ หลังรันแล้ว `last_order_at` จะเป็น NULL ทั้งตารางจนกว่า **รอบ sync ถัดไป** จะ rebuild ตารางจาก view
+  (NULL = "ไม่เคยซื้อ" = ปล่อยผ่าน จึงไม่มีใครถูกบล็อกผิด และเกณฑ์ยังตั้งต้นเป็น `mode='off'` อยู่แล้ว)
+  ถ้าอยากให้มีค่าทันทีโดยไม่รอ sync ให้ทำ build+swap มือตามขั้นตอนใน `scripts/sync/refreshCustomerDirectory.ts`
+  (`CREATE TABLE customers_data_view_new AS SELECT * FROM customers_data_build` → สร้าง index
+  `(company_id) INCLUDE (last_order_at)` → ANALYZE → สลับชื่อใน transaction) — วัดจริง build 4.7 วิ สลับ 13 ms
 - **ข้อยกเว้น: `2026-08-20_03_api_logs_ip.sql` รันได้ทุกเวลา และรัน "ก่อน" deploy โค้ดใหม่ได้**
   `ADD COLUMN` แบบ nullable ไม่มี DEFAULT = PostgreSQL แก้แค่ metadata ไม่ล็อกตาราง ไม่เขียนแถวใหม่
   และโค้ดเก่าที่ยังรันอยู่ระบุชื่อคอลัมน์ใน INSERT ครบทุกตัว จึงเขียน log ต่อได้ตามปกติ (คอลัมน์ใหม่เป็น NULL)

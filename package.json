@@ -24,6 +24,7 @@
     "diag:stock-rule-put": "tsx scripts/diag/stockRulePutSmoke.ts",
     "diag:optional-pair": "tsx scripts/diag/optionalPairSmoke.ts",
     "diag:quote-validation": "tsx scripts/diag/quoteValidationSmoke.ts",
+    "diag:credit-hold": "tsx scripts/diag/creditHoldSmoke.ts",
     "diag:odoo-export": "tsx scripts/diag/odooExportSmoke.ts",
     "diag:export-tracking": "tsx scripts/diag/exportTrackingSmoke.ts",
     "diag:date-filter": "tsx scripts/diag/dateFilterSmoke.ts",

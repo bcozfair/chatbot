@@ -52,6 +52,12 @@ import {
   listRelatedContacts,
 } from './services/blacklistService.js';
 import {
+  findCreditHeldCompanyIds,
+  checkCreditHold,
+  getCreditPolicyFresh,
+  saveCreditPolicy,
+} from './services/creditHoldService.js';
+import {
   buildOdooSaleOrderRows,
   selectExportableQuotes,
   loadOdooExportConfig,
@@ -628,7 +634,20 @@ app.get('/api/customers/search', async (req: any, res: any) => {
     } catch (err) {
       console.error('[customers/search] annotate blacklist failed (ปล่อยผ่าน):', err);
     }
-    res.json(data.map((c: any) => ({ ...c, is_blacklisted: blockedIds.has(Number(c.id)) })));
+
+    // ป้ายเดียวกันแต่คนละสาเหตุ — แยก try เพราะตารางคนละตัว ล้มตัวหนึ่งอีกตัวต้องยังติดป้ายได้
+    let creditHeldIds = new Set<number>();
+    try {
+      creditHeldIds = await findCreditHeldCompanyIds(data.map((c: any) => c.id));
+    } catch (err) {
+      console.error('[customers/search] annotate credit hold failed (ปล่อยผ่าน):', err);
+    }
+
+    res.json(data.map((c: any) => ({
+      ...c,
+      is_blacklisted: blockedIds.has(Number(c.id)),
+      is_credit_hold: creditHeldIds.has(Number(c.id)),
+    })));
   } catch (err: any) {
     console.error("API GET customers search error:", err);
     res.status(500).json({ error: err.message });
@@ -660,6 +679,14 @@ app.get('/api/customer/:id/contacts', async (req: any, res: any) => {
         console.error('[customer/:id/contacts] annotate blacklist failed (ปล่อยผ่าน):', err);
       }
 
+      // ด่านเครดิตเป็นระดับบริษัทล้วน — ติดทั้งบริษัทก็ติดทุกผู้ติดต่อ ค่าจึงเหมือนกันทุกแถว
+      let creditHeld = false;
+      try {
+        creditHeld = (await checkCreditHold(req.params.id)).held;
+      } catch (err) {
+        console.error('[customer/:id/contacts] annotate credit hold failed (ปล่อยผ่าน):', err);
+      }
+
       formatted = data.map((c: any) => {
         const hasAddr = (c.invoice_street && c.invoice_street.trim()) || (c.invoice_state && c.invoice_state.trim());
         const target = hasAddr ? c : (companyDefaultAddr || c);
@@ -678,7 +705,8 @@ app.get('/api/customer/:id/contacts', async (req: any, res: any) => {
           invoice_state: parts.state,
           invoice_zip: target.invoice_zip,
           address_complete: parts.full,
-          is_blacklisted: blocked.wholeCompany || blocked.contactIds.has(Number(c.id))
+          is_blacklisted: blocked.wholeCompany || blocked.contactIds.has(Number(c.id)),
+          is_credit_hold: creditHeld
         };
       });
     }
@@ -2923,6 +2951,46 @@ app.put('/api/admin/shipping-fee-config', adminAuthMiddleware, requireRole('admi
   } catch (err: any) {
     console.error('PUT /api/admin/shipping-fee-config error:', err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+//  API Endpoints: Credit Policy (ระงับบริษัทที่ไม่มีคำสั่งซื้อมานาน)
+//  ตารางแถวเดียว (id = 1) จึงมีแค่ GET กับ PUT เหมือนค่าขนส่ง
+//  แสดงรวมอยู่ในหน้า "ค่าขนส่ง & เครดิต" ของหน้าแอดมิน แต่คนละตาราง/คนละ endpoint
+//  ตัวบล็อกจริงอยู่ที่ validateQuotationItems ไม่ใช่ที่นี่ — เส้นพวกนี้แค่ตั้งเกณฑ์
+// ============================================================
+
+app.get('/api/admin/credit-policy', adminAuthMiddleware, requireRole('admin'), async (_req: any, res: any) => {
+  try {
+    res.json(await getCreditPolicyFresh());
+  } catch (err: any) {
+    console.error('GET /api/admin/credit-policy error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+app.put('/api/admin/credit-policy', adminAuthMiddleware, requireRole('admin'), express.json(), async (req: any, res: any) => {
+  try {
+    const saved = await saveCreditPolicy({
+      mode: req.body?.mode,
+      dormantMonths: req.body?.dormant_months,
+      updatedBy: req.admin.id,
+    });
+
+    if (!saved) {
+      return res.status(400).json({
+        error: 'ค่าไม่ถูกต้อง — mode ต้องเป็น off/warn/block และจำนวนเดือนต้องเป็นจำนวนเต็ม 1–240',
+      });
+    }
+
+    // ต้องล้าง cache ทันที ไม่งั้นเกณฑ์ที่เพิ่งบันทึกจะยังไม่มีผลไปอีกไม่เกิน 60 วินาที
+    invalidateRuleCache('quotation_credit_policy');
+
+    res.json(saved);
+  } catch (err: any) {
+    console.error('PUT /api/admin/credit-policy error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
   }
 });
 

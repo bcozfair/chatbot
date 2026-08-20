@@ -387,6 +387,60 @@ comp AS (
     (array_remove(array_agg(invoice_district     ORDER BY contact_id), NULL))[1] AS invoice_district,
     (array_remove(array_agg(invoice_sub_district ORDER BY contact_id), NULL))[1] AS invoice_sub_district
   FROM base GROUP BY company_id
+),
+-- ════════════════════════════════════════════════════════════════════
+-- last_order_at — วันที่มีคำสั่งซื้อล่าสุดของ "นิติบุคคล" ที่บริษัทนี้สังกัด
+--
+-- ⚠️ sale_orders.company_id ไม่ใช่รหัสลูกค้า — เป็นบริษัทผู้ขาย (มีแค่ค่า 1 กับ 2)
+--    จุดเชื่อมลูกค้าคือ contact_id เท่านั้น ห้ามเผลอ join ด้วย company_id
+--
+-- ⚠️ นิยาม "นิติบุคคลเดียวกัน" ตรงนี้ต้องตรงกับ db/companyIdentity.ts เสมอ
+--    (เลขภาษี / รหัสอ้างอิง / ชื่อ ตรงข้อใดข้อหนึ่ง = รายเดียวกัน — 1 ชั้น ไม่ไล่ต่อเป็นทอด)
+--    ถ้าแยกกันเมื่อไหร่ ด่านตรวจกับป้ายเตือนจะให้คำตอบคนละอย่าง
+--    → scripts/diag/creditHoldSmoke.ts เทียบผลของสองที่นี้ทุกครั้งที่รัน
+--
+-- ทำไมต้องขยายเป็นนิติบุคคล ไม่ดูแค่ company_id ตัวเอง: Odoo แตกบริษัทเดียวเป็นหลายรหัส
+-- วัดบนข้อมูลจริง 2026-08-20 — ถ้าไม่ขยาย จะมี 1,259 บริษัทที่ซื้อจริงใต้รหัสสาขาอื่น
+-- ถูกนับเป็น "เงียบเกิน 1 ปี" ผิด ๆ (13% ของกลุ่มที่ยัง active อยู่)
+--
+-- ทำไมคำนวณตรงนี้แทนที่จะถามตอนออกใบ: ถามทีละบริษัทตอนใช้งานจริงราคา ~190ms และ
+-- ติดป้ายในผลค้นหา 30 รายพร้อมกันราคา 2.2 วิ (ใช้ไม่ได้) — ยุบมาคำนวณทั้งตารางรอบเดียว
+-- ด้วย hash aggregate ล้วนราคา 1.5 วิ ต่อรอบ build แล้วตอนใช้งานเหลือ index lookup
+-- ════════════════════════════════════════════════════════════════════
+so_last AS (
+  -- ใบสั่งซื้อล่าสุดต่อผู้ติดต่อ (ใช้ idx_so_contact_latest → index-only scan)
+  SELECT contact_id, max(order_date) AS d
+    FROM public.sale_orders
+   WHERE contact_id > 0
+   GROUP BY contact_id
+),
+own_last AS (
+  -- ยุบขึ้นมาระดับ company_id ของตัวเองก่อน
+  SELECT b.company_id, max(so.d) AS d
+    FROM base b
+    LEFT JOIN so_last so ON so.contact_id = b.contact_id
+   GROUP BY b.company_id
+),
+ent_keys AS (
+  -- (บริษัท → คีย์บ่งชี้นิติบุคคล) หนึ่งแถวต่อคีย์ · base ผ่าน clean_text มาแล้ว
+  -- จึงไม่ต้อง NULLIF(TRIM(...)) ซ้ำเหมือนฝั่ง companyIdentity ที่รับค่าดิบ
+           SELECT DISTINCT company_id, 't'::text AS kind, customer_tax_id    AS k FROM base WHERE customer_tax_id    IS NOT NULL
+  UNION ALL SELECT DISTINCT company_id, 'r'::text,        customer_reference       FROM base WHERE customer_reference IS NOT NULL
+  UNION ALL SELECT DISTINCT company_id, 'n'::text,        customer_name            FROM base WHERE customer_name      IS NOT NULL
+),
+key_last AS (
+  -- คีย์แต่ละตัวถูกซื้อล่าสุดเมื่อไหร่ (รวมทุกบริษัทที่ถือคีย์นี้)
+  SELECT ek.kind, ek.k, max(ol.d) AS d
+    FROM ent_keys ek
+    JOIN own_last ol ON ol.company_id = ek.company_id
+   GROUP BY ek.kind, ek.k
+),
+ent_last AS (
+  -- แล้วกระจายกลับ: บริษัทหนึ่งได้วันล่าสุดของคีย์ที่ตัวเองถืออยู่ทุกตัว
+  SELECT ek.company_id, max(kl.d) AS d
+    FROM ent_keys ek
+    JOIN key_last kl ON kl.kind = ek.kind AND kl.k = ek.k
+   GROUP BY ek.company_id
 )
 SELECT
   b.company_id, b.contact_id, b.source,
@@ -397,9 +451,13 @@ SELECT
   b.invoice_street,
   COALESCE(b.invoice_district, comp.invoice_district)            AS invoice_district,
   COALESCE(b.invoice_sub_district, comp.invoice_sub_district)    AS invoice_sub_district,
-  b.invoice_state, b.invoice_zip
+  b.invoice_state, b.invoice_zip,
+  -- GREATEST ข้าม NULL ให้เอง · own_last เผื่อบริษัทที่ไม่มีคีย์เลยสักตัว (ไม่มีแถวใน ent_last)
+  GREATEST(own_last.d, ent_last.d)                               AS last_order_at
 FROM base b
-LEFT JOIN comp ON comp.company_id = b.company_id;
+LEFT JOIN comp     ON comp.company_id     = b.company_id
+LEFT JOIN own_last ON own_last.company_id = b.company_id
+LEFT JOIN ent_last ON ent_last.company_id = b.company_id;
 
 -- ════════════════════════════════════════════════════════════════════
 -- แปลง customers_data_view: MATERIALIZED VIEW -> ตารางจริง
@@ -425,7 +483,9 @@ END $$;
 CREATE TABLE public.customers_data_view AS SELECT * FROM public.customers_data_build;
 
 CREATE UNIQUE INDEX idx_cdv_company_contact ON public.customers_data_view (company_id, contact_id);
-CREATE INDEX        idx_cdv_company         ON public.customers_data_view (company_id);
+-- INCLUDE (last_order_at) = ด่านตรวจเครดิตอ่านวันที่ซื้อล่าสุดจบใน index ไม่ต้องแตะ heap
+-- (ต้องตรงกับที่ scripts/sync/refreshCustomerDirectory.ts สร้างตอน build+swap)
+CREATE INDEX        idx_cdv_company         ON public.customers_data_view (company_id) INCLUDE (last_order_at);
 
 -- ANALYZE เต็มรูปแบบตารางนี้ใช้ 7.3 วิ (คอลัมน์ text ไทยต้อง sort 30,000 ตัวอย่างด้วย collation ไทย
 -- ต่อคอลัมน์ — วัดแยก: customer_name อย่างเดียว 5.1 วิ) → ลด sample ของคอลัมน์ text เหลือ target 10
@@ -732,6 +792,29 @@ CREATE UNIQUE INDEX quotation_blacklist_company_uniq
 
 CREATE UNIQUE INDEX quotation_blacklist_contact_uniq
     ON public.quotation_blacklist (company_id, contact_id) WHERE contact_id IS NOT NULL;
+
+
+--
+-- Name: quotation_credit_policy; Type: TABLE; Schema: public; Owner: -
+--
+-- เกณฑ์ระงับการเสนอราคาบริษัทที่ไม่มีคำสั่งซื้อมานาน (แถวเดียว)
+-- ตัวข้อมูล "ซื้อล่าสุดเมื่อไหร่" อยู่ที่ customers_data_view.last_order_at ไม่ใช่ที่นี่
+-- แยกกันเพราะ customers_data_view ถูกสร้างใหม่ทั้งก้อนทุกรอบ sync — ค่าที่แอดมินตั้งจะหาย
+-- mode: off = ไม่ตรวจ · warn = ตรวจ+log แต่ยังออกใบได้ · block = ห้ามออกใบ
+--
+
+CREATE TABLE public.quotation_credit_policy (
+    id              integer DEFAULT 1 NOT NULL,
+    mode            text    DEFAULT 'off' NOT NULL,
+    dormant_months  integer DEFAULT 12 NOT NULL,
+    updated_at      timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_by      integer REFERENCES public.admin_users(id) ON DELETE SET NULL,
+    CONSTRAINT quotation_credit_policy_single_row CHECK (id = 1),
+    CONSTRAINT quotation_credit_policy_mode CHECK (mode = ANY (ARRAY['off', 'warn', 'block'])),
+    CONSTRAINT quotation_credit_policy_months CHECK (dormant_months > 0 AND dormant_months <= 240)
+);
+
+INSERT INTO public.quotation_credit_policy (id) VALUES (1) ON CONFLICT DO NOTHING;
 
 
 --

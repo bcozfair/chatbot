@@ -1709,6 +1709,12 @@
       const BLACKLIST_MESSAGE =
         "บริษัท/ผู้ติดต่อ รายนี้ถูกระงับการเสนอราคา กรุณาติดต่อแอดมิน";
 
+      // ⚠️ mirror ของ CUSTOMER_CREDIT_HOLD ใน buildViolationDisplay() เช่นกัน
+      // ไม่ใส่วันที่ซื้อล่าสุดตรงนี้เพราะผลค้นหาส่งมาแค่ธง true/false (30 รายการต่อครั้ง)
+      // ข้อความเต็มพร้อมวันที่มาจาก server ตอนกดบันทึก/ยืนยัน ซึ่งเป็นด่านจริง
+      const CREDIT_HOLD_MESSAGE =
+        "บริษัทนี้ไม่มีคำสั่งซื้อมานานเกินกำหนด กรุณาติดต่อแอดมินเพื่อตรวจสอบเครดิตก่อน";
+
       // ── State ──
       let quotesData = [];
       let originalData = [];
@@ -3203,6 +3209,13 @@
               selectEl.appendChild(opt);
               return;
             }
+            // is_credit_hold เป็นค่าระดับบริษัท จึงติดเหมือนกันทุกคนในบริษัทนั้น
+            if (c.is_credit_hold) {
+              opt.textContent = `⛔ ${c.name} (ต้องตรวจสอบเครดิต)`;
+              opt.disabled = true;
+              selectEl.appendChild(opt);
+              return;
+            }
             opt.textContent = c.name;
             if (c.name === selectedContactName) {
               opt.selected = true;
@@ -3318,19 +3331,22 @@
         }
         customers.forEach((cust) => {
           const itemEl = document.createElement("div");
-          // is_blacklisted มาจาก /api/customers/search (ฟิลด์ที่เติมต่อท้าย ไม่ได้แก้ SQL ค้นหา)
+          // is_blacklisted / is_credit_hold มาจาก /api/customers/search (ฟิลด์ที่เติมต่อท้าย ไม่ได้แก้ SQL ค้นหา)
           // ยังค้นเจอได้เหมือนเดิม แต่กดเลือกไม่ได้ — ตัวกันจริงอยู่ฝั่ง server ตอนบันทึก/ยืนยัน
+          // blacklist มาก่อนเสมอเมื่อติดทั้งคู่ (แอดมินสั่งระงับเองย่อมสำคัญกว่าเกณฑ์อัตโนมัติ)
           const blocked = !!cust.is_blacklisted;
-          itemEl.className = blocked ? "dropdown-item is-blocked" : "dropdown-item";
+          const creditHold = !blocked && !!cust.is_credit_hold;
+          const barred = blocked || creditHold;
+          itemEl.className = barred ? "dropdown-item is-blocked" : "dropdown-item";
           itemEl.innerHTML = `
           <div class="dropdown-item-header">
             <span class="prod-code">${cust.display_name}</span>
-            ${blocked ? '<span class="blocked-badge">🚫 ระงับการเสนอราคา</span>' : `<span class="prod-price" style="font-size:11px;color:var(--text-light);">${cust.reference || ""}</span>`}
+            ${barred ? `<span class="blocked-badge">${blocked ? "🚫 ระงับการเสนอราคา" : "⛔ ต้องตรวจสอบเครดิต"}</span>` : `<span class="prod-price" style="font-size:11px;color:var(--text-light);">${cust.reference || ""}</span>`}
           </div>
           `;
-          if (blocked) {
+          if (barred) {
             itemEl.addEventListener("click", () => {
-              showCustomAlert(BLACKLIST_MESSAGE);
+              showCustomAlert(blocked ? BLACKLIST_MESSAGE : CREDIT_HOLD_MESSAGE);
             });
           } else {
             itemEl.addEventListener("click", () => {

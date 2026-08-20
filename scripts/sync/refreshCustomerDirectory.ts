@@ -85,7 +85,11 @@ export async function refreshCustomerDataView(opts?: { force?: boolean }): Promi
     await client.query(
       `CREATE UNIQUE INDEX idx_cdv_new_company_contact ON ${NEW_TABLE} (company_id, contact_id)`
     );
-    await client.query(`CREATE INDEX idx_cdv_new_company ON ${NEW_TABLE} (company_id)`);
+    // INCLUDE (last_order_at) = ด่านตรวจเครดิต (services/creditHoldService.ts) ถาม
+    // "บริษัทนี้ซื้อล่าสุดเมื่อไหร่" ได้จบใน index ไม่ต้องแตะ heap — ต้องตรงกับ migrations/schema.sql
+    await client.query(
+      `CREATE INDEX idx_cdv_new_company ON ${NEW_TABLE} (company_id) INCLUDE (last_order_at)`
+    );
 
     // ตารางที่เพิ่งสร้างยังไม่มี stats — ต้อง ANALYZE ก่อนสลับ ไม่งั้น query แรก ๆ ของแอปจะได้ plan มั่ว
     // (ทำก่อน swap เพราะตอนนี้ยังไม่มีใครอ่านตารางนี้ ไม่กระทบใคร)

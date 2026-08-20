@@ -60,6 +60,7 @@ chatbot/
 │   ├── rules/                # rule engine โปรโมชัน/เงื่อนไข (index, quotationRules, scopeMatch, cache, types)
 │   ├── shippingFee.ts        # ค่าขนส่ง
 │   ├── blacklistService.ts   # บัญชีห้ามเสนอราคา
+│   ├── creditHoldService.ts  # ระงับบริษัทที่ไม่มี sale_order มานาน (เกณฑ์อยู่ DB, ข้อมูลอยู่ cdv)
 │   ├── webhookQueue.ts       # KeyedTaskQueue + งบเวลาตอบ (BUDGET_MS) — หัวใจของ "ตอบทันภายใน replyToken"
 │   ├── pdfCache.ts           # cache PDF ที่ออกเลขแล้ว
 │   ├── apiLogService.ts      # คิวเขียน api_logs (ห้าม throw / ต้อง sync)
@@ -96,6 +97,7 @@ chatbot/
 | สร้าง/ยืนยันใบเสนอราคา | `services/quotationService.ts` |
 | ค้นหาสินค้า/ลูกค้า | `services/productService.ts`, `services/customerService.ts` |
 | ราคา/โปรโมชัน | `utils/pricing.ts`, `utils/promotionValidator.ts`, `services/rules/` |
+| ห้ามเสนอราคา / เครดิตลูกค้า | `services/blacklistService.ts`, `services/creditHoldService.ts` |
 | SQL / ตาราง | `db/repositories.ts`, `migrations/schema.sql` |
 | route / API / auth | `index.ts`, `config/auth.ts` |
 | Flex message / PDF | `utils/flexTemplates.ts`, `pdfGenerator.ts` |
@@ -149,6 +151,10 @@ chatbot/
 * **ใน `withTransaction()`** ห้ามเรียก `pool.query` (ต้องใช้ client ที่รับมา) · ห้าม `res.json()` (return ค่าออกไปตอบหลัง COMMIT) · ห้ามยิง network (LLM/LINE/puppeteer) เพราะจะเปิด transaction ค้าง
 * **กฎ "ห้ามขายต่ำกว่าราคาขั้นต่ำ" มีที่เดียว** ใน `services/quotationService.ts` (fail-closed) — ห้ามก๊อปตรรกะไปเขียนซ้ำที่อื่น
 * **อ่าน IP ด้วย `getClientIp()` เท่านั้น** ห้ามอ่าน `req.socket.remoteAddress` ตรง ๆ
+* **`sale_orders.company_id` ไม่ใช่รหัสลูกค้า** — เป็น "บริษัทผู้ขาย" ของ Odoo มีแค่ค่า 1 กับ 2 (PM/THT)
+  จุดเชื่อมลูกค้าคือ `contact_id` เท่านั้น (+ `customer_tax_id`/`customer_reference` ตอนขยายนิติบุคคล)
+  เผลอ join ด้วย `company_id` แล้วผลจะดู "ถูก" แต่ว่างเปล่า — วัดจริง: join แบบนั้นได้บริษัทที่มีออเดอร์ 1 ราย
+  จากทั้งหมด 53,266 ราย
 * **การจับคู่ลูกค้า** ชื่อคล้ายกันอาจคนละนิติบุคคล — ห้าม normalize/ยุบชื่อเพิ่มเองโดยไม่รัน eval เทียบผล
 * **`scripts/diag/*Smoke.ts`** ที่จบด้วย ROLLBACK ห้ามเปลี่ยนเป็น COMMIT
 
@@ -198,6 +204,7 @@ Harness เฉพาะโดเมน (รันเมื่อแตะส่�
 tsx scripts/evalCustomerSearch.ts   # gate: logic จับคู่ลูกค้า
 npm run diag:date-filter            # gate: ตัวกรองวันที่ต้องเท่ากันทุก TimeZone ของ DB
 npm run diag:confirm-race           # race ตอนยืนยันใบเสนอราคา
+npm run diag:credit-hold            # gate: กฎระงับบริษัทที่ไม่มีคำสั่งซื้อมานาน (อ่านอย่างเดียว รันกับ prod ได้)
 npm run diag:quote-validation       # กฎ validate ใบเสนอราคา
 npm run diag:stock-rule             # กฎสต็อก (มี :stock-rule-put ด้วย)
 npm run diag:shipping-fee           # ค่าขนส่ง

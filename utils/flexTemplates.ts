@@ -700,11 +700,22 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
   // ไม่ใช่ตัวกันจริง (ตัวจริงคือด่านตอนกดยืนยัน) แต่ช่วยไม่ให้เซลล์กดแล้วเด้ง
   // ล้มแล้วปล่อยผ่าน: ปุ่มยังโผล่ตามปกติ แล้วไปโดนปฏิเสธที่ด่านจริงแทน
   let customerBlacklisted = false;
+  // ข้อความของด่านเครดิตต้องมาจาก buildViolationDisplay ที่เดียว (มีวันที่ซื้อล่าสุดประกอบอยู่)
+  // จึงถือมาเป็นสตริงสำเร็จรูป ไม่ใช่ boolean แบบ blacklist ที่ถ้อยคำคงที่
+  let creditHoldText: string | null = null;
   try {
     const { isBlacklisted } = await import('../services/blacklistService.js');
     customerBlacklisted = await isBlacklisted(quotes[0]?.customer_id, quotes[0]?.contact_id);
+    if (!customerBlacklisted) {
+      const { checkCreditHold } = await import('../services/creditHoldService.js');
+      const credit = await checkCreditHold(quotes[0]?.customer_id);
+      if (credit.held) {
+        const { creditHoldViolation } = await import('../services/quotationService.js');
+        creditHoldText = creditHoldViolation(credit).display_message;
+      }
+    }
   } catch (err) {
-    console.error('[getQuotationSummaryMessage] blacklist check failed (ปล่อยผ่าน):', err);
+    console.error('[getQuotationSummaryMessage] customer gate check failed (ปล่อยผ่าน):', err);
   }
   if (customerIncomplete && meta.company === 'ลูกค้าทั่วไป') meta.company = '';
 
@@ -1162,7 +1173,7 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
             }
           ];
 
-          if (customerIncomplete || hasMinPriceViolation || customerBlacklisted) {
+          if (customerIncomplete || hasMinPriceViolation || customerBlacklisted || creditHoldText) {
             // แสดงข้อความเตือนแทนปุ่มยืนยัน
             footerButtons.push({
               type: "box",
@@ -1174,7 +1185,9 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
                     ? "⚠️ ยังยืนยันไม่ได้ — ต้องกรอกข้อมูลลูกค้าก่อน"
                     : customerBlacklisted
                       ? "🚫 บริษัท/ผู้ติดต่อ รายนี้ถูกระงับการเสนอราคา กรุณาติดต่อแอดมิน"
-                      : "⚠️ ไม่สามารถยืนยันได้ — มีสินค้าราคาต่ำกว่าขั้นต่ำ",
+                      : creditHoldText
+                        ? creditHoldText
+                        : "⚠️ ไม่สามารถยืนยันได้ — มีสินค้าราคาต่ำกว่าขั้นต่ำ",
                   size: "xs",
                   color: "#DC2626",
                   weight: "bold",

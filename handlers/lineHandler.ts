@@ -816,15 +816,19 @@ export async function handleEvent(
         // แล้วตอบ "อัปเดตข้อมูลไม่สำเร็จ" ซึ่งเป็นข้อความคนละเรื่อง
         {
           const { isBlacklisted } = await import('../services/blacklistService.js');
-          const { buildViolationText, blacklistViolation, systemErrorViolation } =
+          const { checkCreditHold } = await import('../services/creditHoldService.js');
+          const { buildViolationText, blacklistViolation, creditHoldViolation, systemErrorViolation } =
             await import('../services/quotationService.js');
           let blockText: string | null = null;
           try {
             if (await isBlacklisted(resolvedCustomerId, contactId)) {
               blockText = buildViolationText([blacklistViolation()]);
+            } else {
+              const credit = await checkCreditHold(resolvedCustomerId);
+              if (credit.held) blockText = buildViolationText([creditHoldViolation(credit)]);
             }
           } catch (err) {
-            console.error('[select_contact] blacklist check failed (fail-closed):', err);
+            console.error('[select_contact] customer gate failed (blacklist/credit, fail-closed):', err);
             blockText = buildViolationText([systemErrorViolation()]);
           }
           if (blockText) {

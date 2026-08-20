@@ -20,7 +20,8 @@ import { validateProductPriceWithPromotions } from '../utils/promotionValidator.
 import { buildThaiAddress } from '../utils/address.js';
 import { resolveDeliveryTerms } from '../utils/deliveryTerms.js';
 import { isBlacklisted } from './blacklistService.js';
-import { thaiYearMonth } from '../utils/thaiTime.js';
+import { checkCreditHold, type CreditHoldResult } from './creditHoldService.js';
+import { thaiDateDMY, thaiYearMonth } from '../utils/thaiTime.js';
 import {
   loadQuotationRules,
   resolveQuotationRule,
@@ -34,7 +35,7 @@ import {
 export type ValidationStage = 'draft' | 'save' | 'confirm';
 
 export interface Violation {
-  type: 'BLOCKED' | 'OUT_OF_STOCK' | 'MOQ_VIOLATION' | 'MIN_PRICE_VIOLATION' | 'CUSTOMER_BLACKLISTED' | 'SYSTEM_ERROR';
+  type: 'BLOCKED' | 'OUT_OF_STOCK' | 'MOQ_VIOLATION' | 'MIN_PRICE_VIOLATION' | 'CUSTOMER_BLACKLISTED' | 'CUSTOMER_CREDIT_HOLD' | 'SYSTEM_ERROR';
   model: string;
   display_message: string;
   warn_msg?: string;
@@ -46,6 +47,8 @@ export interface Violation {
   min_order_qty?: number;
   qty?: number;
   quantity_on_hand_unreserved?: number;
+  last_order_at?: string | null;
+  dormant_months?: number;
 }
 
 /** สร้างข้อความพร้อมโชว์จาก violation — ถ้อยคำเดียวของทั้งระบบ (server เป็น source of truth) */
@@ -73,6 +76,13 @@ export function buildViolationDisplay(v: Omit<Violation, 'display_message'>): st
     // ไม่บอกเหตุผลที่แอดมินกรอกไว้ และไม่บอกว่าติดระดับบริษัทหรือระดับผู้ติดต่อ — เซลล์ต้องไปถามแอดมิน
     case 'CUSTOMER_BLACKLISTED':
       return '🚫 บริษัท/ผู้ติดต่อ รายนี้ถูกระงับการเสนอราคา กรุณาติดต่อแอดมิน';
+    // ตรงข้ามกับ blacklist: เคสนี้ต้องบอกวันที่ซื้อล่าสุด เพราะเซลล์ต้องเอาไปคุยกับแอดมินต่อ
+    case 'CUSTOMER_CREDIT_HOLD': {
+      const months = v.dormant_months ?? 12;
+      const since = v.last_order_at ? thaiDateDMY(new Date(v.last_order_at)) : null;
+      const when = since ? `ตั้งแต่ ${since} ` : '';
+      return `⛔ บริษัทนี้ไม่มีคำสั่งซื้อ ${when}(เกิน ${months} เดือน) กรุณาติดต่อแอดมินเพื่อตรวจสอบเครดิตก่อน`;
+    }
     case 'SYSTEM_ERROR':
       return '⚠️ ตรวจสอบกฎไม่สำเร็จ กรุณาลองใหม่หรือติดต่อแอดมิน';
     default:
@@ -83,6 +93,16 @@ export function buildViolationDisplay(v: Omit<Violation, 'display_message'>): st
 /** violation สำเร็จรูปสำหรับด่านที่อยู่นอก validateQuotationItems — ถ้อยคำต้องมาจากที่เดียวกัน */
 export const blacklistViolation = (): Violation => {
   const v: Omit<Violation, 'display_message'> = { type: 'CUSTOMER_BLACKLISTED', model: '-' };
+  return { ...v, display_message: buildViolationDisplay(v) };
+};
+
+export const creditHoldViolation = (result: CreditHoldResult): Violation => {
+  const v: Omit<Violation, 'display_message'> = {
+    type: 'CUSTOMER_CREDIT_HOLD',
+    model: '-',
+    last_order_at: result.last_order_at ? result.last_order_at.toISOString() : null,
+    dormant_months: result.dormant_months,
+  };
   return { ...v, display_message: buildViolationDisplay(v) };
 };
 
@@ -1057,13 +1077,18 @@ export async function validateQuotationItems(
   let expanded: any[] = items ?? [];
 
   // เงื่อนไขระดับ "ลูกค้า" — ตรวจก่อนรายการสินค้าเสมอ และตรวจแม้ใบยังไม่มีสินค้าสักบรรทัด
+  // ทั้งสองด่านอยู่ใน try เดียวกันเพราะเป็น fail-closed เหมือนกัน: ตรวจไม่สำเร็จ = ห้ามออกใบ
+  // และแจ้งพร้อมกันได้ถ้าติดทั้งคู่ (คนละสาเหตุ เซลล์ต้องรู้ทั้งสองอย่างก่อนไปหาแอดมิน)
   try {
     if (await isBlacklisted(opts.customerId, opts.contactId)) {
       const v: Omit<Violation, 'display_message'> = { type: 'CUSTOMER_BLACKLISTED', model: '-' };
       violations.push({ ...v, display_message: buildViolationDisplay(v) });
     }
+
+    const credit = await checkCreditHold(opts.customerId);
+    if (credit.held) violations.push(creditHoldViolation(credit));
   } catch (err) {
-    console.error(`[validateQuotationItems] stage=${opts.stage} blacklist check failed (fail-closed):`, err);
+    console.error(`[validateQuotationItems] stage=${opts.stage} customer gate failed (blacklist/credit, fail-closed):`, err);
     const v: Omit<Violation, 'display_message'> = { type: 'SYSTEM_ERROR', model: '-' };
     return { items: expanded, violations: [{ ...v, display_message: buildViolationDisplay(v) }] };
   }
@@ -1256,8 +1281,16 @@ export async function resolveContactFlow(
     if (await isBlacklisted(customerId, null)) {
       return { text: buildViolationText([blacklistViolation()]) };
     }
+
+    // ด่านเครดิตอยู่ระดับบริษัทล้วน ไม่เกี่ยวกับผู้ติดต่อ จึงตรวจตรงนี้ได้เลยทั้งที่ยังไม่รู้ว่า
+    // เซลล์จะเลือกผู้ติดต่อคนไหน · ถ้าหลังจากนี้ใบถูกย้ายไปผูกบริษัทพี่น้อง (resolvedCustomerId
+    // ด้านล่าง) ก็ไม่ต้องตรวจซ้ำ เพราะ last_order_at เป็นค่าระดับนิติบุคคล ทุกรหัสในกลุ่มได้ค่าเดียวกัน
+    const credit = await checkCreditHold(customerId);
+    if (credit.held) {
+      return { text: buildViolationText([creditHoldViolation(credit)]) };
+    }
   } catch (err) {
-    console.error('[resolveContactFlow] blacklist check failed (fail-closed):', err);
+    console.error('[resolveContactFlow] customer gate failed (blacklist/credit, fail-closed):', err);
     return { text: buildViolationText([systemErrorViolation()]) };
   }
 

@@ -4,6 +4,7 @@ import { AuthProvider, useAuth, type Role } from '../context/AuthContext';
 import { Login } from './Login';
 import { Users } from './Users';
 import { Blacklist } from './Blacklist';
+import { CreditPolicy } from './CreditPolicy';
 import { ChangePasswordModal } from './ChangePasswordModal';
 import { Promotions } from './Promotions';
 import { Salespersons } from './Salespersons';
@@ -71,7 +72,7 @@ const SETTINGS_SUBITEMS: { key: SubTab; label: string }[] = [
   { key: 'optional', label: 'สินค้าพ่วงเสริม' },
   { key: 'stock', label: 'ระงับเมื่อหมดสต็อก' },
   { key: 'moq', label: 'ขั้นต่ำสั่งซื้อ' },
-  { key: 'shipping', label: 'ค่าขนส่ง' },
+  { key: 'shipping', label: 'ค่าขนส่ง & เครดิต' },
 ];
 
 const PAGE_TITLES: Record<MainTab, string> = {
@@ -563,7 +564,16 @@ function AdminContent() {
               {subTab === 'optional' && <OptionalLinks />}
               {subTab === 'stock' && <StockRules />}
               {subTab === 'moq' && <ProductMoqRules />}
-              {subTab === 'shipping' && <ShippingFee />}
+              {/* สองกฎคนละตาราง/คนละ endpoint แต่รวมหน้าเดียวกันเพราะแอดมินตั้งค่าทีเดียวจบ
+                  อยากแยกหน้าเมื่อไหร่ก็ย้าย <CreditPolicy /> ไป subTab ใหม่ได้เลย */}
+              {subTab === 'shipping' && (
+                <div className="space-y-6">
+                  <ShippingFee />
+                  <div className="border-t border-slate-200 pt-6">
+                    <CreditPolicy />
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
