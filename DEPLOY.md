@@ -204,7 +204,9 @@ SELECT to_regclass('public.customers_data_view')  AS matview,
        EXISTS(SELECT 1 FROM information_schema.columns
               WHERE table_name='quotations' AND column_name='odoo_exported_at')               AS exported_at,
        to_regclass('public.quotation_export_batches')                                         AS export_batches,
-       to_regclass('public.api_logs')                                                         AS api_logs;"
+       to_regclass('public.api_logs')                                                         AS api_logs,
+       EXISTS(SELECT 1 FROM information_schema.columns
+              WHERE table_name='api_logs' AND column_name='ip')                               AS api_logs_ip;"
 ```
 > คอลัมน์ `clean_text` ต้องใช้ **`to_regprocedure`** ไม่ใช่ `to_regproc` — `to_regproc` รับได้แค่ชื่อฟังก์ชันเปล่า
 > ใส่ `(text)` ต่อท้ายจะคืน null ทุกครั้งแม้ฟังก์ชันมีอยู่จริง = สัญญาณเตือนหลอกว่า migration ขาด
@@ -223,6 +225,9 @@ done
   ไม่ต้องรัน `_01` ก่อน (รันสองรอบ = ค้นหาลูกค้าล่มนานเป็นเท่าตัวเปล่า ๆ)
 - **มีช่วงที่ค้นหาลูกค้าพัง** — ระหว่างสร้าง matview ใหม่ (ราว 1–3 นาที) `customers_data_view` หายชั่วคราว → ทำนอกเวลาใช้งาน
 - **ข้อยกเว้น: `2026-08-10_01_api_logs.sql` รันได้ทุกเวลา** — สร้างตารางใหม่ล้วน ไม่ ALTER ตารางเดิม ไม่แตะ matview จบในไม่กี่ ms
+- **ข้อยกเว้น: `2026-08-20_03_api_logs_ip.sql` รันได้ทุกเวลา และรัน "ก่อน" deploy โค้ดใหม่ได้**
+  `ADD COLUMN` แบบ nullable ไม่มี DEFAULT = PostgreSQL แก้แค่ metadata ไม่ล็อกตาราง ไม่เขียนแถวใหม่
+  และโค้ดเก่าที่ยังรันอยู่ระบุชื่อคอลัมน์ใน INSERT ครบทุกตัว จึงเขียน log ต่อได้ตามปกติ (คอลัมน์ใหม่เป็น NULL)
 
 ### ขั้น 4.5 — เปลี่ยนชื่อค่าภาษีใน `.env` (ครั้งเดียว ตอนขึ้น export แยก QP/QT)
 export แยกไฟล์ตามบริษัทแล้ว ชื่อภาษีจึงแยกเป็น 2 คีย์ — คีย์เดิม `ODOO_EXPORT_TAX` ไม่ถูกอ่านอีกต่อไป
@@ -260,8 +265,15 @@ API_LOG_RETENTION_DAYS=30
          count(*) AS rows, min(created_at) AS oldest FROM public.api_logs;"
   ```
   เกินคาดเมื่อไหร่ให้ลด `API_LOG_RETENTION_DAYS` แล้ว restart — ตัวลบจะเก็บกวาดให้เองในรอบถัดไป
-- ตารางนี้ **ไม่มี PII** (เก็บแค่ user id, path, status, เวลา — ไม่เก็บ request body ไม่มีชื่อ/เบอร์ลูกค้า
-  ไม่มีข้อความแชท) จึงไม่เพิ่มข้อจำกัดเรื่องการส่งไฟล์ dump
+- ⚠️ **ตารางนี้มีข้อมูลส่วนบุคคลตั้งแต่ `2026-08-20_03_api_logs_ip.sql` เป็นต้นไป**
+  ยังไม่เก็บ request body จึงไม่มีชื่อ/เบอร์ลูกค้าและไม่มีข้อความแชทเหมือนเดิม **แต่คอลัมน์ `ip`
+  ที่วางอยู่แถวเดียวกับ `line_user_id` ทำให้ระบุตัวบุคคลได้** → ก่อนส่ง dump ให้คนนอกต้องตัดคอลัมน์นี้
+  ออกก่อน หรือ dump โดยไม่เอาตารางนี้ไปเลย:
+  ```bash
+  docker compose exec -T db pg_dump -U "$PG_USER" -d "$PG_DATABASE" -Fc \
+    --exclude-table-data=public.api_logs > dump-ไม่มี-api-logs.dump
+  ```
+  ตัวช่วยที่มีอยู่แล้วคือ retention 30 วันซึ่งลบให้อัตโนมัติทุกชั่วโมง — ข้อมูลไม่ค้างยาว
 
 ### ขั้น 5 — rebuild + up
 ```bash

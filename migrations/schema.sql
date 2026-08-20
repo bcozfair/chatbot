@@ -99,7 +99,8 @@ CREATE TABLE public.api_logs (
     line_user_id character varying(40),
     inflight smallint,
     db_waiting smallint,
-    queue_waited_ms integer
+    queue_waited_ms integer,
+    ip character varying(45)
 )
 WITH (autovacuum_vacuum_scale_factor='0.02', autovacuum_analyze_scale_factor='0.01');
 

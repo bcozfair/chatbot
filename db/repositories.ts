@@ -764,6 +764,8 @@ export interface ApiLogInsertRow {
   respBytes: number | null;
   adminUserId: number | null;
   lineUserId: string | null;
+  /** IP ต้นทางจาก getClientIp() — ตัดที่ 45 ตัวอักษรแล้วจาก config/apiLogger.ts */
+  ip: string | null;
   inflight: number | null;
   dbWaiting: number | null;
   queueWaitedMs: number | null;
@@ -780,11 +782,11 @@ export async function insertApiLogRows(db: DbExecutor, rows: ApiLogInsertRow[]):
   await db.query(
     `INSERT INTO api_logs
        (created_at, request_id, method, route, path, status_code, duration_ms,
-        resp_bytes, admin_user_id, line_user_id, inflight, db_waiting, queue_waited_ms)
+        resp_bytes, admin_user_id, line_user_id, ip, inflight, db_waiting, queue_waited_ms)
      SELECT * FROM UNNEST(
        $1::timestamptz[], $2::varchar[], $3::varchar[], $4::varchar[], $5::varchar[],
-       $6::smallint[], $7::int[], $8::int[], $9::int[], $10::varchar[],
-       $11::smallint[], $12::smallint[], $13::int[])`,
+       $6::smallint[], $7::int[], $8::int[], $9::int[], $10::varchar[], $11::varchar[],
+       $12::smallint[], $13::smallint[], $14::int[])`,
     [
       rows.map(r => r.createdAt.toISOString()),
       rows.map(r => r.requestId),
@@ -796,6 +798,7 @@ export async function insertApiLogRows(db: DbExecutor, rows: ApiLogInsertRow[]):
       rows.map(r => r.respBytes),
       rows.map(r => r.adminUserId),
       rows.map(r => r.lineUserId),
+      rows.map(r => r.ip),
       rows.map(r => r.inflight),
       rows.map(r => r.dbWaiting),
       rows.map(r => r.queueWaitedMs),
@@ -854,10 +857,45 @@ export const API_LOG_ROUTE_GROUP = `COALESCE(route, regexp_replace(
   regexp_replace(path, '/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', '/:id', 'gi'),
   '/[0-9]+(?=/|$)', '/:id', 'g'))`;
 
+/**
+ * uuid ของใบเสนอราคาที่ถูกดาวน์โหลด แกะจาก path ของแถว /download-pdf/... — NULL ถ้าไม่ใช่แถวนั้น
+ *
+ * ⚠️ regex ต้องเป็น "รูป uuid เต็ม" ไม่ใช่ [0-9a-fA-F-]{36} — ไม่งั้นสตริงอย่าง
+ *    /download-pdf/------------------------------------ จะผ่าน regex แล้วไประเบิดตอน ::uuid
+ *    ทำให้ทั้งหน้าพัง 500 · ยืนยันแล้วว่ารูปนี้คืน NULL ให้ทุกเคสเพี้ยน (ดู diag ข้อ 8)
+ */
+const API_LOG_DOC_ID = `substring(api_logs.path from
+  '^/download-pdf/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})')::uuid`;
+
+/**
+ * "เจ้าของเอกสาร" ของแถวลิงก์สาธารณะ — หาตอนอ่าน ไม่เก็บเป็นคอลัมน์
+ *
+ * /download-pdf/<uuid>/<เลขที่> เป็นลิงก์ที่บอทส่งเข้าแชทแล้วเซลล์ forward ต่อให้ลูกค้าได้
+ * ไม่มีล็อกอิน ไม่มี userId → "ใครกด" รู้ไม่ได้ แต่ quoteId อยู่ใน path อยู่แล้ว จึงบอกได้ว่า
+ * "เอกสารของใครถูกเปิด" ซึ่งเป็นคำถามที่คนถามจริงตอนตรวจย้อนหลัง
+ *
+ * ⚠️ หน้าจอต้องเรียกคอลัมน์นี้ว่า "เจ้าของเอกสาร" ห้ามเอาไปรวมกับคอลัมน์ "ผู้เรียก" เด็ดขาด
+ *    ไม่งั้นวันหนึ่งจะมีคนอ่านแล้วสรุปว่า "เซลล์คนนี้เปิดไฟล์ตอนตีสอง" ทั้งที่ลูกค้าเป็นคนเปิด
+ *
+ * ⚠️ ห้ามเขียนเป็น q.id::text = substring(...) เด็ดขาด — การ cast คอลัมน์ที่มี index เป็น text
+ *    ทำให้ planner ใช้ quotations_pkey ไม่ได้ ต้อง Seq Scan ทั้งตารางซ้ำทุกแถวผลลัพธ์
+ *    วัดจริงบนข้อมูล production: 317 ms เทียบกับ 1.8 ms = ช้ากว่า 170 เท่า และแย่ลงเรื่อย ๆ
+ *    ตามจำนวนใบเสนอราคาที่โตขึ้น · ต้อง cast ฝั่ง path เป็น uuid แล้วเทียบกับคอลัมน์ตรง ๆ เท่านั้น
+ *    (diag ข้อ 8 assert ไว้แล้วว่าต้องเห็น quotations_pkey และห้ามเห็น Seq Scan on quotations)
+ *
+ * ⚠️ ใช้ได้เฉพาะ query ที่มี LIMIT บังคับ (listApiLogs / getApiLogById) เท่านั้น
+ *    ห้ามเอาไปใส่ใน getApiLogStats ซึ่ง aggregate ทั้งหน้าต่างเวลา (หลายพันแถว ไม่มี LIMIT)
+ */
+export const API_LOG_DOC_OWNER = `
+              (SELECT q.user_id FROM quotations q
+                WHERE q.id = ${API_LOG_DOC_ID}) AS doc_owner_user_id,
+              (SELECT s.name FROM quotations q JOIN salesperson s ON s.user_id = q.user_id
+                WHERE q.id = ${API_LOG_DOC_ID}) AS doc_owner_name`;
+
 export interface ApiLogFilters {
   dateFrom?: string; dateTo?: string; method?: string; status?: string;
   path?: string; route?: string; adminUserId?: number; lineUserId?: string;
-  minDuration?: number; requestId?: string;
+  ip?: string; minDuration?: number; requestId?: string;
 }
 
 /** แปลงตัวกรองเป็น WHERE + params — ใช้ร่วมกันระหว่าง list กับ count ให้ผลตรงกันเสมอ */
@@ -882,6 +920,9 @@ function buildApiLogWhere(f: ApiLogFilters): { where: string; params: any[] } {
   if (f.route) add(i => `${API_LOG_ROUTE_GROUP} = $${i}`, f.route);
   if (typeof f.adminUserId === 'number') add(i => `admin_user_id = $${i}`, f.adminUserId);
   if (f.lineUserId) add(i => `line_user_id = $${i}`, f.lineUserId);
+  // ไม่มี index ให้ ip โดยตั้งใจ — ทุกหน้าจอคัดด้วยช่วงเวลาก่อนเสมอ จึงสแกนแค่หน้าต่างนั้น
+  // เหมือนตัวกรอง path ที่ใช้ ILIKE อยู่แล้ว · ถ้าวันหน้าช้าค่อยเพิ่ม CREATE INDEX CONCURRENTLY
+  if (f.ip) add(i => `ip = $${i}`, f.ip);
   if (typeof f.minDuration === 'number') add(i => `duration_ms >= $${i}`, f.minDuration);
 
   if (f.status && f.status !== 'all') {
@@ -911,7 +952,7 @@ export async function listApiLogs(
               ${API_LOG_ROUTE_GROUP} AS route_group,
               route, path, status_code, duration_ms, resp_bytes, admin_user_id,
               (SELECT username FROM admin_users u WHERE u.id = api_logs.admin_user_id) AS admin_username,
-              line_user_id, inflight, db_waiting, queue_waited_ms
+              line_user_id, ip, inflight, db_waiting, queue_waited_ms,${API_LOG_DOC_OWNER}
          FROM api_logs
          ${where}
         ORDER BY created_at DESC, id DESC
@@ -936,7 +977,7 @@ export async function getApiLogById(id: string): Promise<any | null> {
   try {
     const { rows } = await pool.query(
       `SELECT api_logs.*, id::text AS id,
-              (SELECT username FROM admin_users u WHERE u.id = api_logs.admin_user_id) AS admin_username
+              (SELECT username FROM admin_users u WHERE u.id = api_logs.admin_user_id) AS admin_username,${API_LOG_DOC_OWNER}
          FROM api_logs WHERE id = $1::bigint`, [id]);
     if (!rows.length) return null;
 

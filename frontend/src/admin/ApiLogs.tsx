@@ -27,6 +27,10 @@ import {
  *
  * ตารางนี้ไม่เก็บ request body โดยตั้งใจ (ดูเหตุผลใน migrations/changes/2026-08-10_01_api_logs.sql)
  * จึงไม่มีอะไรให้กางดูนอกจากข้อมูลของ request เอง
+ *
+ * ⚠️ "เจ้าของเอกสาร" ไม่ใช่ "ผู้เรียก" — ลิงก์ /download-pdf เป็นลิงก์สาธารณะที่เซลล์ forward
+ *    ต่อให้ลูกค้าได้ จึงไม่มีทางรู้ว่าใครกด · ที่แสดงได้คือ "เอกสารนี้เป็นของเซลล์คนไหน"
+ *    ทุกที่ที่แสดงค่านี้ต้องมีคำว่า "เอกสารของ" กำกับเสมอ ห้ามปล่อยให้อ่านแล้วเข้าใจว่าเป็นคนกด
  */
 
 const BRAND = '#009032';
@@ -45,6 +49,10 @@ interface ApiLogBase {
   admin_user_id: number | null;
   admin_username: string | null;
   line_user_id: string | null;
+  ip: string | null;
+  /** เจ้าของใบเสนอราคาของลิงก์ /download-pdf — "ไม่ใช่" คนที่กดลิงก์ (ดูคำเตือนหัวไฟล์) */
+  doc_owner_user_id: string | null;
+  doc_owner_name: string | null;
   inflight: number | null;
   db_waiting: number | null;
   queue_waited_ms: number | null;
@@ -188,6 +196,7 @@ export function ApiLogs() {
   const [minDuration, setMinDuration] = useState('');
   const [requestId, setRequestId] = useState('');
   const [lineUserId, setLineUserId] = useState('');
+  const [ipFilter, setIpFilter] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<ApiLogDetail | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
@@ -206,13 +215,14 @@ export function ApiLogs() {
       if (minDuration) qs.set('minDuration', minDuration);
       if (requestId.trim()) qs.set('requestId', requestId.trim());
       if (lineUserId.trim()) qs.set('lineUserId', lineUserId.trim());
+      if (ipFilter.trim()) qs.set('ip', ipFilter.trim());
 
       const res = await authFetch(`/api/admin/api-logs?${qs}`);
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
       const json = await res.json();
       setRows(json.data); setTotal(json.total);
     } catch (e: unknown) { setListError(errMsg(e)); } finally { setListLoading(false); }
-  }, [authFetch, page, pageSize, dateFrom, dateTo, pathQuery, method, status, minDuration, requestId, lineUserId]);
+  }, [authFetch, page, pageSize, dateFrom, dateTo, pathQuery, method, status, minDuration, requestId, lineUserId, ipFilter]);
 
   // ทั้งสองตัวยิงผ่าน setTimeout ไม่เรียก setState ตรง ๆ ในตัว effect
   // (loadStats/loadList เซ็ต loading ทันทีที่ถูกเรียก ซึ่งกฎ react-hooks/set-state-in-effect ห้ามไว้
@@ -556,11 +566,19 @@ export function ApiLogs() {
                 className={`${inputCls} font-mono text-xs`} />
             </div>
 
-            {(pathQuery || method || status !== 'all' || minDuration || requestId || lineUserId) && (
+            {/* กรองด้วย IP = ดูว่า "เครื่องเดียวกันนี้" เรียกอะไรไปบ้างในช่วงเวลานั้น ซึ่งเป็นวิธีเดียว
+                ที่พอจะบอกได้ว่าคนที่กดลิงก์ PDF สาธารณะเป็นเซลล์เจ้าของใบเองหรือคนอื่น */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <input value={ipFilter} onChange={(e) => { setIpFilter(e.target.value); setPage(1); }}
+                placeholder="IP ต้นทาง (กดที่ IP ในตารางเพื่อกรองได้เลย)"
+                className={`${inputCls} font-mono text-xs`} />
+            </div>
+
+            {(pathQuery || method || status !== 'all' || minDuration || requestId || lineUserId || ipFilter) && (
               <button
                 onClick={() => {
                   setPathQuery(''); setMethod(''); setStatus('all');
-                  setMinDuration(''); setRequestId(''); setLineUserId(''); setPage(1);
+                  setMinDuration(''); setRequestId(''); setLineUserId(''); setIpFilter(''); setPage(1);
                 }}
                 className="text-sm text-slate-500 hover:text-slate-700 inline-flex items-center gap-1.5">
                 <X className="w-3.5 h-3.5" />ล้างตัวกรอง
@@ -620,7 +638,20 @@ export function ApiLogs() {
                             ? <span className="text-slate-700">{r.admin_username}</span>
                             : r.line_user_id
                               ? <span className="font-mono text-slate-500">{shortUser(r.line_user_id)}</span>
-                              : <span className="text-slate-300">-</span>}
+                              : r.doc_owner_user_id
+                                // ลิงก์สาธารณะ ไม่มีล็อกอิน = ไม่รู้ว่าใครกด บอกได้แค่ว่าเอกสารของใคร
+                                ? <span className="text-slate-400" title="เอกสารของเซลล์คนนี้ — ไม่ได้แปลว่าเป็นคนกดลิงก์ ลิงก์นี้เปิดได้โดยไม่ต้องล็อกอิน">
+                                    เอกสารของ {r.doc_owner_name ?? shortUser(r.doc_owner_user_id)}
+                                  </span>
+                                : <span className="text-slate-300">-</span>}
+                          {r.ip && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setIpFilter(r.ip!); setPage(1); }}
+                              title="กรองเฉพาะ request ที่มาจาก IP นี้"
+                              className="font-mono text-[11px] text-slate-400 hover:text-slate-700 hover:underline mt-0.5 block">
+                              {r.ip}
+                            </button>
+                          )}
                         </td>
                         <td className="px-3 py-2.5 text-center">
                           <span className={`inline-block px-2 py-0.5 rounded-md border text-xs ${statusStyle(r.status_code)}`}>
@@ -678,6 +709,16 @@ export function ApiLogs() {
                                     </Field>
                                     <Field label="ผู้ใช้ระบบ">
                                       {detail.admin_username ?? (detail.admin_user_id ? `#${detail.admin_user_id} (ถูกลบแล้ว)` : '-')}
+                                    </Field>
+                                    <Field label="IP ต้นทาง">
+                                      <span className="font-mono">{detail.ip ?? '-'}</span>
+                                    </Field>
+                                    <Field label="เจ้าของเอกสาร (ไม่ใช่คนกดลิงก์)">
+                                      {detail.doc_owner_user_id
+                                        ? <span title={detail.doc_owner_user_id}>
+                                            {detail.doc_owner_name ?? shortUser(detail.doc_owner_user_id)}
+                                          </span>
+                                        : '-'}
                                     </Field>
                                     <Field label="ขนาดที่ตอบกลับ">{formatBytes(detail.resp_bytes)}</Field>
                                     <Field label="เวลารอคิว">

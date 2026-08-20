@@ -6,10 +6,12 @@
 //  โจทย์ที่สคริปต์นี้เฝ้า:
 //    (ก) การเก็บ log ต้องไม่ทำให้ระบบช้าลง → มี benchmark วัดต้นทุนต่อ request จริง ๆ ไม่ใช่แค่อ้าง
 //    (ข) buffer ต้องไม่โตไม่จำกัดจนกิน memory จน process ตาย
-//    (ค) UNNEST 13 คอลัมน์ต้องไม่สลับตำแหน่งกัน (เคสพลาดที่พบบ่อยที่สุดของ UNNEST หลายคอลัมน์)
+//    (ค) UNNEST 14 คอลัมน์ต้องไม่สลับตำแหน่งกัน (เคสพลาดที่พบบ่อยที่สุดของ UNNEST หลายคอลัมน์)
 //    (ง) ค่า retention ที่อ่านไม่ออกต้องตกกลับเป็นค่าตั้งต้น ไม่ใช่ 0 ซึ่งแปลว่า "ลบทุกแถวทันที"
 //    (จ) ตัวลบของเก่าต้องทำงานจริง — ไม่มีแถวที่เก่ากว่า retention ค้างอยู่
 //    (ฉ) สัญญาณ "pool ไม่พอ" ต้องไม่ขึ้นตอน pool ว่าง — สัญญาณเตือนที่ผิดแพงกว่าไม่มีสัญญาณ
+//    (ช) การหา "เจ้าของเอกสาร" ของลิงก์ /download-pdf ต้องใช้ quotations_pkey เสมอ
+//        ห้ามหลุดเป็น Seq Scan (วัดจริงแล้วต่างกัน 170 เท่า) และ regex ต้องไม่ระเบิดตอน ::uuid
 //
 //  ให้รันซ้ำทุกครั้งที่แตะ config/apiLogger.ts, services/apiLogService.ts
 //  หรือฟังก์ชันกลุ่ม api_logs ใน db/repositories.ts
@@ -18,6 +20,8 @@ import { pool, withTransaction, POOL_MAX } from '../../config/db.js';
 import {
   insertApiLogRows,
   deleteApiLogsOlderThan,
+  listApiLogs,
+  API_LOG_DOC_OWNER,
   type ApiLogInsertRow,
 } from '../../db/repositories.js';
 import {
@@ -33,6 +37,9 @@ import {
 } from '../../services/apiLogService.js';
 
 const WRITE_MODE = process.argv.includes('--write');
+
+/** IPv6 แบบมี IPv4 ฝังท้าย = รูปที่ยาวที่สุดที่เป็นไปได้ (45 ตัวอักษร) = ความกว้างของคอลัมน์พอดี */
+const IPV6_MAX = '0000:0000:0000:0000:0000:ffff:192.168.100.228';
 
 let failures = 0;
 const ok = (label: string, cond: boolean, extra = '') => {
@@ -143,6 +150,10 @@ function makePair(): { req: any; res: any; fire: () => void } {
   const req: any = {
     method: 'POST', path: '/api/quotation/abc-123', body: { userId: U }, query: {}, params: {},
     route: { path: '/api/quotation/:id' },
+    // ต้องมี headers/socket ให้เหมือนของจริง — getClientIp() อ่านสองที่นี้
+    // ถ้าขาด จะไปวัด "เส้นทาง throw ที่ถูก try/catch จับ" แทนเส้นทางจริง (ตัวเลขจะเพี้ยนทั้งชุด)
+    headers: { 'cf-connecting-ip': '203.0.113.45', 'user-agent': 'Line/14.2.0' },
+    socket: { remoteAddress: '172.18.0.5' },
   };
   return { req, res, fire: () => { for (const h of handlers) h(); } };
 }
@@ -188,15 +199,19 @@ console.log('\n── 6. เพดาน buffer ──');
 const sampleRow = (): ApiLogInsertRow => ({
   createdAt: new Date(), requestId: 'aabbccddeeff0011', method: 'GET',
   route: '/api/x', path: '/api/x', statusCode: 200, durationMs: 1,
-  respBytes: null, adminUserId: null, lineUserId: null,
+  respBytes: null, adminUserId: null, lineUserId: null, ip: '203.0.113.1',
   inflight: 1, dbWaiting: 0, queueWaitedMs: null,
 });
 // เติมจากที่ค้างอยู่จริงหลัง benchmark ให้ทะลุเพดานพอดี 1 แถว (ไม่ผูกกับจำนวนรอบ benchmark)
 const MAX_BUFFER = 5_000;
 const before = getApiLogMetrics();
-ok('benchmark ทำให้แถวเข้า buffer จริง (ไม่ได้ตกทาง drop)',
-  before.buffered > 0 && before.droppedOverflow === 0,
-  `buffered=${before.buffered} dropped=${before.droppedOverflow}`);
+// ต้องได้ "ครบทุกครั้ง" ไม่ใช่แค่ > 0 — ถ้า collect() โยน error ระหว่างทาง try/catch จะกลืนไว้
+// แล้วแถวหายเงียบ ๆ โดยไม่มี metric ไหนนับ ซึ่งจะทำให้ตัวเลข benchmark ข้างบนเพี้ยนทั้งชุด
+// (เจอจริงตอนเพิ่มคอลัมน์ ip: mock req ไม่มี headers → getClientIp โยน → วัดเส้นทาง throw แทน)
+const expectedRows = 200 + 10 * N;                     // อุ่นเครื่อง + 10 รอบ × N ครั้ง
+ok('benchmark ทำให้แถวเข้า buffer ครบทุกครั้ง (ไม่มีแถวหายจาก exception)',
+  before.buffered === expectedRows && before.droppedOverflow === 0,
+  `buffered=${before.buffered} (ควรได้ ${expectedRows}) dropped=${before.droppedOverflow}`);
 for (let i = before.buffered; i < MAX_BUFFER + 1; i++) enqueueApiLog(sampleRow());
 const afterOverflow = getApiLogMetrics();
 ok('buffer หยุดที่ 5000', afterOverflow.buffered === MAX_BUFFER, `ได้ ${afterOverflow.buffered}`);
@@ -216,6 +231,14 @@ try {
     names.includes('idx_api_logs_created_at') &&
     names.includes('idx_api_logs_request_id'),
     names.join(', '));
+
+  const cols = await pool.query(
+    `SELECT column_name, data_type, character_maximum_length AS len
+       FROM information_schema.columns WHERE table_name = 'api_logs'`);
+  const ipCol = cols.rows.find((c: any) => c.column_name === 'ip');
+  ok('มีคอลัมน์ ip ขนาด varchar(45)',
+    !!ipCol && ipCol.data_type === 'character varying' && ipCol.len === 45,
+    ipCol ? `${ipCol.data_type}(${ipCol.len})` : '(ไม่มี — ยังไม่ได้รัน migration 2026-08-20_03)');
 
   const opts = await pool.query(
     `SELECT reloptions FROM pg_class WHERE relname = 'api_logs'`);
@@ -268,9 +291,81 @@ try {
   console.log('✗ FAIL  ตรวจ DB ล้มเหลว:', err?.message ?? err);
 }
 
-// ── 8. insert/delete จริง (--write) — ทำใน transaction แล้ว ROLLBACK เสมอ ─────
+// ── 8. เจ้าของเอกสารของลิงก์สาธารณะ /download-pdf (หาตอนอ่าน) ────────────────
+//
+// เฝ้า 2 อย่างที่พังเงียบได้และแพงทั้งคู่:
+//   (1) regex ที่หลวมเกินไปจะปล่อยสตริงที่ไม่ใช่ uuid ผ่านไปถึง ::uuid แล้วระเบิดเป็น 500
+//       ทั้งหน้า — ทดสอบกับ path เพี้ยนของจริงทุกแบบที่คิดออก
+//   (2) การเขียนเงื่อนไขผิดข้าง (q.id::text = ... แทน q.id = ...::uuid) ทำให้ planner
+//       ใช้ quotations_pkey ไม่ได้ ต้อง Seq Scan quotations ซ้ำทุกแถวผลลัพธ์
+//       วัดจริงบน production: 317 ms เทียบกับ 1.8 ms และแย่ลงตามจำนวนใบเสนอราคา
+console.log('\n── 8. เจ้าของเอกสารของลิงก์ /download-pdf ──');
+try {
+  // (1) regex ต้องคืน NULL ให้ทุกเคสเพี้ยน และคืน uuid ให้เฉพาะรูปที่ถูกต้อง
+  const cases: Array<[string, string | null]> = [
+    ['/download-pdf/2f1c8a3e-0b4d-4c9a-8e21-9f7a6b5c4d33/QT-001', '2f1c8a3e-0b4d-4c9a-8e21-9f7a6b5c4d33'],
+    ['/download-pdf/2F1C8A3E-0B4D-4C9A-8E21-9F7A6B5C4D33',        '2f1c8a3e-0b4d-4c9a-8e21-9f7a6b5c4d33'],
+    ['/download-pdf/------------------------------------',        null],   // ผ่าน {36} แบบหลวมได้ → ต้องไม่ผ่านอันนี้
+    ['/download-pdf/not-a-uuid',                                  null],
+    ['/download-pdf/',                                            null],
+    ['/download-pdf',                                             null],
+    ['/api/quotation/2f1c8a3e-0b4d-4c9a-8e21-9f7a6b5c4d33',       null],   // ต้องยึดกับ /download-pdf/ เท่านั้น
+    ['/callback (async)',                                         null],
+    ['',                                                          null],
+  ];
+  const re = await pool.query(
+    `SELECT p, substring(p from
+       '^/download-pdf/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})')::uuid AS got
+       FROM unnest($1::text[]) AS p`, [cases.map(c => c[0])]);
+  let regexOk = true;
+  for (const [path, want] of cases) {
+    const got = re.rows.find((r: any) => r.p === path)?.got ?? null;
+    if (got !== want) { regexOk = false; console.log(`     ผิด: ${path} → ${got} (ควรได้ ${want})`); }
+  }
+  ok(`regex แกะ uuid ถูกทุกเคส (${cases.length} เคส) และไม่ระเบิดตอน ::uuid`, regexOk);
+
+  // (2) แผนการทำงานต้องใช้ index ของ quotations ไม่ใช่กวาดทั้งตาราง
+  //     ไม่ต้องปิด seqscan เหมือนข้อ 7 — ที่นี่ต้องการรู้ว่า "planner เลือกอะไรจริง ๆ"
+  //     เพราะกับดักที่เฝ้าอยู่คือการเขียน SQL ที่ทำให้ planner ใช้ index ไม่ได้เลย
+  const plan = await pool.query(
+    `EXPLAIN SELECT id::text AS id, path,${API_LOG_DOC_OWNER}
+       FROM api_logs ORDER BY created_at DESC, id DESC LIMIT 50`);
+  const planText = plan.rows.map((r: any) => r['QUERY PLAN']).join(' | ');
+  ok('ใช้ quotations_pkey หาเจ้าของเอกสาร', /quotations_pkey/.test(planText));
+  ok('ไม่มี Seq Scan on quotations (กับดัก 170 เท่า)', !/Seq Scan on quotations/.test(planText),
+    /Seq Scan on quotations/.test(planText) ? 'เขียน q.id::text = ... อยู่หรือเปล่า?' : '');
+
+  // (3) วัดเวลาจริงของหน้ารายการทั้ง query — เผื่อวันหน้ามีคนเติมอะไรที่ทำให้ช้าโดยไม่รู้ตัว
+  const t0 = process.hrtime.bigint();
+  const listed = await listApiLogs({}, 50, 0);
+  const listMs = Number(process.hrtime.bigint() - t0) / 1e6;
+  ok('หน้ารายการ (50 แถว พร้อมเจ้าของเอกสาร) เร็วกว่า 200 ms', listMs < 200, `${listMs.toFixed(1)} ms`);
+
+  const withOwner = listed.filter((r: any) => r.doc_owner_user_id !== null);
+  console.log(`   ในหน้าล่าสุด 50 แถว มีแถวลิงก์สาธารณะที่ระบุเจ้าของเอกสารได้ ${withOwner.length} แถว`);
+  ok('แถวที่ไม่ใช่ /download-pdf ต้องไม่มีเจ้าของเอกสารติดมา',
+    listed.every((r: any) => r.doc_owner_user_id === null || String(r.path).startsWith('/download-pdf/')));
+
+  // (4) ความครอบคลุมจริงของทั้งตาราง — ตัวเลขนี้คือเหตุผลที่ทำ B ตั้งแต่แรก
+  const cov = await pool.query(`
+    SELECT count(*)::int AS total,
+           count(q.user_id)::int AS matched
+      FROM public.api_logs l
+      LEFT JOIN public.quotations q
+        ON q.id = substring(l.path from
+             '^/download-pdf/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})')::uuid
+     WHERE l.path LIKE '/download-pdf/%'`);
+  const { total, matched } = cov.rows[0];
+  console.log(`   ทั้งตาราง: ลิงก์ /download-pdf ${total.toLocaleString()} แถว ระบุเจ้าของได้ ${matched.toLocaleString()} แถว` +
+    (total > 0 ? ` (${(matched / total * 100).toFixed(1)}%)` : ''));
+} catch (err: any) {
+  failures++;
+  console.log('✗ FAIL  ตรวจเจ้าของเอกสารล้มเหลว:', err?.message ?? err);
+}
+
+// ── 9. insert/delete จริง (--write) — ทำใน transaction แล้ว ROLLBACK เสมอ ─────
 if (WRITE_MODE) {
-  console.log('\n── 8. insert/delete จริง (ROLLBACK ทุกกรณี) ──');
+  console.log('\n── 9. insert/delete จริง (ROLLBACK ทุกกรณี) ──');
   try {
     await withTransaction(async (client) => {
       const now = new Date();
@@ -280,21 +375,21 @@ if (WRITE_MODE) {
         { createdAt: old, requestId: 'ffffffffffffff01', method: 'POST',
           route: '/api/quotation/:id', path: '/api/quotation/abc-123', statusCode: 200,
           durationMs: 142, respBytes: 812, adminUserId: null, lineUserId: U,
-          inflight: 3, dbWaiting: 0, queueWaitedMs: null },
+          ip: '203.0.113.45', inflight: 3, dbWaiting: 0, queueWaitedMs: null },
         // แถวที่ทุกช่อง nullable เป็น NULL — พิสูจน์ว่า UNNEST ไม่ทำ NULL หล่นตำแหน่ง
         { createdAt: old, requestId: 'ffffffffffffff02', method: 'GET',
           route: null, path: '/api/ไม่มีจริง', statusCode: 404,
           durationMs: 2, respBytes: null, adminUserId: null, lineUserId: null,
-          inflight: null, dbWaiting: null, queueWaitedMs: null },
+          ip: null, inflight: null, dbWaiting: null, queueWaitedMs: null },
         // ค่าไทย + อักขระพิเศษ + แถว TASK ของ webhook
         { createdAt: old, requestId: 'ffffffffffffff03', method: 'TASK',
           route: '/callback (async)', path: '/callback (async)', statusCode: 504,
           durationMs: 48000, respBytes: null, adminUserId: 7, lineUserId: U,
-          inflight: 12, dbWaiting: 2, queueWaitedMs: 31000 },
+          ip: IPV6_MAX, inflight: 12, dbWaiting: 2, queueWaitedMs: 31000 },
         { createdAt: now, requestId: 'ffffffffffffff04', method: 'GET',
           route: '/api/products/search', path: '/api/products/search', statusCode: 200,
           durationMs: 33, respBytes: 4096, adminUserId: null, lineUserId: null,
-          inflight: 1, dbWaiting: 0, queueWaitedMs: null },
+          ip: '2001:db8::1', inflight: 1, dbWaiting: 0, queueWaitedMs: null },
       ];
       await insertApiLogRows(client, rows);
 
@@ -308,15 +403,20 @@ if (WRITE_MODE) {
         a.method === 'POST' && a.route === '/api/quotation/:id' &&
         a.path === '/api/quotation/abc-123' && a.status_code === 200 &&
         a.duration_ms === 142 && a.resp_bytes === 812 &&
-        a.line_user_id === U && a.inflight === 3 && a.db_waiting === 0 &&
+        a.line_user_id === U && a.ip === '203.0.113.45' &&
+        a.inflight === 3 && a.db_waiting === 0 &&
         a.queue_waited_ms === null && a.admin_user_id === null,
         JSON.stringify({ m: a.method, r: a.route, s: a.status_code, d: a.duration_ms }));
       ok('แถว 2: NULL ไม่หล่นตำแหน่ง',
         b.route === null && b.resp_bytes === null && b.inflight === null &&
-        b.db_waiting === null && b.status_code === 404 && b.path === '/api/ไม่มีจริง');
+        b.ip === null && b.db_waiting === null && b.status_code === 404 &&
+        b.path === '/api/ไม่มีจริง');
       ok('แถว 3: TASK + queue_waited_ms',
         c.method === 'TASK' && c.queue_waited_ms === 31000 &&
         c.duration_ms === 48000 && c.admin_user_id === 7 && c.db_waiting === 2);
+      // IPv6 ยาวสุดต้องลงครบ 45 ตัวอักษร ไม่ถูก varchar ตัดหาย = คอลัมน์กว้างพอจริง
+      ok('แถว 3: IPv6 ยาวสุด 45 ตัวอักษรลงครบไม่ถูกตัด',
+        c.ip === IPV6_MAX && c.ip.length === 45, `ได้ ${c.ip?.length} ตัวอักษร`);
       ok('id เดินเลขให้อัตโนมัติ', typeof a.id === 'string' || typeof a.id === 'number');
       ok('created_at ถูกบันทึกตรงเวลาที่ส่งไป',
         Math.abs(new Date(a.created_at).getTime() - old.getTime()) < 1000);
@@ -350,7 +450,7 @@ if (WRITE_MODE) {
     `SELECT count(*)::int AS n FROM api_logs WHERE request_id LIKE 'ffffffffffff%'`);
   ok('ROLLBACK สะอาด ไม่เหลือแถวทดสอบ', left.rows[0].n === 0, `เหลือ ${left.rows[0].n}`);
 } else {
-  console.log('\n(ข้ามข้อ 8 — ใส่ --write เพื่อทดสอบ insert/delete จริงแบบ ROLLBACK)');
+  console.log('\n(ข้ามข้อ 9 — ใส่ --write เพื่อทดสอบ insert/delete จริงแบบ ROLLBACK)');
 }
 
 console.log(`\n${failures === 0 ? '✓ ผ่านทั้งหมด' : `✗ ล้มเหลว ${failures} ข้อ`}`);

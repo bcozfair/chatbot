@@ -3741,6 +3741,7 @@ app.get('/api/admin/api-logs', adminAuthMiddleware, requireRole('admin'), async 
       route: q.route ? String(q.route) : undefined,
       adminUserId: q.adminUserId ? parseInt(q.adminUserId) : undefined,
       lineUserId: q.lineUserId ? String(q.lineUserId) : undefined,
+      ip: q.ip ? String(q.ip) : undefined,
       minDuration: q.minDuration ? parseInt(q.minDuration) : undefined,
     };
 

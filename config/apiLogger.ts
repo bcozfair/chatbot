@@ -2,6 +2,7 @@ import { randomBytes } from 'crypto';
 import type { Request, Response, NextFunction } from 'express';
 import type { AdminRequest } from './auth.js';
 import { pool, POOL_MAX } from './db.js';
+import { getClientIp } from './loginRateLimit.js';
 import { enqueueApiLog } from '../services/apiLogService.js';
 
 /**
@@ -233,6 +234,11 @@ function collect(req: Request, res: Response): void {
     adminUserId: (req as AdminRequest).admin?.id ?? null,
     lineUserId: clamp(
       extractLineUserId(req.body, req.query, req.params, st.lineUserIdOverride), 40),
+    // อ่านตอนนี้ ไม่ใช่ตอนขาเข้า — ขาเข้าอยู่ในเส้นทางที่ผู้ใช้รอจริง ส่วนตรงนี้ทำงานหลัง
+    // byte สุดท้ายออกจาก socket ไปแล้ว · วัดจริง 22.8 ns/request บนเส้นทาง CF-Connecting-IP
+    // ⚠️ ต้องใช้ getClientIp() เท่านั้น ห้ามอ่าน req.socket.remoteAddress ตรง ๆ เพราะทุก request
+    //    วิ่งผ่าน cloudflared จะได้ IP ของคอนเทนเนอร์เหมือนกันหมดจนแยกคนไม่ได้
+    ip: clamp(getClientIp(req), 45),
     inflight: clampSmallInt(st.inflightAtStart),
     // > 0 เมื่อไหร่แปลว่า pool 40 connection ไม่พอ "จริง ๆ" — ดูเหตุผลที่ dbWaitingSignal
     dbWaiting: clampSmallInt(dbWaitingSignal({

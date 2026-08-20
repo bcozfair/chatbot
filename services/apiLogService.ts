@@ -140,6 +140,8 @@ export function recordWebhookProcessing(info: {
     respBytes: null,
     adminUserId: null,
     lineUserId: info.lineUserId.slice(0, 40),
+    // แถวนี้เป็นงานเบื้องหลัง ไม่ใช่ request จริง — IP อยู่ที่แถว ack ที่ request_id เดียวกันแล้ว
+    ip: null,
     inflight: null,
     dbWaiting: null,
     // duration_ms - queue_waited_ms = เวลาประมวลผลจริง
