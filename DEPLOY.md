@@ -107,6 +107,10 @@ IT จะตั้ง reverse proxy + HTTPS ให้ชี้ subdomain → พ
 > เกิดขึ้นจริงเมื่อ 2026-08-20 (ใบเสนอราคาเสียไป 4 ใบ) · ตั้ง `APP_URL` แล้วเส้นทางเดานี้จะไม่ทำงานเลย
 >
 > ตรวจว่าตั้งติดจริง: `docker compose exec -T app printenv APP_URL` ต้องขึ้นโดเมน ไม่ใช่ค่าว่าง
+> · ตั้งแต่ 2026-08-20 แอป **ปฏิเสธที่จะสตาร์ท**ถ้า `APP_URL` ขาด/ไม่ใช่ https/มี path ต่อท้าย
+>   ดังนั้นถ้า container ขึ้นแล้ว log ว่า `[APP_URL] ...` แล้วดับ ให้ไปแก้ค่าใน `.env` แล้ว
+>   `docker compose up -d --force-recreate app` — ไม่ใช่ปัญหาอื่น · ตรวจค่าล่วงหน้าได้ด้วย
+>   `npm run diag:app-url` (อ่านอย่างเดียว รันบน prod ได้)
 
 > ถ้า IT บอกว่า proxy ของเขาอยู่ใน docker network (ไม่ใช่ host) อาจต้องปรับ `docker-compose.yml` ให้ join network ของเขาแทนการ publish port — แจ้งผมได้ เดี๋ยวปรับให้
 
@@ -305,6 +309,7 @@ docker compose exec app npx tsx scripts/diag/dateFilterSmoke.ts
 docker compose exec app npx tsx scripts/diag/quoteValidationSmoke.ts
 docker compose exec app npx tsx scripts/diag/apiLogSmoke.ts
 docker compose exec app npx tsx scripts/diag/pdfCacheSmoke.ts
+docker compose exec app npx tsx scripts/diag/appUrlSmoke.ts
 ```
 > ❌ ห้ามรันบน prod: `diag:export-tracking`, `diag:shipping-fee`, `diag:confirm-race` — สามตัวนี้เขียนข้อมูลทดสอบลง DB
 

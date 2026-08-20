@@ -76,6 +76,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { pool, withTransaction, type DbExecutor } from './config/db.js';
 import { getJwtSecret } from './config/jwt.js';
+import { getAppUrl } from './config/appUrl.js';
 import { adminAuthMiddleware, requireRole, type Role } from './config/auth.js';
 import {
   getClientIp,
@@ -108,6 +109,11 @@ import {
 
 // ตรวจ JWT_SECRET ตั้งแต่ boot — ถ้าขาด ให้ล้มทันทีแทนที่จะไปพังตอนแอดมิน login ครั้งแรก
 getJwtSecret();
+
+// ตรวจ APP_URL ตั้งแต่ boot ด้วยเหตุผลเดียวกัน แต่โหดกว่า — JWT ที่ขาดจะพังตอน login ซึ่ง "ดัง"
+// ส่วน APP_URL ที่ผิดจะไม่พังอะไรเลยฝั่งเรา แต่ลิงก์ที่ส่งออกไปหาลูกค้าจะเปิดไม่ได้ทุกใบแบบเงียบ ๆ
+// (เกิดขึ้นจริง 2026-08-20 — เสียไป 4 ใบกว่าจะรู้ตัว) · รายละเอียดใน config/appUrl.ts
+getAppUrl();
 
 const app = express();
 
@@ -170,13 +176,10 @@ app.post('/callback', line.middleware(lineConfig), (req: any, res: any) => {
 
   console.log(">>> Webhook Received! Events:", JSON.stringify(req.body.events, null, 2));
 
-  // Dynamically set APP_URL from incoming webhook request headers if not set in .env
-  const protocol = req.headers['x-forwarded-proto'] || req.protocol;
-  const host = req.get('host');
-  if (!process.env.APP_URL) {
-    process.env.APP_URL = `${protocol}://${host}`;
-    console.log(`>>> Dynamically set APP_URL to: ${process.env.APP_URL}`);
-  }
+  // ⚠️ เคยมีโค้ดตรงนี้ที่เดา APP_URL จาก Host header ของ webhook แรกแล้วเขียนทับ process.env
+  //    ห้ามเอากลับมาเด็ดขาด — วันที่ 2026-08-20 curl ตรวจสุขภาพจากในเครื่องดันเป็น request แรก
+  //    ค่าจึงถูกล็อกเป็น http://127.0.0.1:3011 และใบเสนอราคา 4 ใบส่งลิงก์ที่เปิดไม่ได้ออกไปเงียบ ๆ
+  //    ตอนนี้ APP_URL ถูกตรวจตั้งแต่ boot แล้ว (config/appUrl.ts) จึงไม่ต้องเดาอีก
 
   if (Array.isArray(req.body.events)) {
     req.body.events.forEach((event: any) => {
@@ -1161,12 +1164,8 @@ app.post('/api/quotation/:id/confirm', express.json(), async (req: any, res: any
       return res.status(422).json({ error: 'VALIDATION_ERROR', violations: confirmViolations });
     }
 
-    const protocol = req.headers['x-forwarded-proto'] || req.protocol;
-    const reqUrl = process.env.APP_URL || `${protocol}://${req.get('host')}`;
-    if (!process.env.APP_URL) {
-      process.env.APP_URL = reqUrl;
-      console.log(`>>> Dynamically set APP_URL from confirm API to: ${process.env.APP_URL}`);
-    }
+    // ห้ามกลับไปเดาจาก req.get('host') — ดูเหตุผลที่ /callback และ config/appUrl.ts
+    const reqUrl = getAppUrl();
     // ยืนยันแบบ atomic + idempotent (ออกเลข + เปลี่ยน status ใน transaction เดียวพร้อม row lock
     // cancelOldRevision กรณี revision อยู่ใน tx เดียวกัน และไม่เขียนทับ created_at เพราะเลขคำนวณจากมัน)
     let confirmResult;
