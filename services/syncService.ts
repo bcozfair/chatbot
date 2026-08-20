@@ -345,8 +345,8 @@ const DEFAULT_SETTINGS: SyncSettings = {
   updated_at: null,
 };
 
-// ensure ทำงานครั้งเดียวพอ — scheduler เรียก getSettings() ทุก 5 วินาที ถ้าปล่อยให้ยิง
-// DDL ทุกครั้งจะกลายเป็นหลายพันคำสั่งต่อชั่วโมงโดยไม่ได้อะไรเลย
+// ensure ทำงานครั้งเดียวพอ — ถ้าปล่อยให้ยิง DDL ทุกครั้งที่มีคนเรียก getSettings()/saveSettings()
+// จะกลายเป็นคำสั่งซ้ำ ๆ โดยไม่ได้อะไรเลย
 let settingsTableReady = false;
 
 async function ensureSyncSettings() {
@@ -416,13 +416,31 @@ function normalizeDays(input: any): number[] {
   return days.length ? days : [...DEFAULT_SETTINGS.days];
 }
 
+/**
+ * ค่าที่อ่านจาก DB ล่าสุด — scheduler เรียก getSettings() ทุก 5 วินาที (17,280 ครั้ง/วัน)
+ * ทั้งที่ค่าเปลี่ยนเฉพาะตอนแอดมินกดบันทึก และเกือบ 70% ของรอบเป็นการถามนอกวัน/นอกช่วงเวลา
+ * ที่รู้คำตอบอยู่แล้ว · saveSettings() เป็นตัวเขียนตัวเดียวตอน runtime จึงล้าง cache จุดเดียวพอ
+ *
+ * ข้อแลกเปลี่ยน: แก้ตาราง sync_settings ด้วย SQL ตรง ๆ จะไม่มีผลจนกว่าจะ restart
+ * (แก้ผ่านหน้า admin ไม่กระทบ เพราะผ่าน saveSettings)
+ */
+let settingsCache: SyncSettings | null = null;
+
+/** คืนสำเนาเสมอ ไม่ยื่นตัว cache ออกไป — กันคนเรียกเผลอแก้อาเรย์แล้วกระทบรอบถัดไป */
+function cloneSettings(s: SyncSettings): SyncSettings {
+  return { ...s, days: [...s.days], resources: [...s.resources] };
+}
+
 export async function getSettings(): Promise<SyncSettings> {
+  if (settingsCache) return cloneSettings(settingsCache);
+
   await ensureSyncSettings();
   const { rows } = await pool.query(`SELECT * FROM sync_settings WHERE id = 1`);
-  if (rows.length === 0) return { ...DEFAULT_SETTINGS };
+  // แถวหาย = ผิดปกติ ไม่ cache ไว้ เผื่อรอบหน้าอ่านเจอ
+  if (rows.length === 0) return cloneSettings(DEFAULT_SETTINGS);
   const r = rows[0];
   const resources = (Array.isArray(r.resources) ? r.resources : []).filter(isValidResource);
-  return {
+  const settings: SyncSettings = {
     auto_enabled: !!r.auto_enabled,
     days: normalizeDays(r.days),
     window_start: TIME_RE.test(r.window_start) ? r.window_start : DEFAULT_SETTINGS.window_start,
@@ -431,6 +449,8 @@ export async function getSettings(): Promise<SyncSettings> {
     resources: resources.length ? resources : [...RESOURCE_IDS],
     updated_at: r.updated_at ? new Date(r.updated_at).toISOString() : null,
   };
+  settingsCache = settings;
+  return cloneSettings(settings);
 }
 
 /** validate + บันทึก config; คืนค่าที่บันทึกจริง */
@@ -469,6 +489,9 @@ export async function saveSettings(input: any): Promise<SyncSettings> {
      WHERE id = 1`,
     [autoEnabled, days, start, end, intervalSeconds, finalResources]
   );
+
+  // ค่าใน DB เปลี่ยนแล้ว — ทิ้ง cache ให้ getSettings() อ่านของจริงกลับมา
+  settingsCache = null;
 
   // reset ตัวจับเวลา interval เพื่อให้เริ่มนับใหม่จากตอนบันทึก
   lastIntervalRun = Date.now();
