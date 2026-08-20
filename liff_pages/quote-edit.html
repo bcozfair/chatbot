@@ -776,24 +776,39 @@
         color: var(--text-mid);
       }
 
-      /* ถ้อยคำเดียวกับที่พิมพ์ลง PDF (ดู deliveryTimeText ใน pdfGenerator.ts)
-         สถานะมาจากสต๊อกจริงเสมอ เซลล์แก้ไม่ได้ — แก้ได้แค่จำนวนวัน */
-      .delivery-mode-badge {
+      /* ประเภทการจัดส่ง — ค่าตั้งต้นคือ "อัตโนมัติ" ซึ่งตัดสินจากสต๊อกจริงเหมือนเดิมทุกประการ
+         เซลล์เลือกทับได้เมื่อรู้ว่าใบนี้ต้องนำเข้า/มีงานติดตั้ง (ระบบไม่มีทางรู้เอง)
+         ⚠️ ตัวเลือกใช้คำเดียวกับที่พิมพ์ลง PDF และคำใน Odoo ทุกอักขระ ห้ามแปลไทย
+            (ดู DELIVERY_TYPES ใน utils/deliveryTerms.ts) */
+      .delivery-type-select {
         font-family: "Outfit", sans-serif;
         font-size: 11px;
         font-weight: 700;
-        padding: 3px 9px;
+        height: 28px;
+        padding: 0 22px 0 9px;
         border-radius: 20px;
+        border: 1.5px solid transparent;
         white-space: nowrap;
         flex-shrink: 0;
+        max-width: 190px;
+        cursor: pointer;
+        appearance: none;
+        background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill='%23555' d='M2 4.5 6 8.5l4-4z'/%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: right 7px center;
+        background-size: 10px;
       }
-      .delivery-mode-badge.in-stock {
-        background: rgba(30, 143, 30, 0.12);
+      .delivery-type-select.in-stock {
+        background-color: rgba(30, 143, 30, 0.12);
         color: var(--green-dark);
       }
-      .delivery-mode-badge.make-order {
-        background: var(--warning-bg);
+      .delivery-type-select.make-order {
+        background-color: var(--warning-bg);
         color: var(--warning);
+      }
+      /* เลือกเอง = ขอบทึบ ให้เห็นต่างจากโหมดอัตโนมัติโดยไม่ต้องอ่านตัวหนังสือ */
+      .delivery-type-select.picked {
+        border-color: var(--border-strong);
       }
 
       .edit-input.inp-delivery {
@@ -2220,24 +2235,62 @@
         return o === null ? deliveryAutoDays(quote) : o;
       }
 
-      // ถ้อยคำเดียวกับที่พิมพ์ลง PDF (deliveryTimeText ใน pdfGenerator.ts)
-      // เซลล์จะได้เห็นคำเดียวกับที่ลูกค้าเห็นในเอกสาร ไม่ต้องแปลในหัว
-      function deliveryModeText(quote) {
+      // ประเภทการจัดส่ง — ต้องตรงกับ DELIVERY_TYPES ใน utils/deliveryTerms.ts
+      // ⚠️ label เป็นคำเดียวกับที่พิมพ์ลง PDF และคำใน dropdown ของ Odoo ห้ามแปลไทย
+      //    เซลล์ต้องเห็นคำชุดเดียวตั้งแต่หน้านี้ ยันเอกสาร ยัน Odoo
+      const DELIVERY_TYPES = [
+        { key: "in_stock", label: "In_stock.,With in" },
+        { key: "make_to_order", label: "Make to order.,With in" },
+        { key: "import", label: "Import.,With in" },
+        { key: "install", label: "Install.,With in" },
+      ];
+
+      // ประเภทที่ระบบเลือกให้เองจากสต๊อก — พฤติกรรมเดิมของหน้านี้ทุกประการ
+      function deliveryAutoType(quote) {
         return quote.delivery_all_in_stock === false
-          ? "Make to order."
-          : "In_stock.";
+          ? "make_to_order"
+          : "in_stock";
       }
 
-      // ปุ่มรีเซ็ต + ข้อความ "แก้เอง" โผล่เฉพาะตอนมีค่าที่แก้เองค้างอยู่
+      // null = ยังไม่ได้เลือกเอง (ใช้ค่าอัตโนมัติ)
+      function deliveryOverrideType(quote) {
+        const v = quote.delivery_type_override;
+        return DELIVERY_TYPES.some((t) => t.key === v) ? v : null;
+      }
+
+      function deliveryTypeLabel(key) {
+        const t = DELIVERY_TYPES.find((x) => x.key === key);
+        return t ? t.label : DELIVERY_TYPES[0].label;
+      }
+
+      // ข้อความของตัวเลือก "อัตโนมัติ" — บอกด้วยว่าตอนนี้อัตโนมัติได้ค่าอะไร
+      function deliveryAutoLabel(quote) {
+        return `อัตโนมัติ (${deliveryTypeLabel(deliveryAutoType(quote))})`;
+      }
+
+      // สีของแถบยังยึด "สต๊อกจริง" เสมอ ไม่ใช่ประเภทที่เลือก — เซลล์จะได้ยังเห็นว่าของพอหรือไม่พอ
+      // แม้จะตั้งประเภทเป็น Import./Install. ไปแล้ว
+      function deliveryModeClass(quote) {
+        return quote.delivery_all_in_stock === false ? "make-order" : "in-stock";
+      }
+
+      // ปุ่มรีเซ็ตโผล่เมื่อมีค่าที่แก้เองค้างอยู่ (จำนวนวัน หรือประเภท อย่างใดอย่างหนึ่งก็พอ)
+      // ส่วนข้อความ "แก้เอง" อธิบายเฉพาะจำนวนวัน จึงผูกกับ override ของวันตามเดิม
       function updateDeliveryUI(qIdx) {
         const quote = quotesData[qIdx];
         const box = document.getElementById(`delivery-box-${qIdx}`);
         if (!quote || !box) return;
-        const on = hasDeliveryOverride(quote);
+        const daysOn = hasDeliveryOverride(quote);
+        const typeOn = deliveryOverrideType(quote) !== null;
         const btn = box.querySelector(".btn-delivery-reset");
         const note = box.querySelector(".delivery-note");
-        if (btn) btn.hidden = !on;
-        if (note) note.hidden = !on;
+        const select = box.querySelector(".delivery-type-select");
+        if (btn) btn.hidden = !daysOn && !typeOn;
+        if (note) note.hidden = !daysOn;
+        if (select) {
+          select.value = deliveryOverrideType(quote) || "";
+          select.className = `delivery-type-select ${deliveryModeClass(quote)}${typeOn ? " picked" : ""}`;
+        }
       }
 
       // ── คำนวณวันจัดส่งใหม่ระหว่างแก้ (ยังไม่กดบันทึก) ──
@@ -2326,11 +2379,13 @@
         const box = document.getElementById(`delivery-box-${qIdx}`);
         if (!quote || !box) return;
 
-        const badge = box.querySelector(".delivery-mode-badge");
-        if (badge) {
-          badge.textContent = deliveryModeText(quote);
-          badge.className = `delivery-mode-badge ${
-            quote.delivery_all_in_stock === false ? "make-order" : "in-stock"
+        const select = box.querySelector(".delivery-type-select");
+        if (select) {
+          // ตัวเลือก "อัตโนมัติ" ต้องบอกด้วยว่าตอนนี้อัตโนมัติแปลว่าอะไร (สต๊อกเพิ่งเปลี่ยน)
+          const autoOpt = select.querySelector('option[value=""]');
+          if (autoOpt) autoOpt.textContent = deliveryAutoLabel(quote);
+          select.className = `delivery-type-select ${deliveryModeClass(quote)}${
+            deliveryOverrideType(quote) !== null ? " picked" : ""
           }`;
         }
         const note = box.querySelector(".delivery-note");
@@ -2371,17 +2426,35 @@
           e.target.value = deliveryAutoDays(quote);
       }
 
+      // ปุ่ม ↺ = "กลับไปใช้ค่าอัตโนมัติ" ทั้งชุด — ล้างทั้งประเภทและจำนวนวัน
+      // (ถ้าล้างแค่วัน เซลล์จะงงว่ากดรีเซ็ตแล้วทำไมยังขึ้น Import. อยู่)
       function onDeliveryReset(e) {
         const qIdx = parseInt(e.currentTarget.dataset.q);
         const quote = quotesData[qIdx];
         if (!quote) return;
         quote.delivery_days_override = null;
+        quote.delivery_type_override = null;
         const box = document.getElementById(`delivery-box-${qIdx}`);
         const input = box ? box.querySelector(".delivery-input") : null;
         if (input) input.value = deliveryAutoDays(quote);
         updateDeliveryUI(qIdx);
         checkDirty();
-        showToast(`↺ ใช้ค่าอัตโนมัติ ${deliveryAutoDays(quote)} วันแล้ว`);
+        showToast(
+          `↺ ใช้ค่าอัตโนมัติ ${deliveryTypeLabel(deliveryAutoType(quote))} ${deliveryAutoDays(quote)} วันแล้ว`,
+        );
+      }
+
+      function onDeliveryTypeChange(e) {
+        const qIdx = parseInt(e.target.dataset.q);
+        const quote = quotesData[qIdx];
+        if (!quote) return;
+        // "" = ตัวเลือกอัตโนมัติ → เก็บเป็น null ให้ server รู้ว่าให้กลับไปคิดเองตามสต๊อก
+        const v = e.target.value;
+        quote.delivery_type_override = DELIVERY_TYPES.some((t) => t.key === v)
+          ? v
+          : null;
+        updateDeliveryUI(qIdx);
+        checkDirty();
       }
 
       // เทียบ state ปัจจุบันกับข้อมูลที่บันทึกล่าสุด → อัปเดตธง hasChanges + ป้ายสถานะบนหัวการ์ด
@@ -2393,7 +2466,9 @@
           JSON.stringify(quotesData.map((q) => q.customer_name)) !==
             JSON.stringify(originalData.map((q) => q.customer_name)) ||
           JSON.stringify(quotesData.map(deliveryOverrideDays)) !==
-            JSON.stringify(originalData.map(deliveryOverrideDays));
+            JSON.stringify(originalData.map(deliveryOverrideDays)) ||
+          JSON.stringify(quotesData.map(deliveryOverrideType)) !==
+            JSON.stringify(originalData.map(deliveryOverrideType));
         updateAllSaveStatus(
           hasChanges ? "⚠️ ยังไม่ได้บันทึก" : "",
           hasChanges ? "dirty" : "",
@@ -2479,7 +2554,14 @@
             <div id="items-${qIdx}"></div>
           </div>
           <div class="delivery-strip" id="delivery-box-${qIdx}">
-            <span class="delivery-mode-badge ${quote.delivery_all_in_stock === false ? "make-order" : "in-stock"}">${deliveryModeText(quote)}</span>
+            <select class="delivery-type-select ${deliveryModeClass(quote)}${deliveryOverrideType(quote) !== null ? " picked" : ""}"
+              data-q="${qIdx}" aria-label="ประเภทการจัดส่ง">
+              <option value="">${deliveryAutoLabel(quote)}</option>
+              ${DELIVERY_TYPES.map(
+                (t) =>
+                  `<option value="${t.key}"${deliveryOverrideType(quote) === t.key ? " selected" : ""}>${t.label}</option>`,
+              ).join("")}
+            </select>
             <span class="item-field-label">ภายใน</span>
             <input type="number" class="edit-input inp-delivery delivery-input"
               min="0" max="3650" step="1" inputmode="numeric"
@@ -2509,6 +2591,9 @@
           const deliveryReset = card.querySelector(".btn-delivery-reset");
           if (deliveryReset)
             deliveryReset.addEventListener("click", onDeliveryReset);
+          const deliveryType = card.querySelector(".delivery-type-select");
+          if (deliveryType)
+            deliveryType.addEventListener("change", onDeliveryTypeChange);
 
           // ปุ่ม "ใช้กับทุกรายการ" โผล่เฉพาะตอนแตะช่องส่วนลดของรายการนั้น
           // ใช้ event delegation ตัวเดียว + toggle class (ห้าม re-render ไม่งั้น focus หลุดกลางคัน)
@@ -3005,6 +3090,7 @@
               contact_id: quote.contact_id || null,
               // null = ให้ server กลับไปใช้ค่าที่คำนวณจากกฎ (ปุ่ม "ค่าอัตโนมัติ")
               delivery_days_override: deliveryOverrideDays(quote),
+              delivery_type_override: deliveryOverrideType(quote),
               userId,
             };
             payload.customer_name = meta.revise_from

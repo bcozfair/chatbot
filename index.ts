@@ -85,6 +85,7 @@ import {
 import { sumLineTotals } from './utils/pricing.js';
 import { isCustomerInfoIncomplete } from './utils/flexTemplates.js';
 import { thaiDateParts } from './utils/thaiTime.js';
+import { parseDeliveryTypeOverride } from './utils/deliveryTerms.js';
 import { apiLogMiddleware, getRequestId } from './config/apiLogger.js';
 import {
   initApiLogWriter,
@@ -767,14 +768,17 @@ app.post('/api/quotation/draft-cart', express.json(), async (req: any, res: any)
 app.put('/api/quotation/:id', express.json(), async (req: any, res: any) => {
   try {
     const quoteId = req.params.id;
-    const { items, total_sum, customer_name, customer_id, contact_id, userId, delivery_days_override } = req.body;
+    const { items, total_sum, customer_name, customer_id, contact_id, userId,
+      delivery_days_override, delivery_type_override } = req.body;
     if (!items) return res.status(400).json({ error: 'Missing items' });
 
-    // วันจัดส่งที่เซลล์แก้เอง — undefined = client เก่าไม่ได้ส่งมา (คงค่าเดิม), null = รีเซ็ตกลับค่าอัตโนมัติ
+    // กำหนดส่งที่เซลล์แก้เอง — undefined = client เก่าไม่ได้ส่งมา (คงค่าเดิม), null = รีเซ็ตกลับค่าอัตโนมัติ
     let parsedDeliveryOverride: number | null | undefined;
+    let parsedDeliveryType: string | null | undefined;
     try {
       const { parseDeliveryDaysOverride } = await import('./services/quotationService.js');
       parsedDeliveryOverride = parseDeliveryDaysOverride(delivery_days_override);
+      parsedDeliveryType = parseDeliveryTypeOverride(delivery_type_override);
     } catch (err: any) {
       return res.status(400).json({ error: err.message });
     }
@@ -1045,8 +1049,9 @@ app.put('/api/quotation/:id', express.json(), async (req: any, res: any) => {
         customer_id = $5,
         contact_id = $6,
         delivery_days_override = $7,
+        delivery_type_override = $8,
         updated_at = NOW()
-      WHERE id = $8 AND status <> 'confirmed' AND status <> 'cancelled'
+      WHERE id = $9 AND status <> 'confirmed' AND status <> 'cancelled'
     `, [
       finalSum,
       finalStatus,
@@ -1056,6 +1061,8 @@ app.put('/api/quotation/:id', express.json(), async (req: any, res: any) => {
       resolvedContactId,
       // ค่าที่เซลล์ตั้งไว้ต้องอยู่ยงแม้จะเพิ่ม/ลบสินค้าหรือแก้จำนวน จนกว่าจะกดรีเซ็ตเอง
       parsedDeliveryOverride === undefined ? (quote.delivery_days_override ?? null) : parsedDeliveryOverride,
+      // ประเภทการจัดส่งใช้กติกาเดียวกับจำนวนวัน — client เก่าที่ไม่ส่ง field นี้มาต้องไม่ล้างค่าที่ตั้งไว้
+      parsedDeliveryType === undefined ? (quote.delivery_type_override ?? null) : parsedDeliveryType,
       quoteId
     ]);
 
@@ -3143,6 +3150,7 @@ app.get('/api/admin/quotations/export', adminAuthMiddleware, requireRole('admin'
     const built = await withTransaction(async (client) => {
       const result = await client.query(
         `SELECT q.id, q.quotation_no, q.created_at, q.updated_at, q.customer_details, q.item_details, q.employee_details,
+                q.delivery_terms,
                 ${SP_NAME_SQL} AS salesperson_name, cust.sales_team AS customer_sales_team,
                 s.employee_quotation_id AS salesperson_employee_quotation_id,
                 ${ODOO_EXPORT_RAW_NAME_COLS}

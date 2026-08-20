@@ -14,6 +14,7 @@ import {
 import { calcNetPrice, calcVat, calcGrandTotal } from "./utils/pricing.js";
 import { DEFAULT_WARRANTY_DISPLAY, resolveMinWarrantyDisplay, warrantyNoteText } from "./utils/warranty.js";
 import { thaiDateDMY } from "./utils/thaiTime.js";
+import { resolveDeliveryTerms, deliveryDisplayText } from "./utils/deliveryTerms.js";
 
 // ใช้ Chrome ตัวเดียวร่วมกันทุก request แทนการ launch ใหม่ทุกครั้ง
 // เดิม: launch ต่อ request และ browser.close() ไม่อยู่ใน finally -> error หนึ่งครั้ง = Chrome ค้าง 1 ตัว สะสมจน RAM หมด
@@ -185,19 +186,18 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
   }
 
   // จำนวนวันที่กฏคำนวณได้ — เซลล์ตั้งทับได้จากหน้า LIFF (quotations.delivery_days_override)
-  // ส่วนคำนำหน้า In_stock./Make to order. ยังมาจากสถานะสต๊อกจริงเสมอ ไม่ให้แก้
+  // ส่วนประเภทการส่งมาจากสถานะสต๊อก เว้นแต่เซลล์เลือกเอง (quotations.delivery_type_override)
   const autoDeliveryDays = itemDeliveryDays.length > 0
     ? Math.max(...itemDeliveryDays)
     : (allItemsInStock ? 3 : 7);
-  const overrideDays = Number.isInteger(Number(quoteData.delivery_days_override))
-    && quoteData.delivery_days_override !== null
-    ? Number(quoteData.delivery_days_override)
-    : null;
-  const finalDeliveryDays = overrideDays !== null ? overrideDays : autoDeliveryDays;
 
-  const deliveryTimeText = allItemsInStock
-    ? `In_stock.,With in  ${finalDeliveryDays}  Days`
-    : `Make to order.,With in  ${finalDeliveryDays}  Days`;
+  // ใบที่ยืนยันแล้วมี delivery_terms ตรึงไว้ → resolveDeliveryTerms คืนค่านั้นตรง ๆ เอกสาร
+  // ที่พิมพ์ซ้ำทีหลังจึงเหมือนใบแรกเสมอ แม้สต๊อกจะเปลี่ยนไปแล้ว · ใบที่ยังไม่ยืนยันคิดสดจากค่าข้างบน
+  const deliveryTimeText = deliveryDisplayText(resolveDeliveryTerms({
+    ...quoteData,
+    delivery_days_auto: autoDeliveryDays,
+    delivery_all_in_stock: allItemsInStock,
+  }));
 
   let grossSubTotal = 0;
   let discountedSubTotal = 0;

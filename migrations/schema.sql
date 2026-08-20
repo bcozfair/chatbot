@@ -691,9 +691,15 @@ CREATE TABLE public.quotations (
     contact_id integer,
     delivery_days_override integer,
     odoo_exported_at timestamp with time zone,
+    delivery_type_override text,
+    delivery_terms jsonb,
     CONSTRAINT quotations_delivery_days_override_check CHECK (
         (delivery_days_override IS NULL)
         OR ((delivery_days_override >= 0) AND (delivery_days_override <= 3650))
+    ),
+    CONSTRAINT quotations_delivery_type_override_check CHECK (
+        (delivery_type_override IS NULL)
+        OR (delivery_type_override = ANY (ARRAY['in_stock'::text, 'make_to_order'::text, 'import'::text, 'install'::text]))
     )
 );
 

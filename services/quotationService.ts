@@ -18,6 +18,7 @@ import { expandOptionalProducts, checkStockRules, StockViolation } from './produ
 import { sumLineTotals, calcNetPrice } from '../utils/pricing.js';
 import { validateProductPriceWithPromotions } from '../utils/promotionValidator.js';
 import { buildThaiAddress } from '../utils/address.js';
+import { resolveDeliveryTerms } from '../utils/deliveryTerms.js';
 import { isBlacklisted } from './blacklistService.js';
 import { thaiYearMonth } from '../utils/thaiTime.js';
 import {
@@ -192,15 +193,22 @@ export async function confirmQuotationAtomic(
     const quotationNo = row.quotation_no
       || await allocateQuotationNo(enrichedQuote, client);
 
+    // 2.5) ตรึงกำหนดส่งลงใบ — ประเภทอัตโนมัติคิดจาก "สต๊อก ณ ตอนนี้" ซึ่ง item_details ไม่ได้เก็บไว้
+    //      ถ้าไม่ตรึง ไฟล์ export ที่กดทีหลังจะได้ค่าคนละตัวกับ PDF ที่ลูกค้าถืออยู่
+    //      enrichedQuote มี delivery_days_auto / delivery_all_in_stock ติดมาแล้วจาก
+    //      enrichQuotationData() จึงไม่ต้อง query เพิ่มในนี้ (อยู่ใน transaction ห้ามยิงงานหนัก)
+    const deliveryTerms = resolveDeliveryTerms(enrichedQuote);
+
     // 3) UPDATE แบบมีเงื่อนไข status + เช็ค rowCount (ห้ามเขียนทับ created_at เพราะเลขคำนวณจากมัน)
     const upd = await client.query(
       `UPDATE quotations
           SET status = 'confirmed',
               quotation_no = COALESCE(quotation_no, $1),
+              delivery_terms = $3::jsonb,
               updated_at = NOW()
         WHERE id = $2 AND status <> 'confirmed' AND status <> 'cancelled'
       RETURNING quotation_no`,
-      [quotationNo, quoteId]
+      [quotationNo, quoteId, JSON.stringify(deliveryTerms)]
     );
     if (upd.rowCount === 0) {
       // มี FOR UPDATE แล้วยังโดน 0 แถว = มีทางเขียน status ที่เรายังไม่รู้ ให้ rollback ทั้งชุด

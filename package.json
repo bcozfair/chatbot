@@ -36,6 +36,7 @@
     "diag:api-log": "tsx scripts/diag/apiLogSmoke.ts",
     "diag:pdf-render": "tsx scripts/diag/pdfRenderSmoke.ts",
     "backfill:contacts": "tsx scripts/backfillContactsFromSaleOrders.ts",
+    "backfill:delivery-terms": "tsx scripts/backfillDeliveryTerms.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {

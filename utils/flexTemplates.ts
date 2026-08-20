@@ -1,6 +1,7 @@
 import { pool } from '../config/db.js';
 import { validateProductPriceWithPromotions, getRelevantPromotion } from './promotionValidator.js';
 import { calcNetPrice } from './pricing.js';
+import { resolveDeliveryTerms, deliveryDisplayText } from './deliveryTerms.js';
 
 export function createListFlexMessage(
   title: string,
@@ -627,25 +628,17 @@ export function isCustomerInfoIncomplete(quote: any): boolean {
 }
 
 /**
- * ข้อความกำหนดส่งของใบหนึ่งใบ — ใช้ค่าที่ enrichQuotationData คำนวณมาให้แล้ว
- * (delivery_days_auto / delivery_all_in_stock) และค่าที่เซลล์ตั้งทับไว้ (delivery_days_override)
+ * ข้อความกำหนดส่งของใบหนึ่งใบ — ถ้อยคำเดียวกับที่พิมพ์ลง PDF ทุกอักขระ
+ * (deliveryDisplayText ใน utils/deliveryTerms.ts) เซลล์จะได้ไม่ต้องแปลในหัวว่าคำไหนคือคำไหน
  *
- * fallback 3/7 วัน กับคำว่า In_stock./Make to order. ตรงกับ pdfGenerator และหน้า LIFF
- * เซลล์จะได้เห็นเลขเดียวกันทั้งในแชท ในหน้าแก้ไข และในไฟล์ PDF
+ * ต่อท้าย "(ตั้งค่าเอง)" เมื่อเซลล์ตั้งจำนวนวันเอง — เป็นข้อความในแชทสำหรับเซลล์เท่านั้น
+ * ไม่มีในเอกสาร และไม่มีในไฟล์นำเข้า Odoo
  */
 function formatDeliveryTime(quote: any): { text: string; allInStock: boolean } {
-  const raw = quote?.delivery_days_override;
-  const overrideDays = (raw === null || raw === undefined || raw === '' || !Number.isFinite(Number(raw)))
-    ? null
-    : Number(raw);
-  const allInStock = quote?.delivery_all_in_stock !== false;
-  const autoRaw = Number(quote?.delivery_days_auto);
-  const autoDays = Number.isFinite(autoRaw) ? autoRaw : (allInStock ? 3 : 7);
-  const days = overrideDays !== null ? overrideDays : autoDays;
-  const mode = allInStock ? 'In_stock.' : 'Make to order.';
+  const terms = resolveDeliveryTerms(quote);
   return {
-    text: `${mode} ภายใน ${days} วัน${overrideDays !== null ? ' (ตั้งค่าเอง)' : ''}`,
-    allInStock
+    text: `${deliveryDisplayText(terms)}${terms.days_source === 'override' ? ' (ตั้งค่าเอง)' : ''}`,
+    allInStock: terms.all_in_stock
   };
 }
 

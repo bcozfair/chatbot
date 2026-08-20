@@ -1,19 +1,28 @@
 /**
  * แปลงใบเสนอราคาเป็นไฟล์นำเข้า Sale Order ของ Odoo (template "import odoo template.xlsx")
  *
- * เป็นจุดเดียวในระบบที่รู้เรื่อง format นี้ — ทั้งลำดับ 18 คอลัมน์ การแปลงค่า และการเขียนไฟล์
+ * เป็นจุดเดียวในระบบที่รู้เรื่อง format นี้ — ทั้งลำดับ 20 คอลัมน์ การแปลงค่า และการเขียนไฟล์
  * โมดูลนี้ไม่ยุ่งกับ Express/HTTP เพื่อให้ diag harness เรียกทดสอบได้ตรง ๆ
  *
- * ⚠️ กติกา one2many ของ Odoo: 1 ใบสั่งขายที่มีหลายรายการ = แถวแรกใส่ครบ A–R
- *    แถวที่ 2 เป็นต้นไปต้อง **เว้น A–L ว่าง** ใส่แต่ M–R
+ * ⚠️ กติกา one2many ของ Odoo: 1 ใบสั่งขายที่มีหลายรายการ = แถวแรกใส่ครบ A–T
+ *    แถวที่ 2 เป็นต้นไปต้อง **เว้นช่องหัวใบว่าง** ใส่แต่ช่องรายการสินค้า
  *    ถ้าใส่ค่าหัวใบซ้ำทุกแถว Odoo จะสร้างใบสั่งขายแยกทีละแถว
+ *
+ * ⚠️ ช่องหัวใบ **ไม่ต่อเนื่องกัน** แล้ว: A–L และ S–T เป็นหัวใบ ส่วน M–R เป็นรายการสินค้า
+ *    (delivery_name/delivery_time ต่อท้ายไฟล์ตามที่ทดสอบนำเข้า Odoo จริงแล้วผ่าน)
+ *    เพิ่มช่องใหม่ทีหลังต้องดูให้ออกว่าเป็นช่องประเภทไหน ไม่ใช่ดูจากตำแหน่งคอลัมน์
  */
 import { Parser } from 'json2csv';
 import ExcelJS from 'exceljs';
 import { calcNetPrice } from '../utils/pricing.js';
 import { resolveMinWarrantyDisplay, warrantyNoteText } from '../utils/warranty.js';
+import {
+  resolveDeliveryTerms,
+  deliveryOdooName,
+  deliveryOdooTime,
+} from '../utils/deliveryTerms.js';
 
-/** หัวคอลัมน์ A–R — ต้องตรงกับชีต "Import " ของ template เป๊ะ ห้ามสลับลำดับ */
+/** หัวคอลัมน์ A–T — ต้องตรงกับชีต "Import " ของ template เป๊ะ ห้ามสลับลำดับ */
 export const ODOO_SO_HEADERS = [
   'name',
   'partner_id',
@@ -33,6 +42,9 @@ export const ODOO_SO_HEADERS = [
   'order_line/price_unit',
   'order_line/tax_id',
   'order_line/discount',
+  // S/T: ช่องหัวใบที่ต่อท้ายไฟล์ — ค่ามาจากกำหนดส่งที่ตรึงไว้ตอนยืนยันใบ (ดู deliveryTerms.ts)
+  'delivery_name',
+  'delivery_time',
 ] as const;
 
 /** ชื่อชีตที่ Odoo อ่าน — มีเว้นวรรคท้ายตาม template ต้นฉบับ */
@@ -95,6 +107,14 @@ export interface OdooExportQuotationRow {
   raw_customer_name?: string | null;
   /** C: ชื่อผู้ติดต่อดิบจากตารางหลัก — กติกาเดียวกับ raw_customer_name */
   raw_contact_name?: string | null;
+  /**
+   * S/T: กำหนดส่งที่ตรึงไว้ตอนยืนยันใบ (quotations.delivery_terms)
+   *
+   * NULL/ไม่มี = ใบที่ยืนยันก่อนระบบมีคอลัมน์นี้ — ปล่อยสองช่องว่าง **ห้ามเดาย้อนหลัง**
+   * เพราะประเภทอัตโนมัติคิดจากสต๊อก ณ วันออกใบ ซึ่งไม่มีเก็บไว้ที่ไหนแล้ว เดาผิดคือได้ทั้ง
+   * ประเภทและจำนวนวันผิดพร้อมกัน แอดมินกรอกเองใน Odoo สำหรับใบกลุ่มนี้
+   */
+  delivery_terms?: any;
 }
 
 /** 1 แถวในไฟล์ = 1 รายการสินค้า (ช่องหัวใบเป็นค่าว่างในแถวที่ 2 ขึ้นไปของใบเดียวกัน) */
@@ -122,6 +142,10 @@ export interface OdooSoRow {
   tax_id: string;
   /** หน่วยเป็นเปอร์เซ็นต์ตรง ๆ (5 = 5%) ตามที่ field discount ของ Odoo เก็บ */
   discount: number;
+  /** S: ประเภทการจัดส่ง เช่น 'In_stock.,With in' — ว่างเมื่อใบไม่มีกำหนดส่งที่ตรึงไว้ */
+  delivery_name: string;
+  /** T: จำนวนวัน — ต้องลงเป็นตัวเลข ไม่ใช่ข้อความ · null = ไม่มีค่าให้ลง */
+  delivery_time: number | null;
 }
 
 export function loadOdooExportConfig(): OdooExportConfig {
@@ -246,6 +270,18 @@ export function selectExportableQuotes<T extends OdooExportQuotationRow>(
 }
 
 /**
+ * ค่าช่อง S/T ของใบหนึ่งใบ — ใบที่ยังไม่มีกำหนดส่งตรึงไว้ได้สองช่องว่าง
+ *
+ * แยกเป็นฟังก์ชันเพราะเป็นจุดเดียวที่ตัดสินว่า "ไม่มีข้อมูล = เว้นว่าง" ถ้าวันหลังตกลงกันได้ว่า
+ * จะเติมค่าให้ใบเก่ายังไง ให้แก้ที่นี่ที่เดียว
+ */
+function deliveryColumns(quote: OdooExportQuotationRow): { delivery_name: string; delivery_time: number | null } {
+  if (!quote.delivery_terms) return { delivery_name: '', delivery_time: null };
+  const terms = resolveDeliveryTerms(quote);
+  return { delivery_name: deliveryOdooName(terms), delivery_time: deliveryOdooTime(terms) };
+}
+
+/**
  * แปลงใบเสนอราคาเป็นแถวตาม template ของบริษัทที่เลือก — ใบที่ selectExportableQuotes() คัดออก
  * (ไม่มีรายการสินค้า หรือคนละบริษัท) จะไม่อยู่ในผลลัพธ์
  *
@@ -308,6 +344,9 @@ export function buildOdooSaleOrderRows(
       employee_quotation_id: employeeQuotationId,
       source_id: config.sourceId,
       note: warrantyNoteText(resolveMinWarrantyDisplay(items)),
+      // S/T: อ่านจากค่าที่ตรึงไว้ตอนยืนยันใบเท่านั้น ไม่คำนวณสด — export ตั้งใจไม่แตะสต๊อก
+      // และค่าที่ตรึงไว้คือค่าเดียวกับที่พิมพ์ลง PDF ที่ลูกค้าถืออยู่
+      ...deliveryColumns(quote),
     };
 
     items.forEach((item: any, index: number) => {
@@ -328,6 +367,9 @@ export function buildOdooSaleOrderRows(
         employee_quotation_id: isFirst ? header.employee_quotation_id : '',
         source_id: isFirst ? header.source_id : '',
         note: isFirst ? header.note : '',
+        // S/T: เป็นช่องหัวใบเหมือน A–L แม้จะอยู่ท้ายไฟล์ — แถวที่ 2 ขึ้นไปต้องเว้นว่าง
+        delivery_name: isFirst ? header.delivery_name : '',
+        delivery_time: isFirst ? header.delivery_time : null,
         product: clean(item?.internal_reference) || clean(item?.model),
         quantity: Number(item?.quantity) || 0,
         uom: config.uom,
@@ -341,7 +383,7 @@ export function buildOdooSaleOrderRows(
   return rows;
 }
 
-/** ค่าของแถวเรียงตามลำดับคอลัมน์ A–R */
+/** ค่าของแถวเรียงตามลำดับคอลัมน์ A–T */
 function toOrderedValues(row: OdooSoRow, format: OdooExportFormat): (string | number | Date | null)[] {
   // xlsx ใช้ null เพื่อให้เซลล์ว่างจริง ส่วน csv ใช้สตริงว่าง
   const blank = format === 'xlsx' ? null : '';
@@ -368,6 +410,8 @@ function toOrderedValues(row: OdooSoRow, format: OdooExportFormat): (string | nu
     row.price_unit,
     text(row.tax_id),
     row.discount,
+    text(row.delivery_name),
+    row.delivery_time ?? blank,
   ];
 }
 
