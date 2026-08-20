@@ -282,6 +282,7 @@ docker compose exec app npx tsx scripts/diag/odooExportSmoke.ts --company qt
 docker compose exec app npx tsx scripts/diag/dateFilterSmoke.ts
 docker compose exec app npx tsx scripts/diag/quoteValidationSmoke.ts
 docker compose exec app npx tsx scripts/diag/apiLogSmoke.ts
+docker compose exec app npx tsx scripts/diag/pdfCacheSmoke.ts
 ```
 > ❌ ห้ามรันบน prod: `diag:export-tracking`, `diag:shipping-fee`, `diag:confirm-race` — สามตัวนี้เขียนข้อมูลทดสอบลง DB
 

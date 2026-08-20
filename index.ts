@@ -40,6 +40,7 @@ import {
   getApiLogStats,
 } from './db/repositories.js';
 import { confirmQuotationAtomic, enrichQuotationData, buildItemSnapshots } from './services/quotationService.js';
+import { pdfCacheKey, getCachedPdf, setCachedPdf, isPrintFrozen, invalidatePdfCache } from './services/pdfCache.js';
 import {
   listBlacklist,
   addBlacklistEntry,
@@ -1460,6 +1461,20 @@ const downloadPdfHandler = async (req: any, res: any) => {
       return res.redirect(302, qs === -1 ? canonicalPath : canonicalPath + req.originalUrl.slice(qs));
     }
 
+    const sendPdf = (buf: Buffer, filename: string) => {
+      res.setHeader('Content-Disposition', `inline; filename="${filename}.pdf"`);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.send(buf);
+    };
+
+    // ใบที่ออกเลขแล้วเจน PDF จากแถวนี้แถวเดียว (ดูเหตุผลเต็มใน services/pdfCache.ts)
+    // คีย์คิดจากแถวดิบก่อน enrich — hit แล้วจึงข้าม enrich (~26ms) และการเจน (~1.4s) ได้ทั้งก้อน
+    const cacheKey = pdfCacheKey(quoteDb);
+    const cachedPdf = getCachedPdf(cacheKey);
+    if (cachedPdf) {
+      return sendPdf(cachedPdf, quoteDb.quotation_no);
+    }
+
     // Enrich ก่อนเพื่อให้ items มีข้อมูลสำหรับ resolveQuoteCompany ใน allocateQuotationNo และ pdfGenerator
     const enrichedQuote = await enrichQuotationData(quoteDb);
 
@@ -1505,12 +1520,15 @@ const downloadPdfHandler = async (req: any, res: any) => {
       salespersonEmployeeCode || enrichedQuote.salesperson_employee_code || enrichedQuote.salesperson_id || null;
 
     // 2. สร้าง PDF สดๆ ณ ตอนดาวน์โหลด
-    const pdfBuffer = await generateQuotationPDF(enrichedQuote, quoteNo);
+    const pdfBuffer = Buffer.from(await generateQuotationPDF(enrichedQuote, quoteNo));
 
-    // 3. ส่งไฟล์ให้หน้าเว็บแสดงผลหรือดาวน์โหลด
-    res.setHeader('Content-Disposition', `inline; filename="${quoteNo}.pdf"`);
-    res.setHeader('Content-Type', 'application/pdf');
-    res.send(Buffer.from(pdfBuffer));
+    // 3. เก็บเข้า cache เฉพาะใบที่ freezePrintItems() ตรึงค่าสดให้จริงแล้วเท่านั้น
+    if (isPrintFrozen(quoteDb, enrichedQuote.items)) {
+      setCachedPdf(cacheKey, pdfBuffer);
+    }
+
+    // 4. ส่งไฟล์ให้หน้าเว็บแสดงผลหรือดาวน์โหลด
+    sendPdf(pdfBuffer, quoteNo);
   } catch (err) {
     console.error('Generate PDF error:', err);
     res.status(500).send('Internal Server Error');
@@ -2040,6 +2058,9 @@ app.post('/api/admin/signatures/upload', adminAuthMiddleware, requireRole('admin
     fs.writeFileSync(targetPath, dataBuffer);
     console.log(`Successfully saved signature to: ${targetPath}`);
 
+    // ลายเซ็นเป็น input เดียวของ PDF ที่อยู่นอกแถว quotations — เปลี่ยนแล้วต้องล้าง cache ทันที
+    invalidatePdfCache(`อัปโหลดลายเซ็น ${fileKey}`);
+
     res.json({
       success: true,
       message: `Signature uploaded successfully as ${fileKey}.${cleanExt}`,
@@ -2290,6 +2311,9 @@ app.delete('/api/admin/signatures/:salespersonId', adminAuthMiddleware, requireR
     if (deletedCount === 0) {
       return res.status(404).json({ error: `Signature file for salesperson "${salespersonId}" was not found.` });
     }
+
+    // เหมือนตอนอัปโหลด — PDF ที่ cache ไว้ยังมีลายเซ็นเดิมฝังอยู่
+    invalidatePdfCache(`ลบลายเซ็น ${salespersonId}`);
 
     res.json({
       success: true,

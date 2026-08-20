@@ -35,6 +35,7 @@
     "diag:shutdown-check": "tsx scripts/diag/shutdownCheck.ts",
     "diag:api-log": "tsx scripts/diag/apiLogSmoke.ts",
     "diag:pdf-render": "tsx scripts/diag/pdfRenderSmoke.ts",
+    "diag:pdf-cache": "tsx scripts/diag/pdfCacheSmoke.ts",
     "backfill:contacts": "tsx scripts/backfillContactsFromSaleOrders.ts",
     "backfill:delivery-terms": "tsx scripts/backfillDeliveryTerms.ts",
     "backfill:print-snapshot": "tsx scripts/backfillPrintSnapshot.ts",
