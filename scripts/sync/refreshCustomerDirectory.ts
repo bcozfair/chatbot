@@ -1,4 +1,5 @@
 import pg from 'pg';
+import { fmtDur, fmtNum, slog } from './syncLog.js';
 
 /**
  * สร้าง customers_data_view ใหม่ — single source of truth ของ logic refresh
@@ -71,7 +72,7 @@ export async function refreshCustomerDataView(opts?: { force?: boolean }): Promi
 
     if (!opts?.force && wm && prev && wm.getTime() === prev.getTime()) {
       const ms = Date.now() - t0;
-      console.log(`[sync] ⏭️ ข้าม refresh customers_data_view — ข้อมูลต้นทางไม่เปลี่ยน (${ms}ms)`);
+      slog(`⏭️ customers_data_view ไม่ต้อง rebuild — ข้อมูลต้นทางไม่เปลี่ยน (${ms}ms)`);
       return { skipped: true, ms };
     }
 
@@ -102,8 +103,14 @@ export async function refreshCustomerDataView(opts?: { force?: boolean }): Promi
     await client.query(`ANALYZE ${NEW_TABLE} (company_id, contact_id)`);
     const buildMs = Date.now() - tBuild;
 
-    const { rows: cntRows } = await client.query(`SELECT count(*)::int AS n FROM ${NEW_TABLE}`);
-    const rowCount: number = cntRows[0]?.n ?? 0;
+    // นับแยกตาม source ตอนตารางใหม่ยังไม่ swap (ยังไม่มีใครอ่าน จึงไม่กระทบใคร ~30ms)
+    // ตัวเลข saleorder = contact ที่มีเฉพาะใน sale_orders ซึ่ง Arm 2 ดึงเข้ามา — ถ้าวันไหนเป็น 0
+    // แปลว่า Arm 2 พัง (ลูกค้ากลุ่มนั้นจะหายจากการค้นหาทันที) เห็นได้จาก log บรรทัดเดียว
+    const { rows: srcRows } = await client.query(
+      `SELECT source, count(*)::int AS n FROM ${NEW_TABLE} GROUP BY source ORDER BY n DESC`
+    );
+    const rowCount: number = srcRows.reduce((sum: number, r: any) => sum + r.n, 0);
+    const srcBreakdown = srcRows.map((r: any) => `${r.source} ${fmtNum(r.n)}`).join(' + ');
 
     // guard: ตารางว่าง = นิยาม/ข้อมูลต้นทางพัง — อย่าเอาไปทับของเดิมที่ยังใช้งานได้
     if (rowCount === 0) {
@@ -140,8 +147,9 @@ export async function refreshCustomerDataView(opts?: { force?: boolean }): Promi
       [wm, buildMs, rowCount]
     );
 
-    console.log(
-      `[sync] ♻️ rebuilt customers_data_view ใน ${ms}ms (build ${buildMs}ms, ${rowCount} แถว)`
+    slog(
+      `♻️ customers_data_view rebuilt ${fmtDur(ms)} (build ${fmtDur(buildMs)}) · ` +
+        `${fmtNum(rowCount)} แถว = ${srcBreakdown}`
     );
     return { skipped: false, ms, rows: rowCount };
   } catch (err: any) {

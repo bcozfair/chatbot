@@ -1,6 +1,7 @@
 import { pool } from '../config/db.js';
 import { GatewayUnreachableError } from '../scripts/sync/gatewayClient.js';
 import { refreshCustomerDataView } from '../scripts/sync/refreshCustomerDirectory.js';
+import { clockNow, fmtDur, serr, slog, swarn, vlog } from '../scripts/sync/syncLog.js';
 import { clearCustomerSearchCache } from './customerService.js';
 import { thaiDateParts } from '../utils/thaiTime.js';
 
@@ -135,30 +136,36 @@ async function recordResult(id: ResourceId, status: RunStatus, errorMessage?: st
 }
 
 /**
- * นับ contact ที่มีใน sale_orders แต่ไม่มีใน customers (ลูกค้า/ผู้ติดต่อ "หาย") แล้ว log
- * เป็น guard เตือนหลังจบรอบ sync ว่า customer sync ยังกวาดไม่ครบ
+ * นับ contact ที่มีใน sale_orders แต่ "แอปหาไม่เจอ" คือไม่มีใน customers_data_view
+ *
+ * ⚠️ ต้องเทียบกับ customers_data_view ไม่ใช่ตาราง customers — contact ที่มีเฉพาะใน
+ *    sale_orders (ส่วนใหญ่บุคคลธรรมดา/ไม่มี tax_id ที่ customer sync ไม่ได้กวาด) ถูก
+ *    customers_data_build "Arm 2" ดึงเข้า view ให้อยู่แล้ว (source='saleorder') จึงค้นหาได้ปกติ
+ *    ของเดิมเทียบกับ customers ตรง ๆ เลยเตือนทุกรอบทั้งที่ไม่มีอะไรเสีย (วัดจริง 4,324 = ครบพอดี)
+ *    → เลขที่ควรเป็น 0 คือเลขนี้ ถ้าไม่ 0 แปลว่า Arm 2 พังหรือ view rebuild ไม่สำเร็จ = ปัญหาจริง
  *
  * ⚠️ ใช้ contact_id เป็นคีย์เท่านั้น — sale_orders.company_id เก็บบริษัทผู้ขาย (res.company)
  *    ไม่ใช่ลูกค้า จึงเชื่อมกับ customers ไม่ได้ (ดู memory: sale-orders-company-id-trap)
  * EXCEPT ใช้ hash/sort เร็ว (dedupe ในตัว) — เบากว่า NOT EXISTS ต่อแถว
  * ห้าม throw — เป็นแค่ตัวรายงาน ไม่ควรไปล้มรอบ sync
+ * ต้องเรียก "หลัง" refreshCustomerDirectory() เสมอ ไม่งั้นเทียบกับ view รอบก่อน = เตือนหลอก
  */
-async function reconcileOrphanContacts() {
+async function reconcileOrphanContacts(): Promise<number | null> {
   try {
     const { rows } = await pool.query(`
       SELECT COUNT(*)::int AS n FROM (
         SELECT contact_id FROM sale_orders WHERE contact_id > 0
         EXCEPT
-        SELECT contact_id FROM customers WHERE contact_id > 0
+        SELECT contact_id FROM customers_data_view WHERE contact_id > 0
       ) t`);
     const n = rows[0]?.n ?? 0;
     if (n > 0) {
-      console.warn(`[sync] ⚠️ contact มีใน sale_orders แต่ไม่มีใน customers: ${n} — customer sync อาจกวาดไม่ครบ (ดู npm run diag:orphan-contacts แล้ว sync:customers -- --full / backfill:contacts)`);
-    } else {
-      console.log('[sync] ✓ ไม่มี contact ตกค้าง (sale_orders ⊆ customers by contact_id)');
+      swarn(`contact มีใน sale_orders แต่แอปหาไม่เจอใน customers_data_view: ${n} — view rebuild ไม่สำเร็จ หรือ customers_data_build Arm 2 ผิด (ดู npm run diag:orphan-contacts)`);
     }
+    return n;
   } catch (err: any) {
-    console.error('[sync] reconcile orphan contacts ล้มเหลว:', err?.message || err);
+    serr(`เช็ค contact ตกค้างไม่สำเร็จ — ${err?.message || err}`);
+    return null;
   }
 }
 
@@ -230,6 +237,13 @@ export function startSync(
 
   // ไม่ await — ปล่อยรันเบื้องหลัง
   void (async () => {
+    const roundStart = Date.now();
+    const failedLabels: string[] = [];
+    let okCount = 0;
+    slog(
+      `▶ ${clockNow()} รอบ sync เริ่ม — trigger=${trigger} mode=${forceFull ? 'full' : 'incremental'}` +
+        ` · คิว: ${list.join(', ')}`
+    );
     // try/finally: running ต้องถูกปลดทุกเส้นทาง ไม่งั้น mutex ค้างและ sync ทั้งระบบตายจน restart
     try {
       for (let i = 0; i < list.length; i++) {
@@ -237,27 +251,32 @@ export function startSync(
         runState.currentResource = id;
         const def = RESOURCES[id];
         try {
-          console.log(
-            `[sync] เริ่ม sync ${def.label} (${id}) — trigger=${trigger}${forceFull ? ' mode=full' : ''}`
-          );
+          // ไม่มีบรรทัด "เริ่ม sync" ต่อ resource — บรรทัด ✓ ท้าย resource บอกครบกว่า
+          // และถ้ามันช้าจนน่าสงสัย ticker ของ syncLog จะพิมพ์ '…' ให้เองภายใน 10 วิ
           const fn = await def.load();
           await fn({ forceFull });
-          console.log(`[sync] sync ${def.label} เสร็จแล้ว`);
+          okCount += 1;
           await recordResult(id, 'success');
         } catch (err: any) {
           const msg = err?.message || String(err);
           runState.lastError = `${def.label}: ${msg}`;
-          console.error(`[sync] sync ${def.label} ล้มเหลว:`, msg);
+          failedLabels.push(id);
+          serr(`${id} ล้มเหลว — ${msg}`);
 
           // ติดต่อ gateway ไม่ได้ → ยิง resource ที่เหลือก็พังเหมือนกัน ยกเลิกทั้งรอบเลย
           // (error อื่น เช่น payload ผิดรูป/DB พัง/env หาย ยังไปต่อตัวถัดไปตามเดิม)
           if (err instanceof GatewayUnreachableError) {
             runState.aborted = true;
             await recordResult(id, 'aborted', msg);
-            for (const rest of list.slice(i + 1)) {
-              await recordResult(rest, 'skipped', `ยกเลิกทั้งรอบ: ${msg}`);
+            const rest = list.slice(i + 1);
+            for (const r of rest) {
+              await recordResult(r, 'skipped', `ยกเลิกทั้งรอบ: ${msg}`);
             }
-            console.error(`[sync] ยกเลิกทั้งรอบ — ข้าม ${list.length - i - 1} รายการที่เหลือ (รอรอบถัดไป)`);
+            serr(
+              `ยกเลิกทั้งรอบ — ติดต่อ gateway ไม่ได้` +
+                (rest.length ? ` · ข้าม ${rest.length} รายการที่เหลือ: ${rest.join(', ')}` : '') +
+                ' (รอรอบถัดไป)'
+            );
             break;
           }
 
@@ -269,11 +288,26 @@ export function startSync(
       runState.currentResource = null;
       runState.queue = [];
       runState.finishedAt = new Date().toISOString();
-      console.log(runState.aborted ? '[sync] จบรอบ sync (ถูกยกเลิก)' : '[sync] จบรอบ sync ทั้งหมด');
-      // guard: เตือนถ้ายังมี contact ตกค้าง (อ่าน DB อย่างเดียว ไม่ throw)
-      await reconcileOrphanContacts();
       // สร้าง customers_data_view ใหม่ให้สะท้อนข้อมูลที่ sync มาใหม่ + ล้าง search cache
       await refreshCustomerDirectory();
+      // guard: เตือนถ้ามี contact ที่แอปหาไม่เจอ (อ่าน DB อย่างเดียว ไม่ throw)
+      // ต้องอยู่หลัง refresh — เทียบกับ view ที่เพิ่ง rebuild เท่านั้นถึงจะไม่เตือนหลอก
+      const orphans = await reconcileOrphanContacts();
+
+      // บรรทัดปิดรอบ: อ่านบรรทัดเดียวต้องรู้ว่าครบไหม พังตัวไหน และข้อมูลลูกค้าใช้ได้ไหม
+      const parts = [`สำเร็จ ${okCount}/${list.length}`];
+      if (failedLabels.length) parts.push(`ล้มเหลว ${failedLabels.length}: ${failedLabels.join(', ')}`);
+      if (runState.aborted) parts.push('ยกเลิกกลางรอบ');
+      const orphanNote =
+        orphans === null
+          ? 'เช็ค contact ตกค้างไม่ได้'
+          : orphans === 0
+            ? 'ไม่มี contact ตกค้าง'
+            : `⚠️ contact ตกค้าง ${orphans}`;
+      slog(
+        `■ ${clockNow()} จบรอบใน ${fmtDur(Date.now() - roundStart)} — ${parts.join(' · ')} · ${orphanNote}` +
+          (failedLabels.length || runState.aborted ? ' · ดู sync_state.last_error' : '')
+      );
     }
   })();
 
@@ -547,10 +581,16 @@ async function schedulerTick() {
 
     lastIntervalRun = Date.now();
     const started = startSync(settings.resources, 'schedule');
-    console.log(
-      `[scheduler] ถึงเวลา auto sync (วัน ${day} เวลา ${time} ในช่วง ${settings.window_start}-${settings.window_end}` +
-        ` ทุก ${settings.interval_seconds} วิ) — started=${started}`
-    );
+    // ปกติไม่ต้อง log — บรรทัด '▶' ของ startSync บอก trigger=schedule อยู่แล้ว
+    // แต่ถ้าเริ่มไม่ได้ต้องดัง เพราะแปลว่ารอบก่อนหน้ายังค้างอยู่ (mutex ไม่ปลด)
+    if (!started) {
+      swarn(`ข้าม auto sync รอบนี้ — รอบก่อนหน้ายังรันไม่จบ (${runState.currentResource || 'ไม่ทราบ resource'})`);
+    } else {
+      vlog(
+        `[scheduler] ถึงเวลา auto sync (วัน ${day} เวลา ${time} ในช่วง ${settings.window_start}-${settings.window_end}` +
+          ` ทุก ${settings.interval_seconds} วิ)`
+      );
+    }
   } catch (err: any) {
     console.error('[scheduler] tick error:', err?.message || err);
   }

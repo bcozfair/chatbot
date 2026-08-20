@@ -3,6 +3,7 @@ import { pool } from '../../config/db.js';
 import { refreshCustomerDataView } from './refreshCustomerDirectory.js';
 import { createGatewayGet, sleep } from './gatewayClient.js';
 import { decidePageTransition, MAX_STALL_RETRIES } from './syncPagination.js';
+import { createPageTicker, logResourceDone, serr, setSyncCtx, slog, vlog } from './syncLog.js';
 
 const INITIAL_SINCE = '1970-01-01T00:00:00.000Z';
 const PAGE_LIMIT = 200; // Keep the original limit of 200 for customer sync
@@ -118,7 +119,7 @@ async function upsertCustomerRows(dbClient: any, rows: any[]) {
     const contactName = row["Contact/Name"] || 'N/A';
 
     const progressPercent = ((batchIndex / rows.length) * 100).toFixed(2);
-    console.log(`   [${batchIndex}/${rows.length}] (${progressPercent}%) Saving -> Company: ${companyName.substring(0, 30)} (ID: ${companyId}) | Contact: ${contactName} (ID: ${contactId})`);
+    vlog(`   [${batchIndex}/${rows.length}] (${progressPercent}%) Saving -> Company: ${companyName.substring(0, 30)} (ID: ${companyId}) | Contact: ${contactName} (ID: ${contactId})`);
 
     const query = `
       INSERT INTO customers (
@@ -265,9 +266,9 @@ export async function syncCustomers(opts?: { forceFull?: boolean }) {
   const syncedCompanyIds = new Set();
 
   try {
-    console.log('🔌 Connecting to PostgreSQL database using pool...');
+    vlog('🔌 Connecting to PostgreSQL database using pool...');
     dbClient = await pool.connect();
-    console.log('✅ Database client acquired from pool.');
+    vlog('✅ Database client acquired from pool.');
 
     // 1. ตรวจสอบหรือสร้างตาราง customers และ sync_state
     await dbClient.query(`
@@ -336,7 +337,7 @@ export async function syncCustomers(opts?: { forceFull?: boolean }) {
       await dbClient.query(
         `UPDATE sync_state SET sync_cursor = NULL, sync_cursor_timestamp = NULL, sync_mode = 'full' WHERE resource = 'res_partner'`
       );
-      console.log('♻️  force-full: reset cursor ของ res_partner แล้ว — จะกวาดใหม่ทั้งหมด');
+      slog('♻️ customers: reset cursor แล้ว — กวาดใหม่ทั้งหมดตั้งแต่ 1970');
     }
 
     // 2. โหลด cursor จาก DB
@@ -346,12 +347,13 @@ export async function syncCustomers(opts?: { forceFull?: boolean }) {
 
     let syncMode = localState.syncMode || 'full';
 
-    console.log(`⏳ Sync Mode: ${syncMode} | Cursor: ${cursorToken} | Timestamp: ${cursorTimestamp}`);
+    vlog(`⏳ Sync Mode: ${syncMode} | Cursor: ${cursorToken} | Timestamp: ${cursorTimestamp}`);
 
     let totalExpected = null;
 
     // 4. Pagination Loop
-    console.log('📥 Starting to fetch updated records using v2 API...');
+    vlog('📥 Starting to fetch updated records using v2 API...');
+    const tick = createPageTicker('customers', 'companies');
     let page = 0;
     let totalSynced = 0;
     let stallRetries = 0; // นับ retry ตอน cursor ไม่ขยับ — reset เป็น 0 ทุกครั้งที่ cursor ขยับจริง
@@ -359,8 +361,9 @@ export async function syncCustomers(opts?: { forceFull?: boolean }) {
     while (true) {
       const path = buildRecordsPath(cursorToken);
       page += 1;
-      console.log(`\n🔄 Fetching page ${page}...`);
-      console.log(`📤 REQUEST: GET ${path}`);
+      setSyncCtx('customers', page); // ให้ข้อความ retry ของ gatewayClient บอกได้ว่าค้างที่หน้าไหน
+      vlog(`\n🔄 Fetching page ${page}...`);
+      vlog(`📤 REQUEST: GET ${path}`);
 
       const body = await gatewayGet(path);
       const payload = body?.payload;
@@ -369,7 +372,7 @@ export async function syncCustomers(opts?: { forceFull?: boolean }) {
         throw new Error('Invalid gateway response: payload.data is missing');
       }
 
-      console.log(`📥 RESPONSE:`, {
+      vlog(`📥 RESPONSE:`, {
         cursor_position: payload.cursor_position,
         next_position: payload.next_position,
         next_cursor: payload.next_cursor ? `${payload.next_cursor.substring(0, 40)}...` : null,
@@ -383,7 +386,7 @@ export async function syncCustomers(opts?: { forceFull?: boolean }) {
 
       try {
         if (payload.data.length > 0) {
-          console.log(`📦 Received ${payload.data.length} contact rows (represents ${payload.company_count || 0} companies).`);
+          vlog(`📦 Received ${payload.data.length} contact rows (represents ${payload.company_count || 0} companies).`);
 
           for (const row of payload.data) {
             if (row["Company ID"]) {
@@ -403,8 +406,9 @@ export async function syncCustomers(opts?: { forceFull?: boolean }) {
             ? `${((syncedCompanyIds.size / totalExpected) * 100).toFixed(2)}%`
             : 'N/A';
 
-          console.log(`✅ Saved ${payload.data.length} contact rows to DB.`);
-          console.log(`📊 Progress -> ข้อมูลทั้งหมด: ${totalExpected !== null ? totalExpected + ' companies' : 'Unknown'} | ดึงไปแล้ว: ${syncedCompanyIds.size} companies (${percent}) | เวลา: ${timeStr} | (รวม ${totalSynced} contact rows)`);
+          vlog(`✅ Saved ${payload.data.length} contact rows to DB.`);
+          vlog(`📊 Progress -> ข้อมูลทั้งหมด: ${totalExpected !== null ? totalExpected + ' companies' : 'Unknown'} | ดึงไปแล้ว: ${syncedCompanyIds.size} companies (${percent}) | เวลา: ${timeStr} | (รวม ${totalSynced} contact rows)`);
+          tick(page, totalSynced, syncedCompanyIds.size); // throttle เอง — รอบ 1 หน้าจะไม่พิมพ์อะไร
         }
 
         // === Step 2: ตัดสินใจหน้าถัดไป (logic รวม + unit test ที่ syncPagination.ts) ===
@@ -427,7 +431,7 @@ export async function syncCustomers(opts?: { forceFull?: boolean }) {
         if (transition.action === 'retry-stall') {
           stallRetries += 1;
           await dbClient.query('ROLLBACK'); // ทิ้งหน้านี้ (upsert idempotent) แล้วดึง cursor เดิมซ้ำ
-          console.warn(`⚠️ next_cursor ไม่ขยับ (has_more=true) — retry ${stallRetries}/${MAX_STALL_RETRIES}`);
+          console.warn(`[sync] ⚠️ customers หน้า ${page}: next_cursor ไม่ขยับ (has_more=true) — retry ${stallRetries}/${MAX_STALL_RETRIES}`);
           await sleep(2000);
           continue;
         }
@@ -443,10 +447,10 @@ export async function syncCustomers(opts?: { forceFull?: boolean }) {
               pagesSynced: page,
               recordsSynced: totalSynced
             });
-            console.log(`💾 Saved final cursor: ${nextCursor}`);
+            vlog(`💾 Saved final cursor: ${nextCursor}`);
+            cursorTimestamp = ts; // ใช้โชว์ 'cursor→' ในบรรทัดสรุป
           }
           await dbClient.query('COMMIT');
-          console.log('\n🏁 No more pages to fetch. Customer sync completed successfully.');
           break;
         }
 
@@ -460,32 +464,37 @@ export async function syncCustomers(opts?: { forceFull?: boolean }) {
           pagesSynced: page,
           recordsSynced: totalSynced
         });
-        console.log(`💾 Saved cursor: ${nextCursor} | Timestamp: ${nextTimestamp}`);
+        vlog(`💾 Saved cursor: ${nextCursor} | Timestamp: ${nextTimestamp}`);
         await dbClient.query('COMMIT');
         cursorToken = nextCursor;
         cursorTimestamp = nextTimestamp;
 
       } catch (transactionError) {
         await dbClient.query('ROLLBACK');
-        console.error(`❌ Page transaction failed. Changes rolled back for page ${page}.`);
+        serr(`customers หน้า ${page} ล้มเหลว — rollback หน้านั้นแล้ว`);
         throw transactionError;
       }
 
       await sleep(1200);
     }
 
-    const totalElapsed = ((Date.now() - startTime) / 1000);
-    const totalMin = Math.floor(totalElapsed / 60);
-    const totalSec = (totalElapsed % 60).toFixed(2);
-    console.log(`\n🎉 Sync Summary: ${syncedCompanyIds.size} unique companies | ${totalSynced} total contact rows | ${page} pages | Time: ${totalMin}m ${totalSec}s`);
+    logResourceDone({
+      resource: 'customers',
+      units: syncedCompanyIds.size,
+      unitLabel: 'companies',
+      rows: totalSynced,
+      rowLabel: 'contacts',
+      pages: page,
+      ms: Date.now() - startTime,
+      cursorTimestamp,
+    });
 
-  } catch (error: any) {
-    console.error('❌ Customer Sync failed:', error.message);
-    throw error;
+    // ผู้เรียก (syncService / CLI) เป็นคนพิมพ์บรรทัด ✗ เอง — ที่นี่แค่โยนต่อ ไม่งั้น log ซ้ำ 2 บรรทัด
   } finally {
+    setSyncCtx(null);
     if (dbClient) {
       dbClient.release();
-      console.log('🔌 Database connection released back to pool.');
+      vlog('🔌 Database connection released back to pool.');
     }
   }
 }
@@ -501,7 +510,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       await pool.end(); // ปิด pool → event loop ว่าง → Node ออกเอง (อย่าเรียก process.exit(0) จะชน libuv teardown บน Windows)
     })
     .catch((error) => {
-      console.error('[customer-sync] failed', error);
+      serr(`customers ล้มเหลว — ${error?.message || error}`);
       process.exit(1);
     });
 }
