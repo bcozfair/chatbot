@@ -2090,7 +2090,13 @@
 
       async function loadShippingFeeConfig() {
         try {
-          const resp = await fetchWithTimeout("/api/shipping-fee/config", {}, 8000);
+          // ?userId ไม่มีผลต่อผลลัพธ์ — แนบไว้ให้ api_logs รู้ว่าใครเรียก (ห้ามลบทิ้งเพราะ
+          // เห็นว่า server ไม่ได้อ่าน) เช่นเดียวกับการเรียก API อื่น ๆ ของหน้านี้
+          const resp = await fetchWithTimeout(
+            `/api/shipping-fee/config?userId=${encodeURIComponent(userId || "")}`,
+            {},
+            8000,
+          );
           if (!resp.ok) throw new Error(`สถานะ ${resp.status}`);
           shippingFeeCfg = await resp.json();
         } catch (err) {
@@ -2348,7 +2354,7 @@
                 {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ items: quote.items }),
+                  body: JSON.stringify({ userId, items: quote.items }),
                 },
                 12000,
               );
@@ -3175,7 +3181,9 @@
           return;
         }
         try {
-          const resp = await fetch(`/api/customer/${customerId}/contacts`);
+          const resp = await fetch(
+            `/api/customer/${customerId}/contacts?userId=${encodeURIComponent(userId || "")}`,
+          );
           if (!resp.ok) throw new Error("Failed to fetch contacts");
           const contacts = await resp.json();
           globalContacts = contacts || [];
@@ -3416,7 +3424,7 @@
         searchTimeout = setTimeout(async () => {
           try {
             const resp = await fetch(
-              `/api/products/search?q=${encodeURIComponent(query)}`,
+              `/api/products/search?q=${encodeURIComponent(query)}&userId=${encodeURIComponent(userId || "")}`,
             );
             if (!resp.ok) throw new Error("Search failed");
             renderSheetResults(await resp.json());
@@ -4014,7 +4022,7 @@
             );
           loaderText.textContent = "กำลังโหลดข้อมูลใบเสนอราคา...";
           const resp = await fetch(
-            `/api/quotations?ids=${encodeURIComponent(quoteIds)}`,
+            `/api/quotations?ids=${encodeURIComponent(quoteIds)}&userId=${encodeURIComponent(userId)}`,
           );
           if (!resp.ok) throw new Error("ไม่สามารถโหลดข้อมูลได้");
           const data = await resp.json();
