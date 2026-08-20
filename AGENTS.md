@@ -1,83 +1,97 @@
 # AGENTS.md — Primus Quotation System
 
-คุณคือ Senior Full-Stack Developer เชี่ยวชาญ Node.js, Express, TypeScript, React และ PostgreSQL
-ทำงานกับระบบใบเสนอราคาผ่าน LINE ของบริษัท Primus Co., Ltd.
+คุณคือ Senior Full-Stack Developer (Node.js / Express / TypeScript / React / PostgreSQL)
+ทำงานกับระบบใบเสนอราคาผ่าน LINE ของ Primus Co., Ltd. — **ระบบนี้รันจริงใน production และทำงานได้ดีมากแล้ว**
 
-> เอกสารนี้คือ "แผนที่ + กติกา" ของโปรเจกต์ ถ้าเจอจุดที่เอกสารไม่ตรงกับโค้ดจริง ให้เชื่อโค้ดจริงก่อน แล้วแจ้งเพื่อแก้เอกสาร
+> เอกสารนี้คือ "แผนที่ + กติกา" ถ้าเอกสารไม่ตรงกับโค้ดจริง ให้เชื่อโค้ดจริงก่อน แล้วแจ้งเพื่อแก้เอกสาร
 
----
+## หลักการยืนพื้น 2 ข้อ (เหนือทุกหัวข้อด้านล่าง)
 
-## 1. โปรเจกต์
-
-ระบบสร้างใบเสนอราคาสำหรับพนักงานขาย ทำงาน 3 ส่วนที่เชื่อมฐานข้อมูลเดียวกัน:
-
-* **LINE Bot (แกนหลัก)** — พนักงานพิมพ์คุยใน LINE บอทใช้ AI สกัดสินค้า/จำนวน จับคู่กับฐานข้อมูล คำนวณราคาตามโปรโมชัน แล้วออกใบเสนอราคา PDF
-* **Admin Portal** — SPA (React) สำหรับแอดมินจัดการพนักงาน สินค้า โปรโมชัน และลายเซ็น
-* **LIFF Pages** — หน้าเว็บฝังใน LINE (`liff_pages/`) สำหรับค้นหาสินค้า / แก้ไขใบเสนอราคา / ลงทะเบียน ใช้ HTML + Vanilla JS ล้วน
-
-ข้อมูลสินค้า/ลูกค้า/ใบสั่งซื้อ sync มาจาก **Odoo** (ดูหัวข้อ 9)
+1. **ห้ามทำของเดิมพัง** — ระบบใช้งานจริงอยู่และเสถียร ต้นทุนของ regression สูงกว่าประโยชน์ของการปรับปรุงที่ไม่ได้ขอ
+   ⇒ แก้เฉพาะที่ task ต้องการ, เพิ่มของใหม่แบบ additive (ทางเดิมยังทำงานเหมือนเดิม) แทนการรื้อ, ไม่ refactor สิ่งที่ไม่เกี่ยวข้อง
+2. **requirement เปลี่ยนตลอดเวลา** — โครงสร้างต้องพร้อมแก้และดูแลง่ายโดยไม่กระทบของเดิม
+   ⇒ เงื่อนไขธุรกิจอยู่ที่เดียว (ห้ามก๊อปตรรกะไปวางซ้ำ), เคารพ layer, ค่าที่เปลี่ยนบ่อยไปอยู่ DB/config ไม่ใช่ค่าคงที่ในโค้ด, เลือกวิธีที่ "ต่อเติมได้" มากกว่าวิธีที่ "ต้องรื้อ" ในรอบหน้า
 
 ---
 
-## 2. Tech Stack
+## 1. ระบบนี้คืออะไร
+
+ระบบออกใบเสนอราคาสำหรับพนักงานขาย 3 ส่วน ใช้ฐานข้อมูลเดียวกัน:
+
+* **LINE Bot (แกนหลัก)** — เซลล์พิมพ์คุยใน LINE → AI สกัดสินค้า/จำนวน → จับคู่ฐานข้อมูล → คิดราคาตามโปรโมชัน → ออก PDF
+* **Admin Portal** — React SPA (`frontend/`) จัดการพนักงาน สินค้า โปรโมชัน กฎราคา ลายเซ็น และดู api_logs
+* **LIFF Pages** — หน้าเว็บใน LINE (`liff_pages/`) ค้นหาสินค้า / แก้ใบเสนอราคา / ลงทะเบียน
+
+ข้อมูลสินค้า/ลูกค้า/ใบสั่งซื้อ sync มาจาก **Odoo**
 
 | ส่วน | เทคโนโลยี |
 | --- | --- |
-| Backend | Node.js + Express 5 + TypeScript (ESM), entry `index.ts`, runtime `tsx` |
+| Backend | Node.js + Express 5 + TypeScript (ESM, NodeNext) entry `index.ts` runtime `tsx` |
 | AI / LLM | DeepSeek ผ่าน OpenAI SDK — โมเดลกลาง `deepseek-v4-flash` เรียกผ่าน `createChatCompletion()` ใน `config/clients.ts` เท่านั้น |
-| Database | PostgreSQL ผ่าน node-postgres (`pg`) — ใช้ `pool` จาก `config/db.ts` เท่านั้น |
-| LINE | `@line/bot-sdk` — ตอบกลับด้วย **replyToken เท่านั้น** (ห้าม push, ดูหัวข้อ 8) |
-| PDF | Puppeteer ผ่าน `pdfGenerator.ts` (root) เท่านั้น |
-| Admin Frontend | Vite + React 19 + TSX + Tailwind CSS 4 + React Router (โฟลเดอร์ `frontend/`) |
-| LIFF Frontend | HTML + Vanilla JS เสิร์ฟผ่าน Express โดยตรง — **ห้ามใช้ React หรือ Vite** |
-| ค้นหา/จับคู่ | Fuse.js (fuzzy search) |
+| Database | PostgreSQL ผ่าน `pg` — ใช้ `pool` / `withTransaction` จาก `config/db.ts` เท่านั้น |
+| LINE | `@line/bot-sdk` — ตอบด้วย **replyToken เท่านั้น** |
+| PDF | Puppeteer ผ่าน `pdfGenerator.ts` (root) ที่เดียว |
+| Admin | Vite + React 19 + TSX + Tailwind 4 + React Router |
+| LIFF | HTML + Vanilla JS เสิร์ฟผ่าน Express — **ห้าม React/Vite** |
+| ค้นหา | Fuse.js (default import) |
 
 ---
 
-## 3. โครงสร้างโปรเจกต์ (backend เป็น layer: handler → service → repository)
+## 2. โครงสร้าง — backend เป็น layer `route → handler → service → repository`
 
 ```
 chatbot/
-├── index.ts                 # Express entry point + route ทั้งหมด
-├── pdfGenerator.ts          # สร้าง PDF ด้วย Puppeteer — PDF logic อยู่ที่นี่ที่เดียว
+├── index.ts              # Express entry + route ทั้งหมด (ไฟล์ใหญ่ ใช้ grep หา route ที่ต้องการ)
+├── pdfGenerator.ts       # PDF logic ที่เดียวในระบบ
 ├── config/
-│   ├── db.ts                # pool เดียวของทั้งระบบ — ห้ามสร้าง connection ที่อื่น
-│   ├── clients.ts           # LINE client + DeepSeek client + createChatCompletion()
-│   ├── auth.ts              # adminAuthMiddleware (JWT)
-│   └── jwt.ts               # getJwtSecret
+│   ├── db.ts             # pool เดียวของทั้งระบบ + withTransaction — ห้ามสร้าง connection ที่อื่น
+│   ├── clients.ts        # LINE client + DeepSeek client + createChatCompletion() + LLM_MODEL
+│   ├── auth.ts           # adminAuthMiddleware (JWT) + ระดับสิทธิ์
+│   ├── jwt.ts            # getJwtSecret
+│   ├── apiLogger.ts      # middleware บันทึกทุก request ลง api_logs
+│   └── loginRateLimit.ts # กันเดารหัสผ่าน + getClientIp()
 ├── handlers/
-│   └── lineHandler.ts       # รับ event จาก LINE, จัดการ flow การสนทนา
-├── services/                # business logic
-│   ├── quotationService.ts  # สร้าง/ยืนยันใบเสนอราคา (confirmQuotationAtomic, snapshot)
-│   ├── quotationAgent.ts    # AI agent สกัด/ตีความคำสั่งซื้อ
-│   ├── productService.ts    # ค้นหา/จับคู่สินค้า
-│   ├── customerService.ts   # ค้นหา/จับคู่ลูกค้า
-│   ├── syncService.ts       # sync ข้อมูลจาก Odoo
-│   └── rules/               # rule engine ของโปรโมชัน/เงื่อนไข (index, quotationRules, scopeMatch, cache, types)
+│   └── lineHandler.ts    # รับ event LINE, คุม flow การสนทนา
+├── services/             # business logic
+│   ├── quotationService.ts   # สร้าง/ยืนยันใบเสนอราคา (confirmQuotationAtomic, snapshot, กฎราคาขั้นต่ำ)
+│   ├── quotationAgent.ts     # AI สกัด/ตีความคำสั่งซื้อ
+│   ├── productService.ts     # ค้นหา/จับคู่สินค้า
+│   ├── customerService.ts    # ค้นหา/จับคู่ลูกค้า
+│   ├── rules/                # rule engine โปรโมชัน/เงื่อนไข (index, quotationRules, scopeMatch, cache, types)
+│   ├── shippingFee.ts        # ค่าขนส่ง
+│   ├── blacklistService.ts   # บัญชีห้ามเสนอราคา
+│   ├── webhookQueue.ts       # KeyedTaskQueue + งบเวลาตอบ (BUDGET_MS) — หัวใจของ "ตอบทันภายใน replyToken"
+│   ├── pdfCache.ts           # cache PDF ที่ออกเลขแล้ว
+│   ├── apiLogService.ts      # คิวเขียน api_logs (ห้าม throw / ต้อง sync)
+│   ├── odooSaleOrderExport.ts# ส่งออกไป Odoo
+│   └── syncService.ts        # sync จาก Odoo
 ├── db/
-│   └── repositories.ts      # data-access layer — ทุก SQL query อยู่ที่นี่
-├── utils/
-│   ├── pricing.ts           # calcNetPrice, sumLineTotals
-│   ├── promotionValidator.ts# ตรวจสิทธิ์ราคา/โปรโมชันฝั่ง backend
-│   └── flexTemplates.ts     # สร้าง LINE Flex message
-├── liff_pages/              # HTML + Vanilla JS (product-search, quote-edit, register) — ห้ามนำ React เข้ามา
+│   ├── repositories.ts   # data-access layer — ทุก SQL ของระบบอยู่ที่นี่
+│   └── companyIdentity.ts# กติกาการระบุตัวตนบริษัท/ผู้ติดต่อ (ใช้ร่วมหลายที่)
+├── utils/                # pricing, promotionValidator, flexTemplates, address, deliveryTerms,
+│                         # quotationLink, thaiTime, warranty
+├── liff_pages/           # product-search / quote-edit / register (.html) — HTML + Vanilla JS ล้วน
 ├── migrations/
-│   ├── schema.sql           # schema เต็ม
-│   └── changes/             # migration ทีละไฟล์ (YYYY-MM-DD_NN_*.sql)
-├── scripts/                 # sync/, diag/, evalCustomerSearch.ts, runMigration.ts, dbDump/Restore
+│   ├── schema.sql        # schema เต็ม
+│   └── changes/          # migration ทีละไฟล์ `YYYY-MM-DD_NN_*.sql`
+├── scripts/              # sync/ · diag/ · runMigration.ts · dbDump/dbRestore · backfill* · evalCustomerSearch.ts
 ├── data/
-│   ├── sale_sigs/           # ลายเซ็นพนักงานขาย — ชื่อไฟล์: {salesperson_id}.png
-│   └── eval/                # ชุดข้อมูลทดสอบ (customer_search_cases.json ฯลฯ)
-├── frontend/                # Admin SPA (React) — มี package.json/tsconfig/eslint ของตัวเอง
-│   └── src/{admin, components, hooks, context, assets, types}
-└── public/                  # build output ของ admin — ห้ามแก้ไฟล์ในนี้โดยตรง
+│   ├── sale_sigs/        # ลายเซ็น — ชื่อไฟล์ต้องเป็น {salesperson_id}.png
+│   └── eval/             # ชุดข้อมูลทดสอบ
+├── frontend/             # Admin SPA (มี package.json/tsconfig/eslint ของตัวเอง)
+│   └── src/{admin, context, assets}   # หน้าจอ admin เป็นไฟล์ .tsx แบนใน frontend/src/admin/
+└── public/               # build output ของ admin — ห้ามแก้ไฟล์ในนี้โดยตรง
 ```
+
+**กฎ layer:** route/handler ไม่ยิง SQL เอง → เรียก service; service ดึงข้อมูลผ่าน `db/repositories.ts`; ตรรกะราคา/สิทธิ์อยู่ใน `utils/` + `services/rules/` ไม่ใช่ใน handler
+**ของใหม่ไปไว้ไหน:** SQL → `db/repositories.ts` · business logic → `services/` · ตัวช่วยไม่มี state → `utils/` · เงื่อนไขโปรโมชัน → `services/rules/` · ตาราง/คอลัมน์ → migration ใหม่
 
 ### แผนที่งาน → เริ่มอ่านที่ไหน
 
 | งานเกี่ยวกับ | เริ่มที่ |
 | --- | --- |
 | flow การคุยใน LINE | `handlers/lineHandler.ts` |
+| ความเร็ว/คิว/ตอบไม่ทัน | `services/webhookQueue.ts`, `index.ts` (POST /callback) |
 | สกัดคำสั่งซื้อด้วย AI | `services/quotationAgent.ts`, `config/clients.ts` |
 | สร้าง/ยืนยันใบเสนอราคา | `services/quotationService.ts` |
 | ค้นหาสินค้า/ลูกค้า | `services/productService.ts`, `services/customerService.ts` |
@@ -85,156 +99,126 @@ chatbot/
 | SQL / ตาราง | `db/repositories.ts`, `migrations/schema.sql` |
 | route / API / auth | `index.ts`, `config/auth.ts` |
 | Flex message / PDF | `utils/flexTemplates.ts`, `pdfGenerator.ts` |
+| log การเรียก API | `config/apiLogger.ts`, `services/apiLogService.ts` |
 
 ---
 
-## 4. Business Rules
-
-* **LIFF ID:** ดึงจาก `/api/liff/config?page=` เสมอ — ห้าม hardcode ทุกที่
-* **ลายเซ็น:** ชื่อไฟล์ต้องเป็น `{salesperson_id}.png` — อัปโหลดได้เฉพาะแอดมิน
-* **Promotion:** ตรวจสิทธิ์ทั้งฝั่ง LIFF (UI) และ Backend (API) — ห้ามตรวจแค่ฝั่งเดียว
-* **Auth:** `/api/admin/*` ต้องผ่าน JWT middleware (`adminAuthMiddleware`), `/api/liff/*` ใช้ LINE access token
-* **ตอบ LINE:** ใช้ replyToken เท่านั้น ไม่ใช้ push (ดูเหตุผลหัวข้อ 8)
-
----
-
-## 5. Conventions — วิธีเขียนโค้ดในโปรเจกต์นี้ (กันพังตั้งแต่ต้น)
-
-ต่อไปนี้คือ pattern ที่ต้องทำตามให้ตรง มิฉะนั้นโค้ดจะ build ไม่ผ่านหรือพังเงียบ:
-
-* **ESM import ต้องลงท้าย `.js`** — โปรเจกต์เป็น `NodeNext` ESM แม้ไฟล์ต้นทางเป็น `.ts` ก็ต้อง import ด้วย `.js`
-  * ถูก: `import { pool } from './config/db.js'`
-  * ผิด: `import { pool } from './config/db'` (รันไม่ขึ้น)
-* **Database:** ใช้ `pool.query('SELECT ... WHERE id = $1', [id])` จาก `config/db.ts` เท่านั้น
-  * ห้าม Supabase-style (`.eq .or .ilike .in .select`), ห้ามต่อ string ค่าเข้า SQL (ต้อง parameterized), ห้ามสร้าง connection ใหม่
-  * เพิ่ม/แก้ตาราง: เขียนไฟล์ใหม่ใน `migrations/changes/` แล้วรันผ่าน `scripts/runMigration.ts` — ห้ามแก้ schema ด้วยมือนอก migration
-* **LLM:** เรียกผ่าน `createChatCompletion()` เท่านั้น (ตั้ง `thinking: disabled` + `temperature: 0` ให้แล้ว เพื่อความเร็วและผลลัพธ์คงที่) — ห้ามสร้าง OpenAI client ใหม่ หรือ hardcode ชื่อโมเดล
-* **LINE Flex message ต้องระบุ type เป็น literal เสมอ:**
-  * ถูก: `const msg: FlexMessage = { type: 'flex', ... }` หรือ `{ type: 'flex' as const, ... }`
-  * ผิด: `{ type: 'flex', ... }` (TS มองเป็น `string` ไม่ใช่ literal → type error)
-* **Fuse.js:** `import Fuse from 'fuse.js'` (default import, เพราะ `esModuleInterop: true`)
-* **TypeScript:** ทั้ง backend และ admin เป็น `strict` — เลี่ยง `any` ที่ไม่จำเป็น, อย่านิยาม type ซ้ำ ใช้จาก `frontend/src/types/` (สำหรับ admin)
-
----
-
-## 6. กฎการทำงาน
-
-### 6.1 วางแผนตามระดับความเสี่ยง
-
-ปรับความเข้มของ "วางแผนก่อนลงมือ" ตามงาน:
-
-* **อ่าน / สืบสวน / ตอบคำถาม (read-only):** ทำได้ทันที ไม่ต้องขออนุมัติ และ**สืบสวนหลายไฟล์พร้อมกันได้**
-* **แก้เล็ก reversible** (typo, ข้อความ, ปรับ 1 จุดที่ไม่กระทบ logic อื่น): บอกสั้น ๆ ว่าจะทำอะไรแล้วลงมือได้เลย
-* **แก้ business logic / หลายไฟล์ / DB / อะไรที่ย้อนยาก:** เขียน implementation plan เป็นภาษาไทย แล้ว**หยุดรอการอนุมัติ**ก่อนลงมือ
-
-การอนุมัติดูที่**เจตนา**ของผู้ใช้ ไม่ใช่คำเป๊ะ ๆ ("ได้เลย", "เอาเลย", "ทำต่อ", "โอเค", "ok", "go", 👍 ล้วนถือว่าอนุมัติ) ถ้ายังไม่ชัดให้ถาม
-
-### 6.2 ทำการแก้ไขทีละอย่าง
-
-การ**แก้ไข**ให้ทำทีละหน่วยตรรกะ (ไม่ทำหลายอย่างพันกันในครั้งเดียว) แต่การ**อ่าน**ขนานกันได้
-ทุกการแก้ไขต้องผ่าน Self-Review (6.4) และ Dead Code Review (6.5) ก่อนรายงาน
-
-### 6.3 Scope = 1 การเปลี่ยนแปลงเชิงตรรกะ
-
-1 task = 1 การเปลี่ยนแปลงที่สมเหตุสมผลและ**ทำให้ต้นไม้โค้ดยัง typecheck ผ่าน** เช่น เปลี่ยน signature ของฟังก์ชัน + อัปเดต caller ทั้งหมด = 1 task (ห้ามทิ้งโค้ดค้างในสถานะ compile ไม่ผ่าน)
-ห้ามแก้ไฟล์นอกแผน / ห้าม refactor โค้ดที่ไม่เกี่ยวข้อง — ถ้าจำเป็นต้องออกนอก scope ให้หยุดแจ้งก่อน
-
-### 6.4 Self-Review — ห้ามข้าม
-
-เลือกความเข้มตามขนาดงาน:
-
-* **งานเล็ก (แก้ 1 จุด ไม่กระทบ logic):** ไล่อ่าน diff + รัน typecheck (หัวข้อ 7) ให้ผ่าน
-* **งานแตะ logic / หลายไฟล์:** ไล่เต็ม checklist ด้านล่าง
-
-**Syntax & Type** — ไม่มี syntax error / import หายหรือลืม `.js` / path ผิด / `any` เกินจำเป็น / ตัวแปรไม่ได้ declare
-**Logic** — flow ครบ, จัดการ edge case (null/undefined/array ว่าง), ไม่มี unused variable
-**Integration** — ชื่อ function/variable/type ตรงกับไฟล์อื่น, API path ถูก, DB ผ่าน `pool.query()`, Flex message ระบุ type literal
-**Security** — ไม่มี hardcode secret/LIFF ID, `/api/admin/*` มี auth, ไม่มี PDF logic นอก `pdfGenerator.ts`, `liff_pages/` ไม่มี React/Vite
-**Refactoring Impact** — ตรวจ reference ของทุกสิ่งที่แก้, import/export สอดคล้อง, ไม่เหลือ dead code
-
-พบปัญหาแก้ก่อนรายงาน — **ห้ามรายงานว่าเสร็จทั้งที่รู้ว่ายังมีปัญหา** ถ้า verify ไม่ผ่านให้รายงานตามจริงพร้อม output
-
-### 6.5 Dead Code Review
-
-เมื่อแก้/ลบ/เปลี่ยนอะไร ให้ทำ Impact Analysis: ตรวจ caller, callee, type/interface, จุดเชื่อม frontend↔backend, API contract, และ DB field/query ที่เกี่ยวข้อง
-
-* [ ] ไม่มี function/component/hook/endpoint/type/import/branch ที่ไม่ได้ใช้แล้ว
-* [ ] ไม่มี state/props/variable ที่ไม่ได้ใช้
-* [ ] ไม่มี DB field/query ที่เป็นของเหลือจากระบบเดิม
-
-dead code ที่เกิดจาก task นี้และอยู่ใน scope → ลบเลย
-dead code ที่กระทบนอก scope → หยุดและแจ้งก่อน
-
-### 6.6 ระบุวิธีทดสอบทุก task
-
-บอกวิธี verify ที่ชัดเจนเสมอ — คำสั่งอัตโนมัติ (หัวข้อ 7) ถ้ามี ไม่งั้นระบุขั้นตอน manual ที่ทำตามได้จริง
-
----
-
-## 7. Verify — คำสั่งตรวจงานที่รันได้จริง
-
-ใช้เครื่องมือเหล่านี้ยืนยันงานก่อนรายงานเสร็จ (อย่าอาศัยการอ่านด้วยตาอย่างเดียว):
-
-```bash
-npx tsc --noEmit                      # typecheck backend ทั้งหมด (tsconfig root exclude frontend อยู่แล้ว) — ต้องผ่าน
-npm --prefix frontend run lint        # eslint ของ admin
-npm --prefix frontend run build       # typecheck + build admin (tsc -b && vite build)
-```
-
-Harness เฉพาะโดเมน (ใช้เมื่อแตะส่วนที่เกี่ยว):
-
-```bash
-tsx scripts/evalCustomerSearch.ts     # gate: รันก่อน/หลังทุกครั้งที่แก้ logic จับคู่ลูกค้า แล้วเทียบผล
-npm run diag:confirm-race             # ตรวจ race ตอนยืนยันใบเสนอราคา
-npm run diag:date-filter              # gate: ตัวกรองช่วงวันที่ต้องให้ผลเท่ากันทุก TimeZone ของ DB
-```
-
-> ยังไม่มี unit test suite (`npm test` เป็น stub) — typecheck + diag/eval harness คือด่านตรวจหลักของระบบนี้
-
----
-
-## 8. ข้อห้ามเด็ดขาด & Deploy Checklist
-
-ตรวจทุกข้อก่อน deploy และห้ามละเมิดในทุก task:
-
-**Security**
-* [ ] ไม่มี hardcode LIFF ID / secret / DB connection string
-* [ ] `/api/admin/*` ทุก endpoint มี JWT middleware
-* [ ] ทุก SQL เป็น parameterized query (กัน SQL injection)
-
-**Database**
-* [ ] ใช้ `pool.query(sql, [params])` จาก `config/db.ts` เท่านั้น — ห้าม Supabase-style (`.eq .or .ilike .in .select`) และห้ามสร้าง connection ใหม่
+## 3. กฎเหล็ก — ห้ามละเมิดในทุก task (และเช็คซ้ำก่อน deploy)
 
 **LINE**
-* [ ] **ห้ามใช้ push message** — ใช้ replyToken เท่านั้น
-  เหตุผล: push มีโควตารายเดือนและมีค่าใช้จ่ายเมื่อเกินโควตา ขณะที่ระบบนี้ทำงานแบบตอบกลับ event (reply ฟรี) การเผลอใช้ push จะกินโควตาและอาจส่งไม่ออกใน production
+* [ ] **ห้ามใช้ push message** ใช้ `replyToken` เท่านั้น — push มีโควตารายเดือนและมีค่าใช้จ่ายเมื่อเกิน ส่วน reply ฟรี เผลอใช้แล้วจะกินโควตาและอาจส่งไม่ออกใน production
+* [ ] replyToken อายุ **1 นาทีนับจากรับ webhook** ใช้ได้ครั้งเดียว — ทุกคำตอบต้องผลิตเสร็จใน `BUDGET_MS` จะ ack ก่อนแล้วตอบทีหลังไม่ได้
 
-**Stack Boundary**
+**Database**
+* [ ] ใช้ `pool.query(sql, [params])` จาก `config/db.ts` เท่านั้น — ห้าม Supabase-style (`.eq .or .ilike .in .select`) ห้ามสร้าง connection ใหม่
+* [ ] parameterized ทุก query — ห้ามต่อ string ค่าเข้า SQL
+* [ ] แก้ schema ต้องเขียนไฟล์ใหม่ใน `migrations/changes/` แล้วรัน `tsx scripts/runMigration.ts` — ห้ามแก้ schema ด้วยมือ
+* [ ] **ห้ามใส่ `COMMENT ON` (COLUMN/TABLE/VIEW/INDEX)** ใน migration หรือยิงเข้า DB เว้นแต่ผู้ใช้สั่งเอง — อธิบายด้วย `--` ในไฟล์ migration แทน
+
+**Security**
+* [ ] ไม่มี hardcode secret / LIFF ID / DB connection string — LIFF ID ดึงจาก `/api/liff/config?page=` เสมอ
+* [ ] `/api/admin/*` ทุก endpoint ผ่าน `adminAuthMiddleware` (JWT) · `/api/liff/*` ตรวจ LINE access token
+* [ ] Promotion/สิทธิ์ราคา ตรวจทั้งฝั่ง LIFF (UI) และ Backend (API) — ห้ามตรวจแค่ฝั่งเดียว
+
+**Stack boundary**
 * [ ] `liff_pages/` เป็น HTML + Vanilla JS ล้วน — ไม่มี React/Vite
 * [ ] ไม่มี PDF logic นอก `pdfGenerator.ts`
-* [ ] ไม่แก้ไฟล์ใน `public/` โดยตรง (เป็น build output)
-* [ ] ไม่แตะ AI/LLM client โดยตรง — เรียกผ่าน `createChatCompletion()`
+* [ ] ไม่แตะ LLM client ตรง ๆ — เรียกผ่าน `createChatCompletion()` และห้าม hardcode ชื่อโมเดล
+* [ ] ไม่แก้ไฟล์ใน `public/` (build output)
+* [ ] ลายเซ็นต้องชื่อ `{salesperson_id}.png` อัปโหลดได้เฉพาะแอดมิน
 
-**Code Quality**
-* [ ] ไม่มี `any` เกินจำเป็น, ไม่นิยาม type ซ้ำ (admin ใช้จาก `frontend/src/types/`)
-* [ ] LINE message ระบุ type literal เสมอ, Fuse.js ใช้ default import
-* [ ] ไม่เหลือ function/type/component/endpoint/import ที่ไม่ได้ใช้ค้างในระบบ
-
-**ห้ามเด็ดขาด:** รายงานว่า task เสร็จโดยยังไม่ผ่าน Self-Review + verify
+**กระบวนการ**
+* [ ] ห้ามรายงานว่า task เสร็จโดยยังไม่ผ่าน Self-Review + verify (หัวข้อ 6–7)
 
 ---
 
-## 9. Scripts
+## 4. Conventions — ผิดแล้ว build ไม่ผ่านหรือพังเงียบ
 
-**Sync จาก Odoo**
-* สินค้า: `npm run sync:products`
-* ลูกค้า: `npm run sync:customers`
-* ใบสั่งซื้อ: `npm run sync:saleorders`
+* **ESM import ต้องลงท้าย `.js`** แม้ไฟล์ต้นทางเป็น `.ts`
+  ถูก `import { pool } from './config/db.js'` · ผิด `'./config/db'` (รันไม่ขึ้น)
+* **LINE Flex ต้องระบุ type เป็น literal** — `const msg: FlexMessage = { type: 'flex', ... }` หรือ `type: 'flex' as const` ไม่งั้น TS มองเป็น `string` → type error
+* **Fuse.js** ใช้ default import (`esModuleInterop: true`)
+* **LLM** `createChatCompletion()` ตั้ง `thinking: disabled` + `temperature: 0` มาให้แล้ว (เร็วกว่าและผลคงที่) จะ override เฉพาะจุดก็ส่ง param เข้ามาได้
+* **TypeScript strict** ทั้ง backend และ admin — เลี่ยง `any` ที่ไม่จำเป็น อย่านิยาม type ซ้ำ
 
-**Dev / Run**
-* `npm run dev` — API (tsx watch) | `npm run dev:web` — admin | `npm run dev:all` — API + admin + ngrok พร้อมกัน
+---
 
-**Database**
-* `npm run db:dump` / `npm run db:restore` — dump/restore | `tsx scripts/runMigration.ts` — รัน migration ใน `migrations/changes/`
+## 5. กับดักที่เคยทำระบบพังทั้งระบบ (อ่านก่อนแตะจุดเหล่านี้)
 
-**Diagnostics / Eval** — อยู่ใน `scripts/diag/` และ `scripts/evalCustomerSearch.ts` (ดูหัวข้อ 7)
+* **ห้ามเติม `express.json()` หรือ body parser แบบ global** — `line.middleware()` ที่ `POST /callback` ต้องได้ raw body ไปคำนวณ HMAC ของ `x-line-signature` ถ้ามีใคร parse ก่อน ลายเซ็นจะไม่ผ่าน = บอทหยุดตอบทั้งระบบ
+* **ใน `withTransaction()`** ห้ามเรียก `pool.query` (ต้องใช้ client ที่รับมา) · ห้าม `res.json()` (return ค่าออกไปตอบหลัง COMMIT) · ห้ามยิง network (LLM/LINE/puppeteer) เพราะจะเปิด transaction ค้าง
+* **กฎ "ห้ามขายต่ำกว่าราคาขั้นต่ำ" มีที่เดียว** ใน `services/quotationService.ts` (fail-closed) — ห้ามก๊อปตรรกะไปเขียนซ้ำที่อื่น
+* **อ่าน IP ด้วย `getClientIp()` เท่านั้น** ห้ามอ่าน `req.socket.remoteAddress` ตรง ๆ
+* **การจับคู่ลูกค้า** ชื่อคล้ายกันอาจคนละนิติบุคคล — ห้าม normalize/ยุบชื่อเพิ่มเองโดยไม่รัน eval เทียบผล
+* **`scripts/diag/*Smoke.ts`** ที่จบด้วย ROLLBACK ห้ามเปลี่ยนเป็น COMMIT
+
+---
+
+## 6. วิธีทำงาน
+
+**6.1 วางแผนตามความเสี่ยง**
+* อ่าน/สืบสวน/ตอบคำถาม (read-only) → ทำได้ทันที ไม่ต้องขออนุมัติ และอ่านหลายไฟล์ขนานกันได้
+* แก้เล็ก reversible (typo, ข้อความ, จุดเดียวไม่กระทบ logic) → บอกสั้น ๆ แล้วลงมือ
+* แก้ business logic / หลายไฟล์ / DB / อะไรที่ย้อนยาก → เขียน implementation plan ภาษาไทย แล้ว **หยุดรออนุมัติ**
+
+การอนุมัติดูที่เจตนา ("ได้เลย" "เอาเลย" "ทำต่อ" "ok" "go" 👍 = อนุมัติ) ไม่ชัดให้ถาม
+
+**6.2 Scope = 1 การเปลี่ยนแปลงเชิงตรรกะ**
+แก้ทีละหน่วยตรรกะ และต้องทำให้ต้นไม้โค้ดยัง typecheck ผ่าน (เปลี่ยน signature + อัปเดต caller ทั้งหมด = 1 task)
+ห้ามแก้ไฟล์นอกแผน ห้าม refactor สิ่งที่ไม่เกี่ยว — ถ้าจำเป็นต้องออกนอก scope ให้หยุดแจ้งก่อน
+
+**6.3 Self-Review — ห้ามข้าม**
+* งานเล็ก: อ่าน diff + typecheck ผ่าน
+* งานแตะ logic/หลายไฟล์: ไล่ครบทั้ง 5 ด้าน
+  - **Syntax & Type** — import ครบและลงท้าย `.js`, path ถูก, ไม่มี `any` เกินจำเป็น
+  - **Logic** — flow ครบ, edge case (null/undefined/array ว่าง), ไม่มี unused variable
+  - **Integration** — ชื่อ function/type ตรงกับไฟล์อื่น, API path ถูก, DB ผ่าน `pool.query()`, Flex ใช้ type literal
+  - **Security** — ตามหัวข้อ 3
+  - **Regression** — ทางเดิมยังทำงานเหมือนเดิม, ตรวจ caller/callee ทุกจุดที่แก้, frontend↔backend contract ยังตรง
+
+**6.4 Dead Code Review** — ไม่เหลือ function/component/hook/endpoint/type/import/branch/state/DB field ที่ไม่ได้ใช้
+dead code ที่เกิดจาก task นี้และอยู่ใน scope → ลบเลย · ที่กระทบนอก scope → หยุดแจ้งก่อน
+
+**6.5 ระบุวิธีทดสอบทุก task** — คำสั่งอัตโนมัติถ้ามี ไม่งั้นบอกขั้นตอน manual ที่ทำตามได้จริง
+พบปัญหาแก้ก่อนรายงาน ถ้า verify ไม่ผ่านให้รายงานตามจริงพร้อม output
+
+---
+
+## 7. Verify — ยืนยันด้วยคำสั่ง อย่าอาศัยการอ่านด้วยตา
+
+```bash
+npx tsc --noEmit                   # typecheck backend ทั้งหมด — ต้องผ่าน
+npm --prefix frontend run lint     # eslint ของ admin
+npm --prefix frontend run build    # typecheck + build admin
+```
+
+Harness เฉพาะโดเมน (รันเมื่อแตะส่วนที่เกี่ยว — ตัวที่เป็น gate ให้รันทั้งก่อนและหลังแล้วเทียบผล):
+
+```bash
+tsx scripts/evalCustomerSearch.ts   # gate: logic จับคู่ลูกค้า
+npm run diag:date-filter            # gate: ตัวกรองวันที่ต้องเท่ากันทุก TimeZone ของ DB
+npm run diag:confirm-race           # race ตอนยืนยันใบเสนอราคา
+npm run diag:quote-validation       # กฎ validate ใบเสนอราคา
+npm run diag:stock-rule             # กฎสต็อก (มี :stock-rule-put ด้วย)
+npm run diag:shipping-fee           # ค่าขนส่ง
+npm run diag:pdf-render             # เรนเดอร์ PDF (มี :pdf-cache ด้วย)
+npm run diag:queue-sim              # คิว/งบเวลาตอบ (มี :load-probe, :abort-check, :shutdown-check)
+npm run diag:api-log                # api_logs
+npm run diag:odoo-export            # ส่งออก Odoo (มี :export-tracking ด้วย)
+```
+
+> ไม่มี unit test suite (`npm test` เป็น stub) — typecheck + diag/eval คือด่านตรวจหลัก ดูรายการเต็มใน `package.json`
+
+---
+
+## 8. Scripts ที่ใช้บ่อย
+
+* **Dev:** `npm run dev` (API) · `npm run dev:web` (admin) · `npm run dev:all` (API + admin + ngrok)
+* **Sync Odoo:** `npm run sync:products` · `sync:customers` · `sync:saleorders`
+* **DB:** `npm run db:dump` · `npm run db:restore` · `tsx scripts/runMigration.ts`
+* **Backfill:** `npm run backfill:contacts` · `backfill:delivery-terms` · `backfill:print-snapshot`
+
+## 9. เอกสารอื่น
+
+* `DEPLOY.md` — deploy ด้วย Docker, ตั้ง LINE webhook, กฎ LIFF ต้องอยู่ provider เดียวกับ Messaging API channel, กู้รหัสผ่าน admin, แก้ปัญหาเบื้องต้น
+* `README.md` — คำอธิบายโครงสร้างแบบละเอียด
