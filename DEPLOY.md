@@ -195,8 +195,8 @@ git pull --ff-only origin main
 เช็คสถานะ DB จริงว่าขาดตัวไหน (คำสั่งเดียวตอบครบ — เพิ่มบรรทัดเองได้เมื่อมี migration ใหม่):
 ```bash
 docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" -c "
-SELECT to_regclass('public.customers_data_view') AS matview,
-       to_regproc('public.clean_text(text)')     AS clean_text,
+SELECT to_regclass('public.customers_data_view')  AS matview,
+       to_regprocedure('public.clean_text(text)') AS clean_text,
        EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('public.customers_data_view')
               AND attname='sales_team' AND NOT attisdropped)                                  AS sales_team,
        EXISTS(SELECT 1 FROM information_schema.columns
@@ -206,6 +206,8 @@ SELECT to_regclass('public.customers_data_view') AS matview,
        to_regclass('public.quotation_export_batches')                                         AS export_batches,
        to_regclass('public.api_logs')                                                         AS api_logs;"
 ```
+> คอลัมน์ `clean_text` ต้องใช้ **`to_regprocedure`** ไม่ใช่ `to_regproc` — `to_regproc` รับได้แค่ชื่อฟังก์ชันเปล่า
+> ใส่ `(text)` ต่อท้ายจะคืน null ทุกครั้งแม้ฟังก์ชันมีอยู่จริง = สัญญาณเตือนหลอกว่า migration ขาด
 รันเฉพาะไฟล์ที่ผลข้างบนบอกว่ายังไม่มี เรียงตามชื่อไฟล์ (วันที่):
 ```bash
 for f in migrations/changes/<ไฟล์ที่ขาด>.sql ; do
