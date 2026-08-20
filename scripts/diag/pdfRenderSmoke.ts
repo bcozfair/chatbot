@@ -134,6 +134,23 @@ for (let i = 0; i < RUNS; i++) {
   last = { bytes: buf.length, fonts: embeddedFonts(buf), streams: hashes.length, undecodable };
 }
 
+// ── ตรึงจริงไหม ───────────────────────────────────────────────────────────────
+// เอกสารที่ออกเลขแล้วต้องพิมพ์ซ้ำได้เหมือนเดิม แม้ข้อมูลต้นทางจะขยับไปแล้ว
+// ทดสอบด้วยการ "ทำให้ค่าสดเพี้ยน" ในหน่วยความจำ ไม่แตะ DB จึงยังปลอดภัยบน production
+const baseHashes = [...contentSets][0];
+const clone = () => JSON.parse(JSON.stringify(enriched));
+
+// (ก) สต๊อกขยับ → PDF ต้องไม่ขยับ (ค่ามาจาก print_snapshot ที่ตรึงตอนยืนยัน)
+const hasPrintSnapshot = Array.isArray(enriched.print_snapshot?.item_stock);
+const drifted = clone();
+(drifted.items || []).forEach((it: any) => { it.stock = (Number(it.stock) || 0) + 9999; });
+const driftedHashes = contentHashes(await generateQuotationPDF(drifted, quoteNo)).hashes.join(',');
+
+// (ข) created_at ขยับ → PDF ต้องขยับ (พิสูจน์ว่าวันที่บนหัวเอกสารมาจาก created_at ไม่ใช่วันนี้)
+const shifted = clone();
+shifted.created_at = new Date(new Date(enriched.created_at).getTime() - 40 * 86400_000).toISOString();
+const shiftedHashes = contentHashes(await generateQuotationPDF(shifted, quoteNo)).hashes.join(',');
+
 console.log(`\n── ผล (${RUNS} รอบ หลังอุ่นเครื่อง ${WARMUP} รอบ) ──`);
 console.log(`เวลา: ${times.join(' / ')} ms (เร็วสุด ${Math.min(...times)})` +
             ` · ขนาด ${last!.bytes} ไบต์ · ${last!.streams} stream`);
@@ -145,6 +162,15 @@ for (const f of REQUIRED_FONTS) {
      last!.fonts.includes(f) ? '' : '← ฟอนต์ไม่ทันโหลด PDF จะเพี้ยน');
 }
 ok('เนื้อหานิ่งทุกรอบ', contentSets.size === 1, `ได้ ${contentSets.size} แบบใน ${RUNS} รอบ`);
+if (hasPrintSnapshot) {
+  ok('สต๊อกถูกตรึง — สต๊อกเพี้ยน +9999 แล้ว PDF ไม่เปลี่ยน', driftedHashes === baseHashes,
+     driftedHashes === baseHashes ? '' : '← ยังอ่านสต๊อกสด ใบเก่าจะเปลี่ยนหน้าตาตามของเข้า/ออก');
+} else {
+  console.log('  – ข้ามการตรวจ "สต๊อกถูกตรึง" — ใบนี้ยังไม่มี print_snapshot (รัน backfill:print-snapshot)');
+}
+ok('วันที่บนเอกสารมาจาก created_at — เลื่อน created_at 40 วันแล้ว PDF เปลี่ยน',
+   shiftedHashes !== baseHashes,
+   shiftedHashes !== baseHashes ? '' : '← วันที่ยังยึด "วันนี้" ใบเก่าจะลงวันที่ผิดทุกครั้งที่เปิด');
 ok('ทุก stream แกะได้', last!.undecodable === 0, `แกะไม่ออก ${last!.undecodable}`);
 const fastest = Math.min(...times);
 const floor = await measureNetworkIdleFloor();

@@ -1469,10 +1469,15 @@ const downloadPdfHandler = async (req: any, res: any) => {
     const quoteNo = enrichedQuote.quotation_no || 'DRAFT';
 
     // ดึงข้อมูลพนักงานขาย (Salesperson) เพื่อนำชื่อและเบอร์โทรไปใส่ใน PDF
+    //
+    // ใบที่ออกเลขแล้วใช้ employee_details ที่ตรึงไว้ในใบเท่านั้น (enrichQuotationData เติมมาให้แล้ว)
+    // — เอกสารที่ส่งลูกค้าไปแล้วต้องพิมพ์ซ้ำได้เหมือนเดิม เซลแก้เบอร์/เปลี่ยนชื่อทีหลังไม่ควรย้อนไปแก้ใบเก่า
+    // ผลพลอยได้: ตัด query ตาราง salesperson ออกจากการเจน PDF ของใบที่ออกแล้วทุกใบ
+    const isIssuedQuote = !!String(enrichedQuote.quotation_no || '').trim();
     let salespersonName = '';
     let salespersonPhone = '';
     let salespersonEmployeeCode = null;
-    if (enrichedQuote.user_id) {
+    if (!isIssuedQuote && enrichedQuote.user_id) {
       try {
         const spRes = await pool.query(
           'SELECT name, phone, salesperson_id FROM salesperson WHERE user_id = $1 LIMIT 1',
@@ -1489,9 +1494,11 @@ const downloadPdfHandler = async (req: any, res: any) => {
       }
     }
 
-    // ข้อมูลสดมาก่อน แล้วค่อย fallback ไป snapshot ที่ enrichQuotationData เติมไว้จาก employee_details
-    // จำเป็นตอนพนักงานถูกลบ — FK ตั้ง quotations.user_id = NULL ทำให้ query ข้างบนไม่เจอใคร
-    // ถ้าไม่ fallback ใบเก่าที่โหลดซ้ำจะไม่มีชื่อผู้ขาย เบอร์ และลายเซ็น
+    // ใบร่าง: ข้อมูลสดมาก่อน แล้ว fallback ไป snapshot จาก employee_details
+    // ใบที่ออกเลขแล้ว: ตัวแปรสดทั้งสามเป็นค่าว่างเสมอ (ข้ามการ query ไปข้างบน) จึงตกมาใช้ snapshot
+    //
+    // snapshot ครอบเคส "พนักงานถูกลบ" ที่ fallback เดิมมีไว้กันอยู่แล้ว — FK ตั้ง user_id = NULL
+    // แล้วหาไม่เจอ ถ้าไม่มี fallback ใบเก่าจะไม่มีชื่อผู้ขาย เบอร์ และลายเซ็น
     enrichedQuote.salesperson_name = salespersonName || enrichedQuote.salesperson_name || '';
     enrichedQuote.salesperson_phone = salespersonPhone || enrichedQuote.salesperson_phone || '';
     enrichedQuote.salesperson_employee_code =

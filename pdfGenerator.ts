@@ -108,9 +108,38 @@ function splitSalesDescriptionLines(desc: string): string[] {
     .filter(Boolean);
 }
 
+/**
+ * แทนค่า "ที่คำนวณสด" ในรายการสินค้าด้วยค่าที่ตรึงไว้ตอนยืนยันใบ
+ *
+ * enrichQuotationData() ดึงสต๊อกสดจาก products และตัดสิน is_shipping_fee จาก config สดทุกครั้ง
+ * ซึ่งถูกสำหรับใบร่าง (เซลกำลังดูของจริง) แต่ผิดสำหรับเอกสารที่ส่งลูกค้าไปแล้ว
+ *
+ * คืน array เดิมกลับไปตรง ๆ เมื่อไม่มีอะไรให้ตรึง — ใบร่างและใบเก่าก่อน deploy จึงได้ผลเท่าเดิมทุกไบต์
+ */
+function freezePrintItems(items: any[], snapshots: any[], printSnapshot: any): any[] {
+  const frozenStock = Array.isArray(printSnapshot?.item_stock) && printSnapshot.item_stock.length === items.length
+    ? printSnapshot.item_stock
+    : null;
+  // delivery_source เป็นเครื่องหมายถาวรที่ buildShippingFeeSnapshot เขียนไว้ในบรรทัดค่าขนส่ง
+  // ใบเก่ามาก ๆ ไม่มีคีย์นี้ (ตรวจแล้ว 2 จาก 679 ใบ) — เคสนั้นถอยไปใช้ค่าจาก enrich เหมือนเดิม
+  const snapsAligned = Array.isArray(snapshots) && snapshots.length === items.length;
+  if (!frozenStock && !snapsAligned) return items;
+
+  return items.map((item: any, i: number) => {
+    const snap = snapsAligned ? snapshots[i] : null;
+    const out = { ...item };
+    if (frozenStock) out.stock = Number(frozenStock[i]) || 0;
+    if (snap && snap.delivery_source !== undefined) {
+      out.is_shipping_fee = snap.delivery_source === 'shipping_fee';
+    }
+    return out;
+  });
+}
+
 export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string | null): Promise<Uint8Array> {
-  const itemsList = quoteData.items || [];
   const itemSnapshots = quoteData.item_details || [];
+  // ทุกจุดที่อ่าน stock / is_shipping_fee ด้านล่างใช้ตัวนี้ต่อ จึงไม่มีทางหลงเหลือค่าสด
+  const itemsList = freezePrintItems(quoteData.items || [], itemSnapshots, quoteData.print_snapshot);
 
   // คำนวณวันรับประกันและระยะเวลาจัดส่ง
   let minWarrantyDisplay = DEFAULT_WARRANTY_DISPLAY;
@@ -220,8 +249,18 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
   const vat = calcVat(discountedSubTotal);
   const grandTotal = calcGrandTotal(discountedSubTotal);
 
+  // ใบที่มีเลขที่แล้ว = เอกสารที่ออกไปแล้ว ต้องพิมพ์ซ้ำได้เหมือนเดิมทุกครั้ง
+  // ใบร่างยังไม่ใช่เอกสาร จึงยังคำนวณสดเหมือนเดิมทุกอย่าง
+  const issuedNo = String(quoteData.quotation_no || '').trim();
+  const isIssued = issuedNo !== '';
+
   // วันไทยเสมอ ไม่พึ่ง TZ ของโปรเซส — บน UTC วันที่บนหัวเอกสารจะเลื่อนไปวันก่อนหน้าช่วง 00:00–07:00 น.
-  const dateStr = thaiDateDMY();
+  //
+  // ใบที่ออกเลขแล้วยึด created_at (วันที่ออกใบ) ไม่ใช่วันที่เปิดดู — เป็นตัวเดียวกับที่
+  // allocateQuotationNo() ใช้คำนวณงวดของเลขที่ใบ วันที่กับเลขที่จึงตรงกันเสมอ
+  // ใบ revise เป็นแถวใหม่คนละ created_at จึงลงวันที่ที่ revise ถูกต้องอยู่แล้ว
+  const issuedAt = isIssued && quoteData.created_at ? new Date(quoteData.created_at) : null;
+  const dateStr = issuedAt && !isNaN(issuedAt.getTime()) ? thaiDateDMY(issuedAt) : thaiDateDMY();
 
   const quoteNo = quoteNoInput || (quoteData.quotation_no
     ? quoteData.quotation_no
@@ -229,10 +268,15 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
       ? quoteData.id.split("-")[0].toUpperCase()
       : "DRAFT"));
 
-  // พิจารณาค่ายจาก resolveQuoteCompany (เช็ค quotation_rules) โดยใช้รายการสินค้าแรกเป็น reference
-  // ถ้าไม่มีสินค้าให้ fallback ไปเช็ค prefix ของเลขที่ใบเสนอราคา
+  // ค่ายของใบที่ออกเลขแล้วอ่านจาก prefix ของเลขที่ได้ตรง ๆ — allocateQuotationNo() ตั้ง prefix
+  // จากผลของ resolveQuoteCompany() ตอนออกเลข prefix จึงเป็นคำตอบที่ "ตรึงไว้แล้ว" ของใบนั้น
+  // เชื่อถือได้กว่าการคำนวณสดซ้ำ (แอดมินแก้ quotation_rules ทีหลังแล้วใบเก่าจะสลับโลโก้ทั้งใบ)
+  // และตัด query quotation_rules + products ออกจากการเจน PDF ทุกครั้งไปด้วย
+  // เลข revise (`QP-xxxx-01`) ขึ้นต้นด้วยเลขฐานที่มี prefix ติดมาแล้ว จึงใช้กติกาเดียวกันได้
+  //
+  // ใบร่างยังไม่มีเลข → คำนวณสดจากสินค้ารายการแรกเหมือนเดิม
   let isThemtech = false;
-  const itemSourceList = itemsList.length > 0 ? itemsList : [];
+  const itemSourceList = !isIssued && itemsList.length > 0 ? itemsList : [];
   if (itemSourceList.length > 0) {
     try {
       const company = await resolveQuoteCompany(itemSourceList[0]);
@@ -243,7 +287,8 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
       isThemtech = quoteNo.toUpperCase().startsWith('QT');
     }
   } else {
-    isThemtech = quoteNo.toUpperCase().startsWith('QT');
+    // ใบที่ออกเลขแล้วยึด quotation_no ในใบ ไม่ใช่ quoteNoInput ที่ผู้เรียกส่งมา (เป็นแค่ป้ายชื่อไฟล์)
+    isThemtech = (isIssued ? issuedNo : quoteNo).toUpperCase().startsWith('QT');
   }
 
   // จัดการชื่อพนักงานขายตามเงื่อนไข (QT -> THT, QP -> PM)

@@ -693,6 +693,7 @@ CREATE TABLE public.quotations (
     odoo_exported_at timestamp with time zone,
     delivery_type_override text,
     delivery_terms jsonb,
+    print_snapshot jsonb,
     CONSTRAINT quotations_delivery_days_override_check CHECK (
         (delivery_days_override IS NULL)
         OR ((delivery_days_override >= 0) AND (delivery_days_override <= 3650))

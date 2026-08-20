@@ -199,16 +199,26 @@ export async function confirmQuotationAtomic(
     //      enrichQuotationData() จึงไม่ต้อง query เพิ่มในนี้ (อยู่ใน transaction ห้ามยิงงานหนัก)
     const deliveryTerms = resolveDeliveryTerms(enrichedQuote);
 
+    // 2.6) ตรึงสต๊อกลงใบ — เป็นค่าเดียวที่ PDF ใช้แล้วไม่มีเก็บไว้ที่ไหนเลย (item_details ไม่มีคีย์
+    //      stock) ถ้าไม่ตรึง บรรทัด "(*** สินค้าคงเหลือ N pcs. ***)" จะเปลี่ยนไปเรื่อยตามของเข้า/ออก
+    //      ทั้งที่ลูกค้าถือเอกสารเวอร์ชันเดิมอยู่ · เรียงตรง index กับ item_details
+    //      ค่ามาจาก enrichedQuote.items ที่ enrichQuotationData เพิ่งดึงสดมา — ไม่ query เพิ่มในล็อก
+    const printSnapshot = {
+      item_stock: (enrichedQuote?.items || []).map((it: any) => Number(it?.stock) || 0),
+      frozen_at: new Date().toISOString(),
+    };
+
     // 3) UPDATE แบบมีเงื่อนไข status + เช็ค rowCount (ห้ามเขียนทับ created_at เพราะเลขคำนวณจากมัน)
     const upd = await client.query(
       `UPDATE quotations
           SET status = 'confirmed',
               quotation_no = COALESCE(quotation_no, $1),
               delivery_terms = $3::jsonb,
+              print_snapshot = $4::jsonb,
               updated_at = NOW()
         WHERE id = $2 AND status <> 'confirmed' AND status <> 'cancelled'
       RETURNING quotation_no`,
-      [quotationNo, quoteId, JSON.stringify(deliveryTerms)]
+      [quotationNo, quoteId, JSON.stringify(deliveryTerms), JSON.stringify(printSnapshot)]
     );
     if (upd.rowCount === 0) {
       // มี FOR UPDATE แล้วยังโดน 0 แถว = มีทางเขียน status ที่เรายังไม่รู้ ให้ rollback ทั้งชุด
