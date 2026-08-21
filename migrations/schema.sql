@@ -7,6 +7,21 @@
 --
 -- หมายเหตุ: บรรทัด \restrict / \unrestrict ที่ pg_dump 18 ใส่มาถูกตัดออก
 -- เพราะเป็น meta-command ของ psql ทำให้รันผ่าน pg driver (runMigration.ts) ไม่ได้
+-- และไม่ได้ใส่ `COMMENT ON SCHEMA public IS ''` ที่ pg_dump ของ DB จริงพ่นออกมา (เป็นคอมเมนต์
+-- ว่างเปล่า ไม่มีผลต่อโครงสร้าง)
+--
+-- ตรวจว่าไฟล์นี้ยังตรงกับ DB จริง (ปลอดภัย — สร้าง DB เปล่าชื่อ schema_check ไม่แตะ chatbot_primus):
+--   d() { docker compose exec -T db pg_dump -U postgres -d "$1" --schema-only --no-owner --no-privileges \
+--         | grep -v '^\\restrict\|^\\unrestrict\|^-- Dumped'; }   # 3 บรรทัดนี้ต่างกันทุกครั้งโดยธรรมชาติ
+--   docker compose exec -T db psql -U postgres -d postgres -q -c 'DROP DATABASE IF EXISTS schema_check' -c 'CREATE DATABASE schema_check'
+--   docker compose exec -T db psql -U postgres -d schema_check -v ON_ERROR_STOP=1 -q -f - < migrations/schema.sql
+--   diff <(d chatbot_primus) <(d schema_check)
+--   docker compose exec -T db psql -U postgres -d postgres -q -c 'DROP DATABASE schema_check'
+--
+-- ผลที่ถูกต้อง = ต่างแค่ก้อน `COMMENT ON SCHEMA public` ข้างบนก้อนเดียว
+-- ถ้าต่างมากกว่านั้น แปลว่ามี migration ที่ยังไม่ถูกยุบเข้าไฟล์นี้
+-- ตรวจล่าสุด 2026-08-21 (รอบนั้นพบว่าขาด quotation_counters, sync_settings, index 6 ตัว
+-- และ role 'subadmin' — ยุบเข้าครบแล้ว)
 --
 -- Dumped from database version 18.4
 -- Dumped by pg_dump version 18.4
@@ -53,7 +68,7 @@ CREATE TABLE public.admin_users (
     role character varying(20) DEFAULT 'admin'::character varying NOT NULL,
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    CONSTRAINT admin_users_role_check CHECK (((role)::text = ANY ((ARRAY['admin'::character varying, 'user'::character varying])::text[])))
+    CONSTRAINT admin_users_role_check CHECK (role IN ('admin', 'subadmin', 'user'))
 );
 
 
@@ -266,6 +281,11 @@ $$ SELECT CASE WHEN lower(btrim(v)) = ANY (ARRAY['null', '']) THEN NULL ELSE btr
 CREATE INDEX IF NOT EXISTS idx_sale_orders_contact_order ON public.sale_orders (contact_id, order_date DESC);
 CREATE INDEX IF NOT EXISTS idx_customers_contact_id ON public.customers (contact_id);
 CREATE INDEX IF NOT EXISTS idx_customers_tax_id ON public.customers (customer_tax_id);
+
+-- ── index สำหรับ LATERAL `own` ของ Arm 2 ──
+-- เงื่อนไขเทียบเป็น btrim(...) จึงต้องเป็น expression index ไม่งั้น Arm 2 ตกไป seq scan
+-- ทุกแถว (4,365 ครั้ง/รอบ refresh)
+CREATE INDEX IF NOT EXISTS idx_customers_reference_trimmed ON public.customers (btrim(customer_reference));
 
 -- ── index สำหรับ latest_so ──
 -- ของเดิม idx_sale_orders_contact_order (contact_id, order_date DESC) ใช้ไม่ได้จริง เพราะ DESC ของ
@@ -779,7 +799,7 @@ CREATE TABLE public.quotation_blacklist (
     company_id  integer NOT NULL,
     contact_id  integer,
     reason      text,
-    created_by  integer REFERENCES public.admin_users(id) ON DELETE SET NULL,
+    created_by  integer,
     created_at  timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_at  timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
     CONSTRAINT quotation_blacklist_company_id_check CHECK (company_id > 0),
@@ -808,13 +828,31 @@ CREATE TABLE public.quotation_credit_policy (
     mode            text    DEFAULT 'off' NOT NULL,
     dormant_months  integer DEFAULT 12 NOT NULL,
     updated_at      timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    updated_by      integer REFERENCES public.admin_users(id) ON DELETE SET NULL,
+    updated_by      integer,
     CONSTRAINT quotation_credit_policy_single_row CHECK (id = 1),
     CONSTRAINT quotation_credit_policy_mode CHECK (mode = ANY (ARRAY['off', 'warn', 'block'])),
     CONSTRAINT quotation_credit_policy_months CHECK (dormant_months > 0 AND dormant_months <= 240)
 );
 
 INSERT INTO public.quotation_credit_policy (id) VALUES (1) ON CONFLICT DO NOTHING;
+
+
+--
+-- Name: quotation_counters; Type: TABLE; Schema: public; Owner: -
+--
+-- ตัวนับเลขที่ใบเสนอราคาแบบ atomic (migration 2026-07-20_02) — services/quotationService.ts
+-- ใช้ INSERT ... ON CONFLICT DO UPDATE ... RETURNING แทน COUNT-then-INSERT ที่ race กันได้
+-- counter_key: 'QP:2607' = เลขปกติ prefix QP งวด YYMM · 'REV:QP-260705012' = เลขใบฉบับแก้ไข
+--
+-- ⚠️ ไม่มีที่ไหนสร้างตารางนี้ให้ตอน runtime — DB ใหม่ที่ไม่มีตารางนี้จะออกเลขใบไม่ได้เลย
+--    (ต่างจาก sync_state/sync_settings/customers/products ที่โค้ด sync สร้างเองตอน boot)
+--
+
+CREATE TABLE public.quotation_counters (
+    counter_key text PRIMARY KEY,
+    last_seq integer DEFAULT 0 NOT NULL,
+    updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
 
 
 --
@@ -903,6 +941,29 @@ CREATE TABLE public.shipping_fee_config (
     CONSTRAINT shipping_fee_config_single_row CHECK ((id = 1)),
     CONSTRAINT shipping_fee_config_threshold CHECK ((threshold_before_vat >= (0)::numeric))
 );
+
+
+--
+-- Name: sync_settings; Type: TABLE; Schema: public; Owner: -
+--
+-- ตารางเวลา auto-sync แถวเดียว (id=1) — services/syncService.ts อ่านตอน boot
+-- โค้ดสร้าง/เติมคอลัมน์ตารางนี้เองด้วย (ensureSyncSettingsTable) แต่เก็บไว้ที่นี่ด้วย
+-- เพื่อให้ DB ที่ตั้งจากไฟล์นี้มีโครงตรงกับ DB จริงตั้งแต่ก่อน app สตาร์ต
+--
+
+CREATE TABLE public.sync_settings (
+    id integer PRIMARY KEY DEFAULT 1,
+    auto_enabled boolean DEFAULT false NOT NULL,
+    resources text[] DEFAULT ARRAY['products'::text, 'customers'::text, 'saleorders'::text] NOT NULL,
+    updated_at timestamp with time zone,
+    days integer[] DEFAULT '{0,1,2,3,4,5,6}'::integer[] NOT NULL,
+    window_start text DEFAULT '00:00'::text NOT NULL,
+    window_end text DEFAULT '23:59'::text NOT NULL,
+    interval_seconds integer DEFAULT 900 NOT NULL,
+    CONSTRAINT sync_settings_singleton CHECK ((id = 1))
+);
+
+INSERT INTO public.sync_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
 
 
 --
@@ -1169,6 +1230,48 @@ CREATE INDEX idx_products_name_trgm ON public.products USING gin (name public.gi
 
 
 --
+-- Name: idx_products_ref_trgm / idx_products_brand_trgm / idx_products_template_id_text; Type: INDEX
+--
+-- GET /api/products/search มี WHERE เป็น OR คร่อม 5 branch — Postgres ทำ BitmapOr ได้ก็ต่อเมื่อ
+-- *ทุก* branch indexable ไม่งั้นตกไป Seq Scan ทั้งชุด (199-322 ms/คำค้น → DB CPU ตันตอน
+-- concurrency สูง → HTTP 500) · ตัวที่ 3 เป็น expression index เพราะ branch นั้นเทียบ
+-- product_template_id::text ซึ่ง products_pkey ใช้ไม่ได้
+-- ⚠️ บน DB ที่มีข้อมูลแล้วให้สร้างด้วย CREATE INDEX CONCURRENTLY ผ่าน psql (ห้าม runMigration.ts)
+--
+
+CREATE INDEX idx_products_ref_trgm ON public.products USING gin (internal_reference public.gin_trgm_ops);
+
+CREATE INDEX idx_products_brand_trgm ON public.products USING gin (brand public.gin_trgm_ops);
+
+CREATE INDEX idx_products_template_id_text ON public.products USING btree (((product_template_id)::text));
+
+
+--
+-- Name: idx_products_internal_reference; Type: INDEX; Schema: public; Owner: -
+--
+-- internal_reference เป็น key ที่ใช้ join จริงหลายที่ (stock-rules, products/search, productService)
+-- ตรวจแล้วว่าไม่ซ้ำในข้อมูลจริง จึงเป็น UNIQUE เพื่อกันข้อมูล sync ซ้ำด้วย
+-- ค่าว่าง '' ถือเป็นค่าปกติใน Postgres (ไม่เหมือน NULL) จึงต้องกรองออกด้วย partial index
+--
+
+CREATE UNIQUE INDEX idx_products_internal_reference ON public.products USING btree (internal_reference) WHERE ((internal_reference IS NOT NULL) AND (TRIM(BOTH FROM internal_reference) <> ''::text));
+
+
+--
+-- Name: idx_so_salesperson_cover; Type: INDEX; Schema: public; Owner: -
+--
+-- listSalespeopleFromOrders() ใน db/repositories.ts: DISTINCT ON (salesperson) ... ORDER BY
+-- salesperson, order_date DESC — ก่อนมี index คือ Seq Scan 382MB + external sort 30MB = ~7 วิ
+-- ซึ่งใกล้ statement_timeout 15 วิ พอชนเพดานฟังก์ชันนี้จะ return [] เงียบ ๆ แล้ว POST ลงทะเบียน
+-- พนักงานขายจะปฏิเสธทุกคนโดยไม่มี error โผล่ที่ไหน
+-- ⚠️ INCLUDE จำเป็น — index ธรรมดา (salesperson, order_date DESC) planner ไม่เลือกใช้เลย
+--    (วัดแล้ว: ยัง Seq Scan 7.2-8.7 วิ) ต้องครบทุกคอลัมน์ที่ query ใช้จึงได้ Index Only Scan
+--
+
+CREATE INDEX idx_so_salesperson_cover ON public.sale_orders USING btree (salesperson, order_date DESC) INCLUDE (salesperson_id, salesperson_phone, customer_sale_area, sales_team);
+
+
+--
 -- Name: idx_quotations_status; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -1239,6 +1342,26 @@ ALTER TABLE ONLY public.quotation_export_log
 
 ALTER TABLE ONLY public.quotation_export_log
     ADD CONSTRAINT quotation_export_log_quotation_id_fkey FOREIGN KEY (quotation_id) REFERENCES public.quotations(id) ON DELETE SET NULL;
+
+
+--
+-- Name: quotation_blacklist quotation_blacklist_created_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+-- FK 2 ตัวนี้ต้องอยู่ตรงนี้ ไม่ใช่ในตัว CREATE TABLE — admin_users_pkey ถูกสร้างในหมวด
+-- CONSTRAINT ด้านบน ซึ่งอยู่หลัง CREATE TABLE ทุกตัว ถ้าเขียน REFERENCES ไว้ในตาราง
+-- ไฟล์นี้จะล้มตอนตั้ง DB ใหม่จากศูนย์ ("no unique constraint matching given keys")
+--
+
+ALTER TABLE ONLY public.quotation_blacklist
+    ADD CONSTRAINT quotation_blacklist_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.admin_users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: quotation_credit_policy quotation_credit_policy_updated_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.quotation_credit_policy
+    ADD CONSTRAINT quotation_credit_policy_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES public.admin_users(id) ON DELETE SET NULL;
 
 
 --

@@ -73,7 +73,8 @@ chatbot/
 │                         # quotationLink, thaiTime, warranty
 ├── liff_pages/           # product-search / quote-edit / register (.html) — HTML + Vanilla JS ล้วน
 ├── migrations/
-│   ├── schema.sql        # schema เต็ม
+│   ├── schema.sql        # schema เต็ม (ตั้ง DB ใหม่จากศูนย์ได้จริง — วิธีตรวจอยู่หัวไฟล์)
+│   │                     # ⚠️ เขียน migration ใหม่แล้วต้องยุบเข้าไฟล์นี้ด้วย ไม่งั้นมันจะค่อย ๆ ล้าสมัย
 │   └── changes/          # migration ทีละไฟล์ `YYYY-MM-DD_NN_*.sql`
 ├── scripts/              # sync/ · diag/ · runMigration.ts · dbDump/dbRestore · backfill* · evalCustomerSearch.ts
 ├── data/
