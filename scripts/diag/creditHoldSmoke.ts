@@ -136,8 +136,17 @@ ok('ซื้อล่าสุดในเกณฑ์ → ไม่เข้�
 // ── 4. การขยายนิติบุคคลมีผลจริง ─────────────────────────────────────────
 // เทียบ "ดูแค่ company_id ตัวเอง" กับ "ค่าที่ประกาศใน view" — ต้องมีบริษัทที่ต่างกัน
 // ถ้าวันไหนตัวเลขนี้เป็น 0 แปลว่าการขยายนิติบุคคลหลุดหายไปจากนิยาม view
+//
+// ⚠️ ข้อนี้เทียบ "คำนวณสดจาก sale_orders" กับ "ค่าที่แช่ไว้ใน view" ซึ่งเป็นข้อมูลคนละเวลา
+//    view ถูก rebuild รอบละ 10 นาที ระหว่างนั้น sale_orders วิ่งไปก่อนได้ ใบสั่งซื้อที่เข้ามา
+//    หลัง refreshed_at จึงยังไม่อยู่ใน view เป็นเรื่องปกติ ไม่ใช่ตรรกะพัง
+//    → ตัดบริษัทที่ใบล่าสุด "ใหม่กว่า refreshed_at" ออกจากข้อ impossible แล้วรายงานแยก
+//    (บั๊กจริงของนิยามจะให้ own.d เก่ากว่า refreshed_at เสมอ จึงยังจับได้อยู่)
+//    เคส 2026-08-21: query วิเคราะห์ค้างใน DB ถือ AccessShareLock → refresh ล้ม 30 นาที
+//    → ข้อนี้ fail 12 ราย ทั้งที่โค้ดไม่ได้ผิดอะไรเลย
 const { rows: expRows } = await pool.query(
-  `WITH own AS (
+  `WITH st AS (SELECT refreshed_at FROM public.customers_data_view_state WHERE id = 1),
+   own AS (
      SELECT c.company_id, max(s.order_date) AS d
        FROM public.customers_data_view c
        LEFT JOIN public.sale_orders s ON s.contact_id = c.contact_id
@@ -149,13 +158,24 @@ const { rows: expRows } = await pool.query(
        FROM public.customers_data_view WHERE company_id > 0 GROUP BY company_id
    )
    SELECT count(*) FILTER (WHERE ent.d > own.d OR (own.d IS NULL AND ent.d IS NOT NULL)) AS rescued,
-          count(*) FILTER (WHERE own.d IS NOT NULL AND ent.d < own.d)                    AS impossible
-     FROM own JOIN ent USING (company_id)`
+          count(*) FILTER (WHERE own.d IS NOT NULL AND ent.d < own.d
+                             AND own.d <= st.refreshed_at)                               AS impossible,
+          count(*) FILTER (WHERE own.d IS NOT NULL AND ent.d < own.d
+                             AND own.d >  st.refreshed_at)                               AS stale,
+          max(round(extract(epoch FROM now() - st.refreshed_at) / 60))::int              AS refresh_age_min
+     FROM own JOIN ent USING (company_id) CROSS JOIN st`
 );
 ok('การขยายนิติบุคคลช่วยบริษัทที่ซื้อใต้รหัสสาขาอื่นไว้ได้',
   Number(expRows[0].rescued) > 0, `${expRows[0].rescued} บริษัท`);
 ok('ค่าในนิติบุคคลต้องไม่เก่ากว่าค่าของรหัสตัวเอง (ตรรกะกลับด้าน)',
   Number(expRows[0].impossible) === 0);
+if (Number(expRows[0].stale) > 0) {
+  console.log(
+    `      ⓘ view ตามหลัง sale_orders อยู่ ${expRows[0].stale} บริษัท ` +
+      `(rebuild ล่าสุดเมื่อ ${expRows[0].refresh_age_min} นาทีที่แล้ว) — ปกติถ้าเพิ่งมีใบเข้ามา ` +
+      `แต่ถ้าเกิน 10 นาทีให้ดู log "refresh customers_data_view ล้มเหลว"`
+  );
+}
 
 // ── 5. checkCreditHold ประกอบ mode + เกณฑ์ถูกต้อง ───────────────────────
 // ยืนยันได้ทุก mode: held ต้องเท่ากับ (mode เป็น block) AND (SQL บอกว่าเงียบเกินเกณฑ์)
