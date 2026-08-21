@@ -173,6 +173,10 @@ export async function getContactsByCustomerId(customerId: number | string): Prom
  * ไม่ใช่บริษัทที่ค้นเจอตอนแรก (ไม่งั้นคู่ (customer_id, contact_id) จะชี้แถวที่ไม่มีอยู่)
  *
  * เรียงให้ผู้ติดต่อของบริษัทที่ค้นเจอตอนแรกมาก่อนเสมอ — เป็นตัวเลือกที่ตรงเจตนาที่สุด
+ *
+ * ⚠️ ตัวนี้ "ขยายกว้างไว้ก่อน" โดยตั้งใจ การตัดสินว่าจะเอาของพี่น้องมาแสดงจริงไหมอยู่ที่
+ *    preferAnchorCompany ใน services/customerService.ts — ห้ามย้ายเงื่อนไขนั้นลงมาที่ SQL นี้
+ *    เพราะมันต้องดูคะแนนความตรงของชื่อที่เซลส์พิมพ์ ซึ่งคำนวณฝั่ง Node หลัง Fuse.js
  */
 export async function getRelatedContactsByCustomerId(customerId: number | string): Promise<any[]> {
   try {

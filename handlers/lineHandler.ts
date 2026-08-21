@@ -808,6 +808,15 @@ export async function handleEvent(
         const quoteIds = pendingQuotes.map((q: any) => q.id);
         const parts = pendingQuotes[0].customer_name.split('|');
         const companyName = parts[0] ? parts[0].trim() : '';
+
+        // รายชื่อผู้ติดต่อค้นข้ามนิติบุคคล (getRelatedContactsByCustomerId) การกดเลือกคนจึงเป็น
+        // การเลือกบริษัทไปในตัว — ใบต้องย้ายไปผูกบริษัทของคนที่เลือก ไม่ใช่บริษัทที่ค้นเจอตอนแรก
+        // ชื่อบริษัทใน snapshot ถูก updateQuotationCustomerSnapshot ดึงใหม่จากคู่ที่ผูกจริง
+        // (ดู companyNameOfRow) ตรงนี้จึง log ไว้ให้ตามรอยได้เวลาใบเปลี่ยนบริษัทกลางคัน
+        if (String(pendingQuotes[0].customer_id ?? '') !== String(resolvedCustomerId ?? '')) {
+          console.log(`[select_contact] ผู้ติดต่อ "${contactName}" อยู่ใต้บริษัทพี่น้อง → ย้ายใบจากบริษัท ${pendingQuotes[0].customer_id} ไป ${resolvedCustomerId} (ค้นด้วย "${companyName}")`);
+        }
+
         const finalCustomerName = `${companyName} | ${contactName}`;
 
         // ด่าน blacklist — จุดเดียวในระบบที่เรียก updateQuotationCustomerSnapshot โดยไม่ผ่าน

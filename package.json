@@ -38,6 +38,8 @@
     "diag:app-url": "tsx scripts/diag/appUrlSmoke.ts",
     "diag:pdf-render": "tsx scripts/diag/pdfRenderSmoke.ts",
     "diag:pdf-cache": "tsx scripts/diag/pdfCacheSmoke.ts",
+    "diag:company-name": "tsx scripts/diag/companyNameConsistencySmoke.ts",
+    "diag:contact-scope": "tsx scripts/diag/contactScopeSmoke.ts",
     "backfill:contacts": "tsx scripts/backfillContactsFromSaleOrders.ts",
     "backfill:delivery-terms": "tsx scripts/backfillDeliveryTerms.ts",
     "backfill:print-snapshot": "tsx scripts/backfillPrintSnapshot.ts",

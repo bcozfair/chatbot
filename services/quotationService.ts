@@ -481,6 +481,26 @@ export function parseDeliveryDaysOverride(raw: any): number | null | undefined {
   return n;
 }
 
+/**
+ * ชื่อบริษัทใน snapshot ต้องมาจาก "แถวเดียวกัน" กับที่ให้รหัสลูกค้า/เลขภาษี
+ *
+ * ── ทำไมต้องมีกฎนี้ ──
+ * ชื่อบริษัทที่ไหลเข้ามาคือชื่อที่เซลส์ค้นตอนแรก แต่รหัส/เลขภาษีถูกดึงใหม่จาก
+ * (customer_id, contact_id) ที่ผูกใบจริง สองค่านี้เป็นคนละบริษัทกันได้เมื่อผู้ติดต่อที่เลือก
+ * อยู่ใต้บริษัทพี่น้อง — รายชื่อผู้ติดต่อค้นข้ามนิติบุคคลให้ (getRelatedContactsByCustomerId)
+ * และการเลือกผู้ติดต่อ = เลือกสาขา/นิติบุคคลไปในตัว
+ *
+ * เคสจริง 2026-08-21 (QT-260805193): เซลส์ค้น "บริษัท โปรต้าวัน" (A/35080) แล้วกดปุ่ม
+ * "คุณเอกชัย" ที่อยู่ใต้ "บริษัท เอ.เอ็น.เอ็น. เทรดดิ้ง" (A/32533, เลขภาษีเดียวกัน)
+ * ใบจึงออกมาเป็นชื่อโปรต้าวัน คู่กับรหัส A/32533 = ชื่อกับรหัสคนละบริษัท
+ *
+ * ⚠️ ทุกที่ที่หยิบ customer_reference/customer_tax_id จากแถวลูกค้า ต้องเรียกตัวนี้ด้วยเสมอ
+ *    ไม่งั้นชื่อกับรหัสหลุดจากกันได้อีก · แถวไม่มีชื่อ = คงชื่อเดิมไว้ ไม่ล้างทิ้ง
+ */
+export function companyNameOfRow(row: any, current: string): string {
+  return String(row?.customer_name ?? row?.display_name ?? '').trim() || current;
+}
+
 export async function insertDraftQuotations(
   userId: string,
   customerName: string,
@@ -640,6 +660,7 @@ export async function insertDraftQuotations(
 
       if (custData) {
         // ── ระดับบริษัท: ใช้ได้ไม่ว่าแถวที่ได้จะเป็นผู้ติดต่อคนไหน ──
+        companyName = companyNameOfRow(custData, companyName);
         customerCode = custData.customer_reference || '';
         customerTaxId = custData.customer_tax_id || '';
         paymentTerms = custData.customer_payment_terms || '';
@@ -1317,7 +1338,7 @@ export async function resolveContactFlow(
     const contactId = finalCandidates[0].item.id;
 
     // ผู้ติดต่อที่ค้นเจออาจอยู่ใต้ company_id ของสาขาอื่นในนิติบุคคลเดียวกัน
-    // (findContactCandidates ค้นข้ามสาขาให้ — ดู getRelatedContactsByCustomerId)
+    // (findContactCandidates ค้นข้ามสาขาให้เมื่อบริษัทที่เลือกตอบไม่ได้ — ดู preferAnchorCompany)
     // ต้องผูกใบเข้ากับบริษัทของ "คนที่เลือกจริง" ไม่ใช่บริษัทที่ค้นเจอตอนแรก ไม่งั้นคู่
     // (customer_id, contact_id) จะชี้แถวที่ไม่มีอยู่ → snapshot/ด่านตรวจ lookup ไม่เจอ
     // เลือกผู้ติดต่อ = เลือกสาขาไปในตัว ชื่อบริษัทที่โชว์จึงต้องเปลี่ยนตามด้วย
@@ -1432,7 +1453,8 @@ export async function resolveContactFlow(
     usedFallbackList = optionSource.length > 0;
   }
 
-  // สาขาของผู้ติดต่อแต่ละคน — จำเป็นเมื่อรายชื่อข้ามสาขา (ดู getRelatedContactsByCustomerId)
+  // สาขาของผู้ติดต่อแต่ละคน — จำเป็นเมื่อรายชื่อข้ามสาขา ซึ่งตอนนี้เกิดเฉพาะตอนบริษัทที่เซลส์
+  // เลือกตอบไม่ได้เลย (ดู preferAnchorCompany ใน services/customerService.ts)
   // ชื่อคนซ้ำกันข้ามสาขาได้จริง (เบียร์ทิพย์มี "คุณธนาพร"/"คุณอัญชลี" ทั้งที่สำนักงานใหญ่และสาขา
   // 00001) ถ้าไม่บอกสาขา เซลส์จะเห็นปุ่มข้อความเหมือนกันเป๊ะสองปุ่มแล้วแยกไม่ออก
   //
@@ -1547,7 +1569,7 @@ export async function updateQuotationCustomerSnapshot(
     if (customerId) {
       if (contactId) {
         custRes = await pool.query(
-          `SELECT customer_reference AS reference, customer_tax_id AS tax_id, customer_payment_terms AS payment_terms,
+          `SELECT customer_name, customer_reference AS reference, customer_tax_id AS tax_id, customer_payment_terms AS payment_terms,
                   COALESCE(contact_phone, phone) AS contact_phone, COALESCE(contact_email, email) AS contact_email,
                   invoice_street AS contact_address,
                   invoice_district, invoice_sub_district, invoice_state, invoice_zip
@@ -1558,7 +1580,7 @@ export async function updateQuotationCustomerSnapshot(
       }
       if (!custRes || custRes.rows.length === 0) {
         custRes = await pool.query(
-          `SELECT DISTINCT ON (company_id) customer_reference AS reference, customer_tax_id AS tax_id,
+          `SELECT DISTINCT ON (company_id) customer_name, customer_reference AS reference, customer_tax_id AS tax_id,
                   customer_payment_terms AS payment_terms
            FROM customers_data_view
            WHERE company_id = $1 ORDER BY company_id, contact_id LIMIT 1`,
@@ -1590,6 +1612,7 @@ export async function updateQuotationCustomerSnapshot(
 
     if (custRes && custRes.rows.length > 0) {
       const row = custRes.rows[0];
+      customerDetails.customer_name = companyNameOfRow(row, companyName) || null;
       if (row.reference) customerDetails.customer_code = row.reference;
       if (row.tax_id && !customerDetails.customer_tax_id) customerDetails.customer_tax_id = row.tax_id;
       if (row.contact_phone && !customerDetails.phone) customerDetails.phone = row.contact_phone;

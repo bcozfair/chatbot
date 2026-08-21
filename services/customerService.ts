@@ -1275,6 +1275,51 @@ export function cleanContactNameExtra(name: string | null | undefined): string {
   return cleaned.trim();
 }
 
+/**
+ * เลือกเฉพาะผู้ติดต่อของ "บริษัทที่เซลส์เลือกมา" เว้นแต่บริษัทพี่น้องจะตรงกว่าจริง ๆ
+ *
+ * ── ทำไมต้องมี ──
+ * getRelatedContactsByCustomerId ดึงผู้ติดต่อของทุก company_id ในนิติบุคคลเดียวกัน เพื่อกัน
+ * ทางตัน "ไม่พบผู้ติดต่อ" ตอนคนที่ต้องการถูกเก็บไว้ใต้รหัสสาขาอื่น แต่มันขยายทุกครั้ง
+ * แม้บริษัทที่เซลส์เลือกจะมีคนคนนั้นอยู่แล้ว → ได้ปุ่มชื่อซ้ำจากคนละบริษัทมาให้กดผิด
+ *
+ * วัดจากข้อมูลจริง 2026-08-21: บริษัทที่มีพี่น้อง 4,946 ราย มี 4,284 ราย (87%) ที่มีผู้ติดต่อ
+ * ของตัวเองอยู่แล้วแต่ยังถูกยัดผู้ติดต่อบริษัทอื่นมาปน · มีแค่ 222 รายที่ไม่มีผู้ติดต่อเลย
+ * = พึ่งการขยายจริง ๆ · และมี 1,082 เคสที่ชื่อผู้ติดต่อซ้ำกันข้ามบริษัทในกลุ่มเดียวกัน
+ *
+ * เคสจริง (QT-260805193): เซลส์ค้น "บริษัท โปรต้าวัน" ซึ่งมี "คุณเอกชัย" อยู่แล้ว แต่ระบบ
+ * ยังขึ้นปุ่ม "คุณเอกชัย" ของ "บริษัท เอ.เอ็น.เอ็น. เทรดดิ้ง" (เลขภาษีเดียวกัน) มาให้เลือกด้วย
+ *
+ * ── กติกา ──
+ * บริษัทที่เซลส์เลือกมี candidate → ใช้ของบริษัทนั้นล้วน
+ * เว้นแต่พี่น้องจะ "ตรงกว่าเด็ดขาด" (score น้อยกว่าทุกตัวของบริษัทที่เลือก) เช่นเซลส์พิมพ์ชื่อคน
+ * มาแล้วตรงเป๊ะกับคนของสาขา ส่วนบริษัทที่เลือกมีแค่ชื่อคล้าย ๆ → กรณีนั้นคงทั้งสองไว้ให้เลือกเอง
+ * บริษัทที่เลือกไม่มี candidate เลย → คงพฤติกรรมเดิม คืนของพี่น้องทั้งหมด (กันทางตัน)
+ *
+ * ⚠️ นี่เป็นการ "จัดลำดับภายในกลุ่มที่ match แล้ว" ไม่ใช่การแก้นิยามนิติบุคคลใน
+ *    db/companyIdentity.ts — ด่านห้ามเสนอราคายังกว้างเท่าเดิม (กว้างกว่าฝั่งค้น = ปลอดภัย)
+ */
+function preferAnchorCompany(candidates: any[], customerId: any): any[] {
+  if (!candidates || candidates.length === 0) return candidates;
+  const anchor = String(customerId ?? '');
+  if (!anchor) return candidates;
+
+  const isAnchor = (c: any) => String(c?.item?.company_id ?? '') === anchor;
+  const anchorScores = candidates.filter(isAnchor).map((c: any) => Number(c.score) || 0);
+  if (anchorScores.length === 0) return candidates;   // บริษัทที่เลือกไม่มีใครเลย → กันทางตัน
+
+  const anchorBest = Math.min(...anchorScores);
+  const siblingIsStrictlyBetter = candidates.some(
+    (c: any) => !isAnchor(c) && (Number(c.score) || 0) < anchorBest);
+  if (siblingIsStrictlyBetter) return candidates;
+
+  const kept = candidates.filter(isAnchor);
+  if (kept.length !== candidates.length) {
+    console.log(`[findContactCandidates] ตัดผู้ติดต่อของบริษัทพี่น้องออก ${candidates.length - kept.length} คน — บริษัท ${anchor} มีผู้ติดต่อที่ตรงพอแล้ว`);
+  }
+  return kept;
+}
+
 export async function findContactCandidates(customerId: any, contactQuery: string): Promise<any[]> {
   const phoneRegex = /0\d{1,2}[-.\s]?\d{3,4}[-.\s]?\d{4}/g;
   const phoneMatches = contactQuery.match(phoneRegex) || [];
@@ -1334,12 +1379,12 @@ export async function findContactCandidates(customerId: any, contactQuery: strin
   }
 
   if (phoneMatchedCandidates.length > 0) {
-    return phoneMatchedCandidates;
+    return preferAnchorCompany(phoneMatchedCandidates, customerId);
   }
 
   // 2. Name matching with Fuse.js
   if (!cleaned) {
-    return contactsWithAddr.map((c: any) => ({ item: c, score: 0 }));
+    return preferAnchorCompany(contactsWithAddr.map((c: any) => ({ item: c, score: 0 })), customerId);
   }
 
   // 2.5 Deterministic pre-pass: เทียบแบบ normalize (ช่องว่างหลังคำนำหน้า / ชื่อเล่นในวงเล็บ / ตำแหน่งต่อท้าย)
@@ -1356,7 +1401,7 @@ export async function findContactCandidates(customerId: any, contactQuery: strin
   if (prePass.length > 0) {
     prePass.sort((a, b) => a.score - b.score);
     console.log(`[findContactCandidates] deterministic pre-pass hit: ${prePass.map(p => `${p.item.name} (${p.score})`).join(', ')}`);
-    return prePass;
+    return preferAnchorCompany(prePass, customerId);
   }
 
   const fuse = new (Fuse as any)(candidates, {
@@ -1365,10 +1410,10 @@ export async function findContactCandidates(customerId: any, contactQuery: strin
     includeScore: true
   });
 
-  return fuse.search(cleaned).map((r: any) => ({
+  return preferAnchorCompany(fuse.search(cleaned).map((r: any) => ({
     item: r.item,
     score: r.score
-  }));
+  })), customerId);
 }
 
 /** salesperson รับไว้เพื่อคง signature เดิม — จงใจไม่ใช้กรอง branch ให้ตรงกับ findCustomerCandidates ที่ค้นข้ามเขตได้ */
