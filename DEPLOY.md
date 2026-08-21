@@ -222,6 +222,8 @@ SELECT to_regclass('public.customers_data_view')  AS matview,
        EXISTS(SELECT 1 FROM information_schema.columns
               WHERE table_name='api_logs' AND column_name='ip')                               AS api_logs_ip,
        to_regclass('public.quotation_credit_policy')                                          AS credit_policy,
+       EXISTS(SELECT 1 FROM pg_constraint WHERE contype='p'
+              AND conrelid=to_regclass('public.quotation_credit_policy'))                     AS credit_policy_pk,
        EXISTS(SELECT 1 FROM information_schema.columns
               WHERE table_name='customers_data_view' AND column_name='last_order_at')         AS cdv_last_order;"
 ```
@@ -248,6 +250,9 @@ done
   ⚠️ หลังรันแล้ว `last_order_at` จะเป็น NULL ทั้งตารางจนกว่า **รอบ sync ถัดไป** จะ rebuild ตารางจาก view
   (NULL = "ไม่เคยซื้อ" = ปล่อยผ่าน จึงไม่มีใครถูกบล็อกผิด และเกณฑ์ยังตั้งต้นเป็น `mode='off'` อยู่แล้ว)
   ถ้าอยากให้มีค่าทันทีโดยไม่รอ sync ให้ทำ build+swap มือตามขั้นตอนใน `scripts/sync/refreshCustomerDirectory.ts`
+- **ข้อยกเว้น: `2026-08-21_01_quotation_credit_policy_pk.sql` รันได้ทุกเวลา**
+  เติม PK ให้ตารางแถวเดียว `quotation_credit_policy` — ล็อกเสี้ยววินาที ไม่แตะ `customers_data_view`
+  ล้มพร้อมข้อความภาษาคนถ้าเจอแถว id=1 ซ้ำ (ไม่ลบให้เอง — ต้องให้คนเลือกว่าจะเก็บแถวไหน)
   (`CREATE TABLE customers_data_view_new AS SELECT * FROM customers_data_build` → สร้าง index
   `(company_id) INCLUDE (last_order_at)` → ANALYZE → สลับชื่อใน transaction) — วัดจริง build 4.7 วิ สลับ 13 ms
 - **ข้อยกเว้น: `2026-08-20_03_api_logs_ip.sql` รันได้ทุกเวลา และรัน "ก่อน" deploy โค้ดใหม่ได้**

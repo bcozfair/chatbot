@@ -824,7 +824,7 @@ CREATE UNIQUE INDEX quotation_blacklist_contact_uniq
 --
 
 CREATE TABLE public.quotation_credit_policy (
-    id              integer DEFAULT 1 NOT NULL,
+    id              integer PRIMARY KEY DEFAULT 1,
     mode            text    DEFAULT 'off' NOT NULL,
     dormant_months  integer DEFAULT 12 NOT NULL,
     updated_at      timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
@@ -834,7 +834,7 @@ CREATE TABLE public.quotation_credit_policy (
     CONSTRAINT quotation_credit_policy_months CHECK (dormant_months > 0 AND dormant_months <= 240)
 );
 
-INSERT INTO public.quotation_credit_policy (id) VALUES (1) ON CONFLICT DO NOTHING;
+INSERT INTO public.quotation_credit_policy (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
 
 
 --
