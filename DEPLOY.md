@@ -226,7 +226,9 @@ SELECT to_regclass('public.customers_data_view')  AS matview,
               AND conrelid=to_regclass('public.quotation_credit_policy'))                     AS credit_policy_pk,
        EXISTS(SELECT 1 FROM information_schema.columns
               WHERE table_name='customers_data_view' AND column_name='last_order_at')         AS cdv_last_order,
-       (pg_get_viewdef('public.customers_data_build'::regclass) LIKE '%to invoice%')          AS cdv_billed_only;"
+       (pg_get_viewdef('public.customers_data_build'::regclass) LIKE '%to invoice%')          AS cdv_billed_only,
+       (SELECT pg_get_constraintdef(oid) NOT LIKE '%warn%' FROM pg_constraint
+         WHERE conname='quotation_credit_policy_mode')                                        AS credit_mode_2_values;"
 ```
 > คอลัมน์ `clean_text` ต้องใช้ **`to_regprocedure`** ไม่ใช่ `to_regproc` — `to_regproc` รับได้แค่ชื่อฟังก์ชันเปล่า
 > ใส่ `(text)` ต่อท้ายจะคืน null ทุกครั้งแม้ฟังก์ชันมีอยู่จริง = สัญญาณเตือนหลอกว่า migration ขาด
@@ -267,6 +269,13 @@ done
   visibility map ด่านตรวจจะตกจาก Index Only Scan ไปเป็น Index Scan จนกว่า autovacuum จะมาถึง
   ตรวจผล: `npm run diag:credit-hold` ต้องเขียวหมด และบรรทัด "ขอบเขต" ต้องบอกจำนวนที่เข้าเกณฑ์
   (1,656 บริษัท ณ 2026-08-25 — ถ้าได้ 10,926 แปลว่า view ยังไม่ถูก rebuild)
+- **ข้อยกเว้น: `2026-08-25_02_credit_policy_drop_warn_mode.sql` รันได้ทุกเวลา และสลับลำดับกับ deploy ได้**
+  ปลดโหมด `warn` (เฝ้าดู) ทิ้ง: ไล่แถวที่ค้างเป็น `warn` → `off` แล้วแคบ CHECK ให้เหลือ `off`/`block`
+  ตามหน้าแอดมินที่เปลี่ยนเป็นสวิตช์ เปิด/ปิด · แตะตารางแถวเดียว ไม่ยุ่งกับ `customers_data_view` จบในไม่กี่ ms
+  ⚠️ **`warn` ต้อง map เป็น `off` ไม่ใช่ `block`** — `warn` ไม่เคยบล็อกใคร ต่างจาก `off` แค่บรรทัด log
+  ถ้า map เป็น `block` = เปิดกฎให้เองโดยไม่มีใครสั่ง แล้วใบเสนอราคาจะถูกบล็อกจริงทันที
+  ลำดับสลับได้: โค้ดเก่ายอมรับทั้ง 3 ค่าอยู่แล้ว (แคบ CHECK ไม่ทำให้พัง) · โค้ดใหม่อ่านค่าที่ไม่รู้จักเป็น `off`
+  ตรวจผล: `npm run diag:credit-hold` มีข้อ "CHECK ของ mode รับแค่ off/block" คอยจับว่ารันแล้วหรือยัง
 - **ข้อยกเว้น: `2026-08-20_03_api_logs_ip.sql` รันได้ทุกเวลา และรัน "ก่อน" deploy โค้ดใหม่ได้**
   `ADD COLUMN` แบบ nullable ไม่มี DEFAULT = PostgreSQL แก้แค่ metadata ไม่ล็อกตาราง ไม่เขียนแถวใหม่
   และโค้ดเก่าที่ยังรันอยู่ระบุชื่อคอลัมน์ใน INSERT ครบทุกตัว จึงเขียน log ต่อได้ตามปกติ (คอลัมน์ใหม่เป็น NULL)

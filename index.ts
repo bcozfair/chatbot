@@ -2980,7 +2980,7 @@ app.put('/api/admin/credit-policy', adminAuthMiddleware, requireRole('admin'), e
 
     if (!saved) {
       return res.status(400).json({
-        error: 'ค่าไม่ถูกต้อง — mode ต้องเป็น off/warn/block และจำนวนเดือนต้องเป็นจำนวนเต็ม 1–240',
+        error: 'ค่าไม่ถูกต้อง — mode ต้องเป็น off/block และจำนวนเดือนต้องเป็นจำนวนเต็ม 1–240',
       });
     }
 

@@ -20,7 +20,7 @@
 --
 -- ผลที่ถูกต้อง = ต่างแค่ก้อน `COMMENT ON SCHEMA public` ข้างบนก้อนเดียว
 -- ถ้าต่างมากกว่านั้น แปลว่ามี migration ที่ยังไม่ถูกยุบเข้าไฟล์นี้
--- ตรวจล่าสุด 2026-08-25 (ผ่าน — ยุบ 2026-08-25_01 นิยาม last_order_at ใหม่เข้าไปแล้ว)
+-- ตรวจล่าสุด 2026-08-25 (ผ่าน — ยุบ 2026-08-25_01 นิยาม last_order_at ใหม่ + 2026-08-25_02 ปลดโหมด warn เข้าไปแล้ว)
 -- ก่อนหน้า 2026-08-21 (รอบนั้นพบว่าขาด quotation_counters, sync_settings, index 6 ตัว
 -- และ role 'subadmin' — ยุบเข้าครบแล้ว)
 --
@@ -872,7 +872,8 @@ CREATE UNIQUE INDEX quotation_blacklist_contact_uniq
 -- เกณฑ์ระงับการเสนอราคาบริษัทที่ไม่มีคำสั่งซื้อมานาน (แถวเดียว)
 -- ตัวข้อมูล "ซื้อล่าสุดเมื่อไหร่" อยู่ที่ customers_data_view.last_order_at ไม่ใช่ที่นี่
 -- แยกกันเพราะ customers_data_view ถูกสร้างใหม่ทั้งก้อนทุกรอบ sync — ค่าที่แอดมินตั้งจะหาย
--- mode: off = ไม่ตรวจ · warn = ตรวจ+log แต่ยังออกใบได้ · block = ห้ามออกใบ
+-- mode: off = ไม่ตรวจ · block = ห้ามออกใบ (หน้าแอดมินเป็นสวิตช์ เปิด/ปิด)
+-- เคยมีค่าที่ 3 คือ 'warn' (ตรวจ+log แต่ยังออกใบได้) — ปลดออกแล้ว 2026-08-25_02
 --
 
 CREATE TABLE public.quotation_credit_policy (
@@ -882,7 +883,7 @@ CREATE TABLE public.quotation_credit_policy (
     updated_at      timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_by      integer,
     CONSTRAINT quotation_credit_policy_single_row CHECK (id = 1),
-    CONSTRAINT quotation_credit_policy_mode CHECK (mode = ANY (ARRAY['off', 'warn', 'block'])),
+    CONSTRAINT quotation_credit_policy_mode CHECK (mode = ANY (ARRAY['off', 'block'])),
     CONSTRAINT quotation_credit_policy_months CHECK (dormant_months > 0 AND dormant_months <= 240)
 );
 

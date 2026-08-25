@@ -35,8 +35,15 @@
 import { pool } from '../config/db.js';
 import { loadCached } from './rules/cache.js';
 
-/** off = ไม่ตรวจเลย · warn = ตรวจ+log แต่ยังออกใบได้ · block = ห้ามออกใบ */
-export type CreditPolicyMode = 'off' | 'warn' | 'block';
+/**
+ * off = ไม่ตรวจเลย · block = ห้ามออกใบ — ตรงกับสวิตช์ เปิด/ปิด ในหน้าแอดมิน
+ *
+ * เคยมีค่าที่ 3 คือ 'warn' (ตรวจ + เขียน log ว่าจะโดนใครบ้าง แต่ยังออกใบได้) ไว้ใช้เฝ้าดู
+ * ก่อนเปิดจริง · ปลดออกทั้งหน้าจอ โค้ด และ CHECK ของตารางแล้วเมื่อ 2026-08-25
+ * (migrations/changes/2026-08-25_02_credit_policy_drop_warn_mode.sql ไล่ค่าที่ค้าง warn → off)
+ * ⇒ DB เขียนค่านี้ไม่ได้อีกแล้ว โค้ดข้างล่างจึงไม่ต้องมีสาขารับ warn
+ */
+export type CreditPolicyMode = 'off' | 'block';
 
 export interface CreditPolicy {
   mode: CreditPolicyMode;
@@ -72,7 +79,9 @@ export async function loadCreditPolicy(): Promise<CreditPolicy> {
 
   const months = Number(row.dormant_months);
   return {
-    mode: row.mode === 'warn' || row.mode === 'block' ? row.mode : 'off',
+    // อ่านค่าที่ไม่รู้จักเป็น 'off' เสมอ (เช่น dump เก่าที่ยังมี warn) — ไม่ใช่ 'block'
+    // เดาผิดทาง off คือ "ไม่ตรวจ" ซึ่งเท่ากับก่อนมีฟีเจอร์ · เดาผิดทาง block คือบล็อกทั้งระบบ
+    mode: row.mode === 'block' ? 'block' : 'off',
     dormant_months: Number.isInteger(months) && months > 0 ? months : DEFAULT_POLICY.dormant_months,
   };
 }
@@ -130,15 +139,6 @@ export async function checkCreditHold(companyId: unknown): Promise<CreditHoldRes
   const dormant = rows[0]?.dormant === true;
   const lastOrderAt: Date | null = rows[0]?.last_order_at ?? null;
 
-  // โหมด warn มีไว้ให้ดูก่อนเปิดจริงว่า "ถ้าเปิดแล้วจะโดนใครบ้าง" — log ที่นี่ที่เดียว
-  // จะได้ไม่ต้องไปเติม log ให้ครบทุกด่านที่เรียกฟังก์ชันนี้
-  if (dormant && policy.mode === 'warn') {
-    console.warn(
-      `[creditHold] (warn) company_id=${company} ซื้อล่าสุด ${lastOrderAt?.toISOString() ?? '-'} ` +
-        `เกินเกณฑ์ ${policy.dormant_months} เดือน — ยังปล่อยผ่านเพราะ mode=warn`
-    );
-  }
-
   return {
     dormant,
     held: dormant && policy.mode === 'block',
@@ -153,8 +153,8 @@ export async function checkCreditHold(companyId: unknown): Promise<CreditHoldRes
  * query เดียวจบทั้งชุดผลลัพธ์ ไม่ยิงทีละแถว เพราะผลค้นหามีได้ถึง 30 รายการต่อครั้ง
  * (แบบเดียวกับ findBlockedCompanyIds ของ blacklist)
  *
- * คืนเฉพาะตอน mode = 'block' โดยตั้งใจ — โหมด warn ยังออกใบได้ ถ้าติดป้ายห้ามคลิก
- * ฝั่ง UI จะกลายเป็นบล็อกจริงทั้งที่เกณฑ์ยังไม่เปิด
+ * เช็ค mode ซ้ำที่นี่ด้วย ไม่ใช่พึ่งว่า caller จะเรียกเฉพาะตอนเปิด — ป้าย "ห้ามคลิก"
+ * ฝั่ง UI มีผลเท่ากับบล็อกจริง ถ้าหลุดออกไปตอน mode = off จะกลายเป็นบล็อกทั้งที่เกณฑ์ปิดอยู่
  */
 export async function findCreditHeldCompanyIds(companyIds: unknown[]): Promise<Set<number>> {
   const policy = await loadCreditPolicy();
@@ -202,7 +202,7 @@ export async function saveCreditPolicy(input: {
   updatedBy: number | null;
 }): Promise<CreditPolicy | null> {
   const mode = input.mode;
-  if (mode !== 'off' && mode !== 'warn' && mode !== 'block') return null;
+  if (mode !== 'off' && mode !== 'block') return null;
 
   const months = Number(input.dormantMonths);
   if (!Number.isInteger(months) || months < 1 || months > 240) return null;

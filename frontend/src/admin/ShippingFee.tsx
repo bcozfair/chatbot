@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { SettingToggle } from './SettingToggle';
 import {
   Loader2,
   CheckCircle2,
@@ -190,19 +191,12 @@ export const ShippingFee: React.FC = () => {
 
       {/* ฟอร์มค่าคงที่ */}
       <div className="rounded-xl border border-slate-200 bg-white p-3.5 space-y-3.5">
-        <label className="flex items-center gap-2.5 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={form.is_active}
-            onChange={(e) => setForm({ ...form, is_active: e.target.checked })}
-            className="h-4 w-4 rounded border-slate-300"
-            style={{ accentColor: BRAND }}
-          />
-          <span className="text-sm font-bold text-slate-800">เปิดใช้งานกฎค่าขนส่ง</span>
-          <span className="text-[11px] text-slate-500">
-            (ปิด = ระบบจะไม่เพิ่มรายการค่าขนส่งให้ใบใหม่ และถอดออกจากใบร่างที่ยังไม่ยืนยัน)
-          </span>
-        </label>
+        <SettingToggle
+          checked={form.is_active}
+          onChange={(next) => setForm({ ...form, is_active: next })}
+          label="เปิดใช้งานกฎค่าขนส่ง"
+          hint="(ปิด = ระบบจะไม่เพิ่มรายการค่าขนส่งให้ใบใหม่ และถอดออกจากใบร่างที่ยังไม่ยืนยัน)"
+        />
 
         <div className="grid gap-4 sm:grid-cols-3">
           {numberField(

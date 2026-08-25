@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { SettingToggle } from './SettingToggle';
 import {
   Loader2,
   CheckCircle2,
@@ -11,7 +12,8 @@ import {
 
 const BRAND = '#009032';
 
-type CreditPolicyMode = 'off' | 'warn' | 'block';
+/** ตรงกับ CHECK ของตาราง quotation_credit_policy — เคยมี 'warn' ปลดออกแล้ว 2026-08-25 */
+type CreditPolicyMode = 'off' | 'block';
 
 interface CreditPolicy {
   mode: CreditPolicyMode;
@@ -27,12 +29,6 @@ interface FormState {
 function toForm(p: CreditPolicy): FormState {
   return { mode: p.mode, dormant_months: String(p.dormant_months) };
 }
-
-const MODES: { key: CreditPolicyMode; label: string; hint: string }[] = [
-  { key: 'off', label: 'ปิด', hint: 'ไม่ตรวจเลย — ระบบทำงานเหมือนก่อนมีกฎนี้' },
-  { key: 'warn', label: 'เฝ้าดู', hint: 'ตรวจและเขียน log ว่าจะโดนใครบ้าง แต่ยังออกใบได้ตามปกติ' },
-  { key: 'block', label: 'บล็อก', hint: 'ห้ามออกใบเสนอราคา ตั้งแต่ตอนผูกบริษัทเข้าใบ' },
-];
 
 export const CreditPolicy: React.FC = () => {
   const { token } = useAuth();
@@ -147,31 +143,12 @@ export const CreditPolicy: React.FC = () => {
       </div>
 
       <div className="rounded-xl border border-slate-200 bg-white p-3.5 space-y-3.5">
-        <div>
-          <label className="block text-xs font-bold text-slate-600 mb-1.5">โหมดการทำงาน</label>
-          <div className="space-y-1.5">
-            {MODES.map(({ key, label, hint }) => (
-              <label key={key} className="flex items-start gap-2.5 cursor-pointer">
-                <input
-                  type="radio"
-                  name="credit-mode"
-                  checked={form.mode === key}
-                  onChange={() => setForm({ ...form, mode: key })}
-                  className="mt-0.5 h-4 w-4 shrink-0 border-slate-300"
-                  style={{ accentColor: BRAND }}
-                />
-                <span className="text-sm">
-                  <span className="font-bold text-slate-800">{label}</span>
-                  <span className="ml-2 text-[11px] text-slate-500">{hint}</span>
-                </span>
-              </label>
-            ))}
-          </div>
-          <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
-            แนะนำให้เปิด <b>เฝ้าดู</b> ก่อนสัก 1–2 วัน แล้วดู log ว่าจะบล็อกใครบ้าง ถ้าตรงกับที่คาดค่อยเปลี่ยนเป็น{' '}
-            <b>บล็อก</b>
-          </p>
-        </div>
+        <SettingToggle
+          checked={form.mode === 'block'}
+          onChange={(next) => setForm({ ...form, mode: next ? 'block' : 'off' })}
+          label="เปิดใช้งานกฎระงับบริษัทที่เงียบนาน"
+          hint="(เปิด = ห้ามออกใบเสนอราคาตั้งแต่ตอนผูกบริษัทเข้าใบ · ปิด = ไม่ตรวจเลย ระบบทำงานเหมือนก่อนมีกฎนี้)"
+        />
 
         <div>
           <label className="block text-xs font-bold text-slate-600 mb-1.5">

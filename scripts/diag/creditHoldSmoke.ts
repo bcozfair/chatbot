@@ -58,10 +58,26 @@ const policy = await loadCreditPolicy();
 console.log(`   policy: mode=${policy.mode} dormant_months=${policy.dormant_months}`);
 ok(
   'โหลดเกณฑ์จาก DB ได้และค่าอยู่ในช่วงที่ใช้ได้',
-  ['off', 'warn', 'block'].includes(policy.mode) &&
+  ['off', 'block'].includes(policy.mode) &&
     Number.isInteger(policy.dormant_months) &&
     policy.dormant_months > 0
 );
+
+// CHECK ต้องแคบเหลือ 2 ค่าแล้ว — ถ้ายังกว้างอยู่แปลว่า DB กล่องนี้ยังไม่ได้รัน
+// 2026-08-25_02 ⇒ แถวอาจถูกตั้งเป็น 'warn' ทาง psql ได้ ซึ่งโค้ดใหม่จะอ่านเป็น off เงียบ ๆ
+{
+  const { rows } = await pool.query(
+    `SELECT pg_get_constraintdef(oid) AS def
+       FROM pg_constraint
+      WHERE conname = 'quotation_credit_policy_mode'`
+  );
+  const def: string = rows[0]?.def ?? '';
+  ok(
+    "CHECK ของ mode รับแค่ off/block (รัน 2026-08-25_02 แล้ว)",
+    def.includes("'off'") && def.includes("'block'") && !def.includes("'warn'"),
+    def || '(ไม่เจอ constraint)'
+  );
+}
 
 const MONTHS = policy.dormant_months;
 
