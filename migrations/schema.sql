@@ -20,7 +20,8 @@
 --
 -- ผลที่ถูกต้อง = ต่างแค่ก้อน `COMMENT ON SCHEMA public` ข้างบนก้อนเดียว
 -- ถ้าต่างมากกว่านั้น แปลว่ามี migration ที่ยังไม่ถูกยุบเข้าไฟล์นี้
--- ตรวจล่าสุด 2026-08-21 (รอบนั้นพบว่าขาด quotation_counters, sync_settings, index 6 ตัว
+-- ตรวจล่าสุด 2026-08-25 (ผ่าน — ยุบ 2026-08-25_01 นิยาม last_order_at ใหม่เข้าไปแล้ว)
+-- ก่อนหน้า 2026-08-21 (รอบนั้นพบว่าขาด quotation_counters, sync_settings, index 6 ตัว
 -- และ role 'subadmin' — ยุบเข้าครบแล้ว)
 --
 -- Dumped from database version 18.4
@@ -409,7 +410,18 @@ comp AS (
   FROM base GROUP BY company_id
 ),
 -- ════════════════════════════════════════════════════════════════════
--- last_order_at — วันที่มีคำสั่งซื้อล่าสุดของ "นิติบุคคล" ที่บริษัทนี้สังกัด
+-- last_order_at — "วันอ้างอิงของด่านตรวจเครดิต" ไม่ใช่วันสั่งซื้อล่าสุดตามชื่อ
+--
+-- ⚠️⚠️ ชื่อคอลัมน์หลอก อ่านนิยามให้จบก่อนเอาไปใช้ที่อื่น ⚠️⚠️
+--   ค่าที่ได้ = วันที่ล่าสุดของใบที่ "ออกบิลแล้ว/รอออกบิล" ของนิติบุคคลนี้
+--               และเฉพาะเมื่อนิติบุคคลนี้เป็นลูกค้าเครดิต/เช็คล่วงหน้าเท่านั้น
+--   NULL     = ไม่เข้าข่ายตรวจ ซึ่งมีได้ 3 สาเหตุและด่านปฏิบัติเหมือนกันหมด (= ผ่าน):
+--                1. ไม่ใช่ลูกค้าเครดิต (Cash / Immediate Payment / ไม่ได้ระบุใน Odoo)
+--                2. เป็นเครดิต แต่ไม่มีใบสั่งซื้อเลยสักใบ  ← ลูกค้าใหม่ ต้องเสนอราคาได้
+--                3. เป็นเครดิต มีใบ แต่ไม่เคยมีใบที่ออกบิลเลย (452 บริษัท ณ 2026-08-25)
+--   ⇒ ห้ามเอาคอลัมน์นี้ไปแสดงเป็น "ลูกค้ารายนี้ซื้อครั้งสุดท้ายเมื่อไหร่" เด็ดขาด
+--     ลูกค้า Cash ทุกรายจะได้ NULL ทั้งที่ซื้อประจำ
+--   ตัวเลข ณ 2026-08-25: 42,640 บริษัทไม่ใช่เครดิต · 10,718 เป็นเครดิต · เข้าเกณฑ์ 1,656
 --
 -- ⚠️ sale_orders.company_id ไม่ใช่รหัสลูกค้า — เป็นบริษัทผู้ขาย (มีแค่ค่า 1 กับ 2)
 --    จุดเชื่อมลูกค้าคือ contact_id เท่านั้น ห้ามเผลอ join ด้วย company_id
@@ -422,16 +434,29 @@ comp AS (
 -- ทำไมต้องขยายเป็นนิติบุคคล ไม่ดูแค่ company_id ตัวเอง: Odoo แตกบริษัทเดียวเป็นหลายรหัส
 -- วัดบนข้อมูลจริง 2026-08-20 — ถ้าไม่ขยาย จะมี 1,259 บริษัทที่ซื้อจริงใต้รหัสสาขาอื่น
 -- ถูกนับเป็น "เงียบเกิน 1 ปี" ผิด ๆ (13% ของกลุ่มที่ยัง active อยู่)
+-- ประเภทการชำระเงินก็ต้องขยายด้วยเหตุผลเดียวกัน: 579 นิติบุคคล (จาก 2,031 ที่มีหลายรหัส)
+-- มีรหัสที่ประเภทไม่ตรงกัน ถ้าดูแค่รหัสที่เซลล์เลือก ลูกค้าเครดิตจะหลุดด่านได้ด้วยการ
+-- เลือกรหัสสาขาที่เป็น Cash (ต่างกัน 215 บริษัท วัด 2026-08-25)
 --
 -- ทำไมคำนวณตรงนี้แทนที่จะถามตอนออกใบ: ถามทีละบริษัทตอนใช้งานจริงราคา ~190ms และ
 -- ติดป้ายในผลค้นหา 30 รายพร้อมกันราคา 2.2 วิ (ใช้ไม่ได้) — ยุบมาคำนวณทั้งตารางรอบเดียว
 -- ด้วย hash aggregate ล้วนราคา 1.5 วิ ต่อรอบ build แล้วตอนใช้งานเหลือ index lookup
 -- ════════════════════════════════════════════════════════════════════
 so_last AS (
-  -- ใบสั่งซื้อล่าสุดต่อผู้ติดต่อ (ใช้ idx_so_contact_latest → index-only scan)
+  -- ใบล่าสุดต่อผู้ติดต่อ นับเฉพาะที่ออกบิลแล้ว/รอออกบิล
+  --
+  -- 'no' = Odoo บอกว่า "ไม่มีอะไรต้องวางบิล" ครอบทั้งใบที่ยกเลิก ใบร่าง และใบที่ยังไม่ส่งของ
+  -- จึงไม่ใช่หลักฐานว่าลูกค้าจ่ายเงินจริง — ด่านเครดิตต้องดูเฉพาะใบที่กลายเป็นเงิน
+  -- ถ้าใบล่าสุดของบริษัทเป็น 'no' ค่าจะตกไปใช้ใบที่ออกบิลของรหัสอื่นในนิติบุคคลเดียวกัน
+  -- และถ้าทั้งนิติบุคคลไม่มีใบที่ออกบิลเลย ก็คืน NULL (= ผ่านด่าน)
+  --
+  -- ⚠️ ตัวกรองนี้ทำให้ใช้ idx_so_contact_latest แบบ index-only ไม่ได้แล้ว (invoice_status
+  --    ไม่อยู่ใน index) กลายเป็น seq scan — วัด 2026-08-25: 90ms → 333ms บน build 2.1 วิ
+  --    ยังไม่คุ้มสร้าง index เพิ่ม ถ้าวันไหน build ช้าขึ้นจนสะดุด ค่อยมาดูตรงนี้
   SELECT contact_id, max(order_date) AS d
     FROM public.sale_orders
    WHERE contact_id > 0
+     AND invoice_status IN ('invoiced', 'to invoice')
    GROUP BY contact_id
 ),
 own_last AS (
@@ -439,6 +464,27 @@ own_last AS (
   SELECT b.company_id, max(so.d) AS d
     FROM base b
     LEFT JOIN so_last so ON so.contact_id = b.contact_id
+   GROUP BY b.company_id
+),
+own_credit AS (
+  -- บริษัทนี้เป็นลูกค้าเครดิต/เช็คล่วงหน้าหรือไม่ (ยังไม่ขยายนิติบุคคล)
+  --
+  -- รูปแบบที่นับว่าเป็นเครดิต — ค่าที่มีจริงใน Odoo ณ 2026-08-25:
+  --   '7/14/15/20/30/40/45/60/65/90 Days'  → ตรง regex
+  --   'เช็คล่วงหน้า7/15/30/45วัน'              → ตรง LIKE
+  -- ที่เหลือไม่นับ: 'Cash', 'Immediate Payment', และ NULL (28,241 บริษัทไม่ได้ตั้งค่าใน Odoo)
+  --
+  -- ⚠️ COALESCE จำเป็น ไม่ใช่ของแถม — bool_or() บนบริษัทที่ payment terms เป็น NULL ทุกแถว
+  --    คืน NULL ไม่ใช่ false แล้วเงื่อนไขที่เขียนกลับด้าน (NOT credit) จะกินบริษัทกลุ่มนี้
+  --    หายไปเงียบ ๆ ทั้ง 28,241 ราย
+  --
+  -- ⚠️ ค่าใหม่ที่ Odoo เพิ่มมาทีหลัง (เช่น '2 Months' / 'เครดิต 30 วัน') จะไม่ตรงสักรูปแบบ
+  --    แล้วลูกค้ากลุ่มนั้นหลุดด่านโดยไม่มีใครรู้ → creditHoldSmoke.ts มีข้อที่ลิสต์ค่าที่
+  --    ไม่เข้าทั้งสองรูปแบบออกมาให้เห็นทุกครั้งที่รัน ห้ามลบทิ้ง
+  SELECT b.company_id,
+         COALESCE(bool_or(b.customer_payment_terms ~ '^[0-9]+ Days$'
+                       OR b.customer_payment_terms LIKE 'เช็คล่วงหน้า%'), false) AS c
+    FROM base b
    GROUP BY b.company_id
 ),
 ent_keys AS (
@@ -449,15 +495,16 @@ ent_keys AS (
   UNION ALL SELECT DISTINCT company_id, 'n'::text,        customer_name            FROM base WHERE customer_name      IS NOT NULL
 ),
 key_last AS (
-  -- คีย์แต่ละตัวถูกซื้อล่าสุดเมื่อไหร่ (รวมทุกบริษัทที่ถือคีย์นี้)
-  SELECT ek.kind, ek.k, max(ol.d) AS d
+  -- คีย์แต่ละตัวถูกซื้อล่าสุดเมื่อไหร่ + เป็นเครดิตไหม (รวมทุกบริษัทที่ถือคีย์นี้)
+  SELECT ek.kind, ek.k, max(ol.d) AS d, bool_or(oc.c) AS c
     FROM ent_keys ek
-    JOIN own_last ol ON ol.company_id = ek.company_id
+    JOIN own_last   ol ON ol.company_id = ek.company_id
+    JOIN own_credit oc ON oc.company_id = ek.company_id
    GROUP BY ek.kind, ek.k
 ),
 ent_last AS (
-  -- แล้วกระจายกลับ: บริษัทหนึ่งได้วันล่าสุดของคีย์ที่ตัวเองถืออยู่ทุกตัว
-  SELECT ek.company_id, max(kl.d) AS d
+  -- แล้วกระจายกลับ: บริษัทหนึ่งได้วันล่าสุด/สถานะเครดิตของคีย์ที่ตัวเองถืออยู่ทุกตัว
+  SELECT ek.company_id, max(kl.d) AS d, COALESCE(bool_or(kl.c), false) AS c
     FROM ent_keys ek
     JOIN key_last kl ON kl.kind = ek.kind AND kl.k = ek.k
    GROUP BY ek.company_id
@@ -472,12 +519,17 @@ SELECT
   COALESCE(b.invoice_district, comp.invoice_district)            AS invoice_district,
   COALESCE(b.invoice_sub_district, comp.invoice_sub_district)    AS invoice_sub_district,
   b.invoice_state, b.invoice_zip,
-  -- GREATEST ข้าม NULL ให้เอง · own_last เผื่อบริษัทที่ไม่มีคีย์เลยสักตัว (ไม่มีแถวใน ent_last)
-  GREATEST(own_last.d, ent_last.d)                               AS last_order_at
+  -- ไม่ใช่ลูกค้าเครดิต → NULL ตั้งแต่ต้นทาง ด่านจึงไม่ต้องรู้เรื่องเงื่อนไขการชำระเงินเลย
+  -- (own_credit/own_last เผื่อบริษัทที่ไม่มีคีย์เลยสักตัว = ไม่มีแถวใน ent_last)
+  -- GREATEST ข้าม NULL ให้เอง
+  CASE WHEN COALESCE(ent_last.c, own_credit.c, false)
+       THEN GREATEST(own_last.d, ent_last.d)
+  END                                                            AS last_order_at
 FROM base b
-LEFT JOIN comp     ON comp.company_id     = b.company_id
-LEFT JOIN own_last ON own_last.company_id = b.company_id
-LEFT JOIN ent_last ON ent_last.company_id = b.company_id;
+LEFT JOIN comp       ON comp.company_id       = b.company_id
+LEFT JOIN own_last   ON own_last.company_id   = b.company_id
+LEFT JOIN own_credit ON own_credit.company_id = b.company_id
+LEFT JOIN ent_last   ON ent_last.company_id   = b.company_id;
 
 -- ════════════════════════════════════════════════════════════════════
 -- แปลง customers_data_view: MATERIALIZED VIEW -> ตารางจริง

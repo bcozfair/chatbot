@@ -4,15 +4,24 @@
 //
 //  ✅ อ่านอย่างเดียวทั้งไฟล์ — ไม่เขียน/ไม่ลบอะไรเลย รันกับ production ได้
 //
+//  ⚠️ last_order_at ไม่ใช่ "วันสั่งซื้อล่าสุด" ตามชื่อ — คือวันบิลล่าสุดของนิติบุคคล และมีค่า
+//     เฉพาะลูกค้าเครดิต/เช็คล่วงหน้า (NULL = ไม่เข้าข่ายตรวจ) นิยามเต็มอยู่หัว
+//     services/creditHoldService.ts
+//
 //  ครอบคลุม:
 //   1. เกณฑ์โหลดจาก DB ได้และ shape ถูก
 //   2. ★ parity: last_order_at ที่คำนวณไว้ใน customers_data_build ต้องตรงกับการคำนวณสด
 //      ด้วย db/companyIdentity.ts — นี่คือด่านกันนิยาม "นิติบุคคลเดียวกัน" แตกเป็นสองที่
-//   3. กติกา 3 เคส: ไม่เคยซื้อ = ผ่าน · ซื้อในเกณฑ์ = ผ่าน · เงียบเกินเกณฑ์ = บล็อก
-//   4. การขยายนิติบุคคลมีผลจริง (บริษัทที่ซื้อใต้รหัสสาขาอื่นต้องไม่ถูกนับว่าเงียบ)
+//      (เทียบทั้งวันบิลและสถานะเครดิต ซึ่งขยายนิติบุคคลด้วยคีย์ชุดเดียวกัน)
+//   3. กติกา 3 เคส: ไม่เข้าข่าย = ผ่าน · บิลในเกณฑ์ = ผ่าน · บิลเกินเกณฑ์ = บล็อก
+//   4. การขยายนิติบุคคลมีผลจริง (บริษัทที่ซื้อ/ถือเครดิตใต้รหัสสาขาอื่นต้องไม่ถูกนับว่าเงียบ)
 //   5. checkCreditHold ประกอบ mode + เกณฑ์ถูกต้อง เทียบกับ SQL ที่คำนวณแยกอิสระ
 //   6. findCreditHeldCompanyIds (ยกชุด) ให้คำตอบเดียวกับ checkCreditHold (ทีละราย)
 //   7. index ของด่านตรวจยังมี INCLUDE (last_order_at) — กันคนเผลอลบออกแล้วด่านช้าลงเงียบ ๆ
+//   8. ค่า customer_payment_terms ทุกค่าใน DB ต้องจัดกลุ่มได้ — ค่าใหม่ที่ Odoo เพิ่มมาแล้ว
+//      ไม่เข้าทั้งสองรูปแบบ จะทำให้ลูกค้ากลุ่มนั้นหลุดด่านโดยไม่มีใครรู้
+//   9. ลูกค้าเครดิตที่มีใบออกบิลจริง ต้องได้วันที่เสมอ (กันเงื่อนไขเครดิตเขียนกลับด้าน)
+//  10. ใบ invoice_status='no' ต้องไม่เคยกลายเป็น last_order_at ของใคร
 //
 //  ให้รันซ้ำทุกครั้งที่แตะ services/creditHoldService.ts, นิยาม last_order_at ใน
 //  migrations/schema.sql หรือ db/companyIdentity.ts
@@ -31,7 +40,18 @@ const ok = (label: string, cond: boolean, extra = '') => {
   console.log(`${cond ? '✓' : '✗ FAIL'}  ${label}${extra ? '  ' + extra : ''}`);
 };
 
-const iso = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : 'ไม่เคยซื้อ');
+const iso = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : 'ไม่เข้าข่ายตรวจ');
+
+/**
+ * "บริษัทนี้เป็นลูกค้าเครดิต/เช็คล่วงหน้าหรือไม่" — ต้องตรงกับ own_credit ใน
+ * migrations/schema.sql ทุกอักขระ ถ้าสองที่นี้ไม่ตรงกัน ข้อ 2 (parity) จะแดง
+ */
+const CREDIT_TERMS_SQL = (col: string) =>
+  `(${col} ~ '^[0-9]+ Days$' OR ${col} LIKE 'เช็คล่วงหน้า%')`;
+
+/** ใบที่นับว่า "เป็นเงินแล้ว" — ต้องตรงกับ so_last ใน migrations/schema.sql */
+const BILLED_SQL = (alias: string) =>
+  `${alias}.invoice_status IN ('invoiced', 'to invoice')`;
 
 // ── 1. เกณฑ์ปัจจุบัน ────────────────────────────────────────────────────
 const policy = await loadCreditPolicy();
@@ -58,17 +78,42 @@ const { rows: sample } = await pool.query(
      WHERE company_id > 0 AND last_order_at < now() - make_interval(months => $1::int)
      ORDER BY company_id LIMIT 15)
    UNION ALL
-   (SELECT DISTINCT company_id, last_order_at, 'never'
-      FROM public.customers_data_view
+   -- แยก NULL ออกเป็น 3 สาเหตุ เพื่อให้แน่ใจว่าทุกสาเหตุถูกทดสอบจริง ไม่ใช่สุ่มโดนแต่ Cash
+   -- (Cash เป็น 80% ของกลุ่ม NULL ถ้าไม่แยก อีกสองสาเหตุจะไม่เคยถูกแตะเลย)
+   (SELECT DISTINCT company_id, last_order_at, 'cash'
+      FROM public.customers_data_view c
      WHERE company_id > 0 AND last_order_at IS NULL
-     ORDER BY company_id LIMIT 10)`,
+       AND NOT ${CREDIT_TERMS_SQL('customer_payment_terms')}
+     ORDER BY company_id LIMIT 8)
+   UNION ALL
+   (SELECT DISTINCT company_id, last_order_at, 'never'
+      FROM public.customers_data_view c
+     WHERE company_id > 0 AND last_order_at IS NULL
+       AND ${CREDIT_TERMS_SQL('customer_payment_terms')}
+       AND NOT EXISTS (SELECT 1 FROM public.sale_orders s WHERE s.contact_id = c.contact_id)
+     ORDER BY company_id LIMIT 8)
+   UNION ALL
+   (SELECT DISTINCT company_id, last_order_at, 'nobill'
+      FROM public.customers_data_view c
+     WHERE company_id > 0 AND last_order_at IS NULL
+       AND ${CREDIT_TERMS_SQL('customer_payment_terms')}
+       AND EXISTS (SELECT 1 FROM public.sale_orders s WHERE s.contact_id = c.contact_id)
+     ORDER BY company_id LIMIT 8)`,
   [MONTHS]
 );
-console.log(`   ตัวอย่างที่ใช้ทดสอบ ${sample.length} บริษัท` +
-  ` (recent/dormant/never = ${sample.filter(r => r.grp === 'recent').length}/` +
-  `${sample.filter(r => r.grp === 'dormant').length}/${sample.filter(r => r.grp === 'never').length})`);
-ok('มีตัวอย่างครบทั้ง 3 กลุ่มในฐานข้อมูลจริง',
-  ['recent', 'dormant', 'never'].every(g => sample.some(r => r.grp === g)));
+const GROUPS = ['recent', 'dormant', 'cash', 'never', 'nobill'] as const;
+const GROUP_LABEL: Record<string, string> = {
+  recent: 'บิลยังใหม่',
+  dormant: 'บิลเกินเกณฑ์',
+  cash: 'ไม่ใช่เครดิต',
+  never: 'เครดิต·ไม่เคยมีใบ',
+  nobill: 'เครดิต·ไม่เคยมีบิล',
+};
+console.log(`   ตัวอย่างที่ใช้ทดสอบ ${sample.length} บริษัท (` +
+  GROUPS.map(g => `${GROUP_LABEL[g]} ${sample.filter(r => r.grp === g).length}`).join(' · ') + ')');
+ok('มีตัวอย่างครบทุกกลุ่มในฐานข้อมูลจริง',
+  GROUPS.every(g => sample.some(r => r.grp === g)),
+  GROUPS.filter(g => !sample.some(r => r.grp === g)).map(g => `ขาด ${GROUP_LABEL[g]}`).join(', '));
 
 // ── 2. ★ parity: ค่าที่ precompute ไว้ ต้องตรงกับการคำนวณสดด้วย companyIdentity ──
 //
@@ -82,13 +127,16 @@ const LIVE_SQL = `
      WHERE m.company_id = $1
   ),
   sib AS (
-    SELECT DISTINCT t.contact_id
+    SELECT DISTINCT t.contact_id, t.customer_payment_terms
       FROM public.customers_data_view t, me
      WHERE t.company_id = $1 OR ${matchesKeysSql('t', 'me')}
   )
-  SELECT max(s.order_date) AS d
+  -- ไม่ใช่ลูกค้าเครดิต → NULL (CASE ครอบ max ทั้งก้อน) · เครดิตแต่ไม่มีใบที่ออกบิล → max() คืน NULL เอง
+  SELECT CASE WHEN bool_or(${CREDIT_TERMS_SQL('sib.customer_payment_terms')})
+              THEN max(s.order_date) END AS d
     FROM sib
-    LEFT JOIN public.sale_orders s ON s.contact_id = sib.contact_id`;
+    LEFT JOIN public.sale_orders s
+      ON s.contact_id = sib.contact_id AND ${BILLED_SQL('s')}`;
 
 let parityChecked = 0;
 let parityMismatch = 0;
@@ -128,10 +176,11 @@ const { rows: ruleRows } = await pool.query(
   [MONTHS]
 );
 const r3 = ruleRows[0];
-ok('ไม่เคยซื้อ → ไม่เข้าเกณฑ์ (dormant เป็น NULL ไม่ใช่ true)',
-  Number(r3.never_flagged) === 0, `never ทั้งหมด ${r3.never_null} ราย`);
-ok('ซื้อล่าสุดเกินเกณฑ์ → เข้าเกณฑ์ทุกราย', Number(r3.old_but_passed) === 0);
-ok('ซื้อล่าสุดในเกณฑ์ → ไม่เข้าเกณฑ์ทุกราย', Number(r3.recent_but_flagged) === 0);
+ok('ไม่เข้าข่ายตรวจ → ไม่เข้าเกณฑ์ (dormant เป็น NULL ไม่ใช่ true)',
+  Number(r3.never_flagged) === 0,
+  `last_order_at เป็น NULL ${r3.never_null} ราย = ไม่ใช่เครดิต + ไม่เคยซื้อ + ไม่เคยมีบิล`);
+ok('บิลล่าสุดเกินเกณฑ์ → เข้าเกณฑ์ทุกราย', Number(r3.old_but_passed) === 0);
+ok('บิลล่าสุดในเกณฑ์ → ไม่เข้าเกณฑ์ทุกราย', Number(r3.recent_but_flagged) === 0);
 
 // ── 4. การขยายนิติบุคคลมีผลจริง ─────────────────────────────────────────
 // เทียบ "ดูแค่ company_id ตัวเอง" กับ "ค่าที่ประกาศใน view" — ต้องมีบริษัทที่ต่างกัน
@@ -147,9 +196,13 @@ ok('ซื้อล่าสุดในเกณฑ์ → ไม่เข้�
 const { rows: expRows } = await pool.query(
   `WITH st AS (SELECT refreshed_at FROM public.customers_data_view_state WHERE id = 1),
    own AS (
-     SELECT c.company_id, max(s.order_date) AS d
+     -- "ถ้าดูแค่รหัสบริษัทตัวเอง จะได้ค่าอะไร" — ทั้งวันบิลและสถานะเครดิตไม่ขยายนิติบุคคล
+     SELECT c.company_id,
+            CASE WHEN bool_or(${CREDIT_TERMS_SQL('c.customer_payment_terms')})
+                 THEN max(s.order_date) END AS d
        FROM public.customers_data_view c
-       LEFT JOIN public.sale_orders s ON s.contact_id = c.contact_id
+       LEFT JOIN public.sale_orders s
+         ON s.contact_id = c.contact_id AND ${BILLED_SQL('s')}
       WHERE c.company_id > 0
       GROUP BY c.company_id
    ),
@@ -165,7 +218,7 @@ const { rows: expRows } = await pool.query(
           max(round(extract(epoch FROM now() - st.refreshed_at) / 60))::int              AS refresh_age_min
      FROM own JOIN ent USING (company_id) CROSS JOIN st`
 );
-ok('การขยายนิติบุคคลช่วยบริษัทที่ซื้อใต้รหัสสาขาอื่นไว้ได้',
+ok('การขยายนิติบุคคลช่วยบริษัทที่ซื้อ/ถือเครดิตใต้รหัสสาขาอื่นไว้ได้',
   Number(expRows[0].rescued) > 0, `${expRows[0].rescued} บริษัท`);
 ok('ค่าในนิติบุคคลต้องไม่เก่ากว่าค่าของรหัสตัวเอง (ตรรกะกลับด้าน)',
   Number(expRows[0].impossible) === 0);
@@ -244,6 +297,68 @@ const { rows: planRows } = await pool.query(
 );
 const planText = JSON.stringify(planRows[0]['QUERY PLAN']);
 console.log(`   แผน query ของด่านตรวจ: ${planText.includes('Index Only Scan') ? 'Index Only Scan ✔' : 'ไม่ใช่ index-only (ปกติถ้าตารางเล็ก)'}`);
+
+// ── 8. ค่า customer_payment_terms ทุกค่าต้องจัดกลุ่มได้ ─────────────────
+// นี่คือข้อที่กันความพังแบบเงียบที่สุดของกฎนี้: วันหนึ่ง Odoo เพิ่มเงื่อนไขใหม่ที่ไม่เข้า
+// ทั้ง '^[0-9]+ Days$' และ 'เช็คล่วงหน้า%' (เช่น '2 Months' / 'เครดิต 30 วัน') ลูกค้ากลุ่มนั้น
+// จะกลายเป็น "ไม่ใช่เครดิต" แล้วหลุดด่านทันทีโดยไม่มี error ให้เห็นสักบรรทัด
+// ⚠️ ห้ามลบข้อนี้ และห้ามแก้ให้ผ่านด้วยการต่อ pattern มั่ว ๆ — ต้องดูค่าที่โผล่มาก่อน
+//    แล้วตัดสินกับผู้ใช้ว่านับเป็นเครดิตไหม จากนั้นแก้ที่ migrations/schema.sql เป็นหลัก
+const { rows: termRows } = await pool.query(
+  `SELECT customer_payment_terms AS t, count(DISTINCT company_id)::int AS n
+     FROM public.customers_data_view
+    WHERE customer_payment_terms IS NOT NULL
+      AND NOT ${CREDIT_TERMS_SQL('customer_payment_terms')}
+      AND customer_payment_terms NOT IN ('Cash', 'Immediate Payment')
+    GROUP BY 1 ORDER BY 2 DESC`
+);
+for (const r of termRows) {
+  console.log(`      ✗ พบเงื่อนไขการชำระเงินที่ยังไม่ได้จัดกลุ่ม: "${r.t}" (${r.n} บริษัท)`);
+}
+ok('เงื่อนไขการชำระเงินทุกค่าใน DB จัดกลุ่มได้ครบ', termRows.length === 0);
+
+// ── 9. ลูกค้าเครดิตที่มีใบออกบิลจริง ต้องได้วันที่เสมอ ──────────────────
+// กันเงื่อนไขเครดิตเขียนกลับด้าน (เช่นลืม COALESCE ให้ bool_or แล้ว NULL กลืนทั้งฐาน)
+// ซึ่งจะทำให้ด่าน "ไม่บล็อกใครเลย" อย่างเงียบสนิท — ผ่านทุกเทสต์อื่นได้หมด
+const { rows: missRows } = await pool.query(
+  `SELECT count(*)::int AS n
+     FROM public.customers_data_view c
+    WHERE c.last_order_at IS NULL
+      AND ${CREDIT_TERMS_SQL('c.customer_payment_terms')}
+      AND EXISTS (SELECT 1 FROM public.sale_orders s
+                   WHERE s.contact_id = c.contact_id AND ${BILLED_SQL('s')})`
+);
+ok('ลูกค้าเครดิตที่มีใบออกบิลแล้ว ต้องมี last_order_at ทุกราย',
+  Number(missRows[0].n) === 0,
+  Number(missRows[0].n) ? `← ขาด ${missRows[0].n} แถว เงื่อนไขเครดิตน่าจะกลับด้าน` : '');
+
+// ── 10. ใบ 'no' ต้องไม่เคยกลายเป็น last_order_at ของใคร ─────────────────
+// เงื่อนไข NOT EXISTS ตัดเคสบังเอิญ: ใบที่ออกบิลของบริษัทอื่นที่มี order_date ตรงกันเป๊ะ
+const { rows: noRows } = await pool.query(
+  `SELECT count(*)::int AS n
+     FROM public.customers_data_view c
+     JOIN public.sale_orders s ON s.contact_id = c.contact_id
+    WHERE s.invoice_status = 'no' AND c.last_order_at = s.order_date
+      AND NOT EXISTS (SELECT 1 FROM public.sale_orders b
+                       WHERE ${BILLED_SQL('b')} AND b.order_date = s.order_date)`
+);
+ok("ใบที่ยังไม่วางบิล (invoice_status='no') ไม่ถูกนับเป็นวันซื้อล่าสุด",
+  Number(noRows[0].n) === 0);
+
+// ── ขอบเขตที่ด่านดูแลอยู่จริง (ข้อมูลประกอบ ไม่ตัดสินผ่าน/ไม่ผ่าน) ──────
+const { rows: scopeRows } = await pool.query(
+  `SELECT count(*)::int                                                          AS total,
+          count(*) FILTER (WHERE d IS NOT NULL)::int                             AS in_scope,
+          count(*) FILTER (WHERE d < now() - make_interval(months => $1::int))::int AS flagged
+     FROM (SELECT company_id, max(last_order_at) AS d
+             FROM public.customers_data_view WHERE company_id > 0 GROUP BY company_id) x`,
+  [MONTHS]
+);
+const sc = scopeRows[0];
+console.log(
+  `   ขอบเขต: ${sc.total} บริษัท → อยู่ในขอบเขตตรวจ ${sc.in_scope} (ลูกค้าเครดิตที่มีบิลแล้ว) ` +
+    `→ เข้าเกณฑ์ ${sc.flagged}`
+);
 
 await pool.end();
 

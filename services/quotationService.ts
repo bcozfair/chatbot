@@ -77,11 +77,13 @@ export function buildViolationDisplay(v: Omit<Violation, 'display_message'>): st
     case 'CUSTOMER_BLACKLISTED':
       return '🚫 บริษัท/ผู้ติดต่อ รายนี้ถูกระงับการเสนอราคา กรุณาติดต่อแอดมิน';
     // ตรงข้ามกับ blacklist: เคสนี้ต้องบอกวันที่ซื้อล่าสุด เพราะเซลล์ต้องเอาไปคุยกับแอดมินต่อ
+    // ต้องพูดว่า "ที่ออกบิล" ให้ชัด — ใบที่ยังไม่วางบิล (invoice_status='no') ไม่นับตั้งแต่
+    // 2026-08-25 ถ้าไม่บอก เซลล์จะงงว่าเพิ่งมีใบเมื่อเดือนก่อนแล้วทำไมยังโดนบล็อก
     case 'CUSTOMER_CREDIT_HOLD': {
       const months = v.dormant_months ?? 12;
       const since = v.last_order_at ? thaiDateDMY(new Date(v.last_order_at)) : null;
       const when = since ? `ตั้งแต่ ${since} ` : '';
-      return `⛔ บริษัทนี้ไม่มีคำสั่งซื้อ ${when}(เกิน ${months} เดือน) กรุณาติดต่อแอดมินเพื่อตรวจสอบเครดิตก่อน`;
+      return `⛔ บริษัทนี้ไม่มีคำสั่งซื้อที่ออกบิล ${when}(เกิน ${months} เดือน) กรุณาติดต่อแอดมินเพื่อตรวจสอบเครดิตก่อน`;
     }
     case 'SYSTEM_ERROR':
       return '⚠️ ตรวจสอบกฎไม่สำเร็จ กรุณาลองใหม่หรือติดต่อแอดมิน';

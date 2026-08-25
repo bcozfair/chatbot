@@ -60,7 +60,9 @@ chatbot/
 │   ├── rules/                # rule engine โปรโมชัน/เงื่อนไข (index, quotationRules, scopeMatch, cache, types)
 │   ├── shippingFee.ts        # ค่าขนส่ง
 │   ├── blacklistService.ts   # บัญชีห้ามเสนอราคา
-│   ├── creditHoldService.ts  # ระงับบริษัทที่ไม่มี sale_order มานาน (เกณฑ์อยู่ DB, ข้อมูลอยู่ cdv)
+│   ├── creditHoldService.ts  # ระงับลูกค้าเครดิตที่ไม่มีใบวางบิลมานาน (เกณฑ์อยู่ DB, ข้อมูลอยู่ cdv)
+│   │                         # ⚠️ cdv.last_order_at ชื่อหลอก = วันบิลล่าสุด + เฉพาะลูกค้าเครดิต
+│   │                         #    NULL = ไม่เข้าข่ายตรวจ (3 สาเหตุ) — อ่านหัวไฟล์ก่อนใช้ที่อื่น
 │   ├── webhookQueue.ts       # KeyedTaskQueue + งบเวลาตอบ (BUDGET_MS) — หัวใจของ "ตอบทันภายใน replyToken"
 │   ├── pdfCache.ts           # cache PDF ที่ออกเลขแล้ว
 │   ├── apiLogService.ts      # คิวเขียน api_logs (ห้าม throw / ต้อง sync)

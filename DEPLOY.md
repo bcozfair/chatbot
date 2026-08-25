@@ -225,7 +225,8 @@ SELECT to_regclass('public.customers_data_view')  AS matview,
        EXISTS(SELECT 1 FROM pg_constraint WHERE contype='p'
               AND conrelid=to_regclass('public.quotation_credit_policy'))                     AS credit_policy_pk,
        EXISTS(SELECT 1 FROM information_schema.columns
-              WHERE table_name='customers_data_view' AND column_name='last_order_at')         AS cdv_last_order;"
+              WHERE table_name='customers_data_view' AND column_name='last_order_at')         AS cdv_last_order,
+       (pg_get_viewdef('public.customers_data_build'::regclass) LIKE '%to invoice%')          AS cdv_billed_only;"
 ```
 > คอลัมน์ `clean_text` ต้องใช้ **`to_regprocedure`** ไม่ใช่ `to_regproc` — `to_regproc` รับได้แค่ชื่อฟังก์ชันเปล่า
 > ใส่ `(text)` ต่อท้ายจะคืน null ทุกครั้งแม้ฟังก์ชันมีอยู่จริง = สัญญาณเตือนหลอกว่า migration ขาด
@@ -255,6 +256,17 @@ done
   ล้มพร้อมข้อความภาษาคนถ้าเจอแถว id=1 ซ้ำ (ไม่ลบให้เอง — ต้องให้คนเลือกว่าจะเก็บแถวไหน)
   (`CREATE TABLE customers_data_view_new AS SELECT * FROM customers_data_build` → สร้าง index
   `(company_id) INCLUDE (last_order_at)` → ANALYZE → สลับชื่อใน transaction) — วัดจริง build 4.7 วิ สลับ 13 ms
+- **ข้อยกเว้น: `2026-08-25_01_credit_hold_billed_orders_credit_customers_only.sql` รันได้ทุกเวลา และรัน "ก่อน" deploy โค้ดใหม่ได้**
+  เปลี่ยนนิยาม `last_order_at`: นับเฉพาะใบที่ `invoice_status IN ('invoiced','to invoice')` และเฉพาะ
+  ลูกค้าเครดิต/เช็คล่วงหน้า (นอกนั้น NULL = ผ่านด่าน) · **ไม่มีคอลัมน์ใหม่** โค้ดด่านตรวจไม่ต้องแก้
+  สักบรรทัด ลำดับ migration/deploy จึงสลับกันได้อิสระ
+  ไฟล์ทำ build+swap ให้ในตัว (ทั้งไฟล์อยู่ใน transaction เดียว) → ไม่มีช่วงที่ค้นหาลูกค้าพัง
+  ล็อก AccessExclusive ระดับ ms ตอนสลับ ส่วน build 2–3 วิ ไม่ล็อกใคร · ล้มกลางคัน = rollback ทั้งไฟล์
+  มี guard ล้มเองถ้า build ได้ 0 แถว หรือไม่มีบริษัทไหนได้ `last_order_at` เลย (เงื่อนไขเครดิตกลับด้าน)
+  ⚠️ หลังรันเสร็จให้ `VACUUM (ANALYZE false) public.customers_data_view` — ตารางที่เพิ่งสร้างยังไม่มี
+  visibility map ด่านตรวจจะตกจาก Index Only Scan ไปเป็น Index Scan จนกว่า autovacuum จะมาถึง
+  ตรวจผล: `npm run diag:credit-hold` ต้องเขียวหมด และบรรทัด "ขอบเขต" ต้องบอกจำนวนที่เข้าเกณฑ์
+  (1,656 บริษัท ณ 2026-08-25 — ถ้าได้ 10,926 แปลว่า view ยังไม่ถูก rebuild)
 - **ข้อยกเว้น: `2026-08-20_03_api_logs_ip.sql` รันได้ทุกเวลา และรัน "ก่อน" deploy โค้ดใหม่ได้**
   `ADD COLUMN` แบบ nullable ไม่มี DEFAULT = PostgreSQL แก้แค่ metadata ไม่ล็อกตาราง ไม่เขียนแถวใหม่
   และโค้ดเก่าที่ยังรันอยู่ระบุชื่อคอลัมน์ใน INSERT ครบทุกตัว จึงเขียน log ต่อได้ตามปกติ (คอลัมน์ใหม่เป็น NULL)
