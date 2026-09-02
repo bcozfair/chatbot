@@ -4,6 +4,7 @@ import { refreshCustomerDataView } from './refreshCustomerDirectory.js';
 import { createGatewayGet, sleep } from './gatewayClient.js';
 import { decidePageTransition, MAX_STALL_RETRIES } from './syncPagination.js';
 import { createPageTicker, logResourceDone, serr, setSyncCtx, slog, vlog } from './syncLog.js';
+import { reconcileQuotationOdooLinks } from '../../services/quotationOdooLink.js';
 
 const INITIAL_SINCE = '1970-01-01T00:00:00.000Z';
 const PAGE_LIMIT = 500;
@@ -55,6 +56,31 @@ async function ensureSyncState(dbClient: any) {
     VALUES ('sale_order', NULL, NULL, 'full', 0, 0)
     ON CONFLICT (resource) DO NOTHING
   `);
+}
+
+/**
+ * เติม 3 คอลัมน์ที่เพิ่มทีหลัง (order_status/invoice_date/source) ให้ DB ที่ยังไม่ได้รัน
+ * migration 2026-09-02_02 — กัน deploy โค้ดใหม่ก่อนรัน migration แล้ว upsert พังทั้งรอบ
+ *
+ * เช็คจาก catalog ก่อนเสมอ ไม่ยิง ALTER ... IF NOT EXISTS ทุกรอบแบบที่ ensureSyncState ทำกับ
+ * sync_state เพราะ ALTER ต่อให้ไม่มีอะไรให้แก้ก็ยังขอ ACCESS EXCLUSIVE lock — sale_orders
+ * มี 3 แสนแถวและถูกอ่านตลอดเวลา ถ้า ALTER ไปติดคิวรอ query ยาว ๆ อยู่ query อื่นทั้งหมด
+ * จะไปต่อคิวหลังมันอีกที = ตารางหลักตายทั้งระบบทุก 10 นาที ส่วน SELECT จาก catalog ไม่ล็อกอะไร
+ */
+async function ensureSaleOrderColumns(dbClient: any) {
+  const { rows } = await dbClient.query(`
+    SELECT 1 FROM information_schema.columns
+     WHERE table_schema = 'public' AND table_name = 'sale_orders' AND column_name = 'order_status'
+  `);
+  if (rows.length > 0) return;
+
+  await dbClient.query(`
+    ALTER TABLE sale_orders
+      ADD COLUMN IF NOT EXISTS order_status text,
+      ADD COLUMN IF NOT EXISTS invoice_date timestamp with time zone,
+      ADD COLUMN IF NOT EXISTS source       text
+  `);
+  slog('🧱 sale_orders: เติมคอลัมน์ order_status/invoice_date/source ให้เอง (ยังไม่ได้รัน migration 2026-09-02_02)');
 }
 
 async function loadSyncState(dbClient: any) {
@@ -139,10 +165,10 @@ async function upsertSaleOrderRows(dbClient: any, rows: any[]) {
         sale_order_id, company_id, contact_id, salesperson_id,
         total_amount, total_discount, amount_after_discount, vat, net_amount,
         model, model_code, quantity, product_category, product_group,
-        product_sub_category, product_series, updated_at
+        product_sub_category, product_series, order_status, invoice_date, source, updated_at
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27,
-        $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, NOW()
+        $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, NOW()
       )
       ON CONFLICT (order_reference) DO UPDATE SET
         customer_reference = EXCLUDED.customer_reference,
@@ -187,6 +213,9 @@ async function upsertSaleOrderRows(dbClient: any, rows: any[]) {
         product_group = EXCLUDED.product_group,
         product_sub_category = EXCLUDED.product_sub_category,
         product_series = EXCLUDED.product_series,
+        order_status = EXCLUDED.order_status,
+        invoice_date = EXCLUDED.invoice_date,
+        source = EXCLUDED.source,
         updated_at = NOW()
     `, [
       row['Order Reference'],
@@ -231,7 +260,10 @@ async function upsertSaleOrderRows(dbClient: any, rows: any[]) {
       row['Product Category'],
       row['Product Group'],
       row['Product Sub Category'],
-      row['Product Series']
+      row['Product Series'],
+      row.Status,
+      row['Invoice Date'] ? new Date(row['Invoice Date']) : null,
+      row.Source
     ]);
   }
 }
@@ -264,6 +296,7 @@ export async function syncSaleOrders(opts?: { forceFull?: boolean }) {
 
     // 1. เตรียม sync_state
     await ensureSyncState(dbClient);
+    await ensureSaleOrderColumns(dbClient);
 
     // force-full: reset cursor เพื่อกวาดใหม่ทั้งหมดจาก since=1970 (npm run sync:saleorders -- --full)
     if (opts?.forceFull) {
@@ -437,6 +470,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       // customers_data_view เป็น source of truth ของแอป — ต้องสร้างใหม่เอง (path นี้ไม่ผ่าน syncService)
       // --full = สั่งกวาดใหม่ทั้งฐาน → บังคับ rebuild ด้วย ไม่ให้ watermark ข้าม (ใช้กู้ข้อมูลที่เพี้ยนได้)
       await refreshCustomerDataView({ force: forceFull });
+      // path นี้ไม่ผ่าน syncService จึงต้องมาร์ก "นำเข้า Odoo แล้ว" เองด้วย (ตัวเดียวกับที่รอบ sync ปกติเรียก)
+      await reconcileQuotationOdooLinks();
       await pool.end(); // ปิด pool → event loop ว่าง → Node ออกเอง (อย่าเรียก process.exit(0) จะชน libuv teardown บน Windows)
     })
     .catch((error) => {

@@ -228,7 +228,11 @@ SELECT to_regclass('public.customers_data_view')  AS matview,
               WHERE table_name='customers_data_view' AND column_name='last_order_at')         AS cdv_last_order,
        (pg_get_viewdef('public.customers_data_build'::regclass) LIKE '%to invoice%')          AS cdv_billed_only,
        (SELECT pg_get_constraintdef(oid) NOT LIKE '%warn%' FROM pg_constraint
-         WHERE conname='quotation_credit_policy_mode')                                        AS credit_mode_2_values;"
+         WHERE conname='quotation_credit_policy_mode')                                        AS credit_mode_2_values,
+       EXISTS(SELECT 1 FROM information_schema.columns
+              WHERE table_name='sale_orders' AND column_name='order_status')                  AS so_status_cols,
+       EXISTS(SELECT 1 FROM information_schema.columns
+              WHERE table_name='quotations' AND column_name='odoo_imported_at')               AS q_odoo_link;"
 ```
 > คอลัมน์ `clean_text` ต้องใช้ **`to_regprocedure`** ไม่ใช่ `to_regproc` — `to_regproc` รับได้แค่ชื่อฟังก์ชันเปล่า
 > ใส่ `(text)` ต่อท้ายจะคืน null ทุกครั้งแม้ฟังก์ชันมีอยู่จริง = สัญญาณเตือนหลอกว่า migration ขาด
@@ -279,6 +283,18 @@ done
 - **ข้อยกเว้น: `2026-08-20_03_api_logs_ip.sql` รันได้ทุกเวลา และรัน "ก่อน" deploy โค้ดใหม่ได้**
   `ADD COLUMN` แบบ nullable ไม่มี DEFAULT = PostgreSQL แก้แค่ metadata ไม่ล็อกตาราง ไม่เขียนแถวใหม่
   และโค้ดเก่าที่ยังรันอยู่ระบุชื่อคอลัมน์ใน INSERT ครบทุกตัว จึงเขียน log ต่อได้ตามปกติ (คอลัมน์ใหม่เป็น NULL)
+- **ข้อยกเว้น: `2026-09-02_02_sale_orders_status_source.sql` รันได้ทุกเวลา และรัน "ก่อน" deploy โค้ดใหม่ได้**
+  เก็บ 3 field ที่ gateway ส่งมาแล้ว sync ทิ้ง (`order_status` / `invoice_date` / `source`)
+  `ADD COLUMN` nullable ไม่มี DEFAULT → แก้แค่ metadata ไม่ล็อกตาราง 316k แถว
+  โค้ดเก่าไม่รู้จักคอลัมน์ใหม่ก็ไม่พัง (upsert ระบุชื่อคอลัมน์ครบทุกตัว)
+  ⚠️ แถวเก่าเป็น NULL หมดจนกว่า Odoo จะแก้เอกสารนั้นแล้ว incremental sync ดึงมาทับ
+  ถ้าอยากได้ครบทันทีต้อง `docker compose exec app npm run sync:saleorders -- --full` (กวาดทั้งฐาน ทำนอกเวลา)
+- **ข้อยกเว้น: `2026-09-02_03_quotations_odoo_import_link.sql` รันได้ทุกเวลา และรัน "ก่อน" deploy โค้ดใหม่ได้**
+  เพิ่ม `quotations.odoo_imported_at` / `odoo_so_id` = สถานะ "นำเข้า Odoo แล้ว" ของหน้าประวัติใบเสนอราคา
+  `ADD COLUMN` nullable ไม่มี DEFAULT บนตาราง ~1.3k แถว จบในไม่กี่ ms
+  สลับลำดับกับ deploy ได้: โค้ดใหม่ที่เจอว่ายังไม่มีคอลัมน์จะเตือนบรรทัดเดียวแล้วข้าม ไม่ล้มรอบ sync
+  ⚠️ ค่ายังว่างทั้งตารางจนกว่า **รอบ sync ถัดไป** จะมาร์กให้ (มาร์กย้อนหลังให้เองในคำสั่งเดียว ไม่ต้อง backfill)
+  ตรวจผล: หน้าประวัติใบเสนอราคาต้องมีป้าย "นำเข้า Odoo แล้ว" ไม่ใช่ "รอนำเข้า" ทั้งหน้า
 
 ### ขั้น 4.5 — เปลี่ยนชื่อค่าภาษีใน `.env` (ครั้งเดียว ตอนขึ้น export แยก QP/QT)
 export แยกไฟล์ตามบริษัทแล้ว ชื่อภาษีจึงแยกเป็น 2 คีย์ — คีย์เดิม `ODOO_EXPORT_TAX` ไม่ถูกอ่านอีกต่อไป

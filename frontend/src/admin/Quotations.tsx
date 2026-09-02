@@ -57,6 +57,10 @@ interface Quotation {
   updated_at: string;
   /** เวลาที่ใบนี้ถูกส่งออกไฟล์นำเข้า Odoo ครั้งล่าสุด — null = ยังไม่เคยส่งออก */
   odoo_exported_at?: string | null;
+  /** เวลาที่รอบ sync เห็นใบนี้อยู่ใน Odoo ครั้งแรก — null = ยังไม่เคยเห็น (ดู services/quotationOdooLink.ts) */
+  odoo_imported_at?: string | null;
+  /** id ของเอกสารในฐาน Odoo ตอนจับคู่ได้ — ไม่เปลี่ยนแม้ Odoo จะเปลี่ยนชื่อเอกสารภายหลัง */
+  odoo_so_id?: number | null;
   customer_details?: {
     customer_name: string;
     customer_code: string;
@@ -127,6 +131,35 @@ const STATUS_STYLES: Record<string, { bg: string; text: string; label: string }>
 
 function getStatusStyle(status: string) {
   return STATUS_STYLES[status] || { bg: 'bg-slate-50 border-slate-200', text: 'text-slate-600', label: status };
+}
+
+/**
+ * สถานะ Odoo ของใบเสนอราคา — 3 ขั้นเรียงตามลำดับที่เกิดจริง และเดินหน้าทางเดียว
+ *   ยังไม่ส่งออก → รอนำเข้า (ส่งออกไฟล์แล้วแต่ยังไม่เห็นใน Odoo) → นำเข้า Odoo แล้ว
+ * อ่านจาก snapshot ในตาราง quotations ไม่ใช่ join สดกับ sale_orders — Odoo เปลี่ยนชื่อเอกสาร
+ * ตอนยืนยัน/ออกบิล เลข Q* จึงหายไปจากฝั่งนั้นได้ ถ้า join สดสถานะจะเด้งกลับเองทั้งที่สำเร็จแล้ว
+ */
+type OdooStage = 'imported' | 'pending' | 'not_exported';
+
+const ODOO_STAGE_STYLES: Record<OdooStage, { bg: string; text: string; dot: string; label: string; hint: string }> = {
+  imported: {
+    bg: 'bg-emerald-50 border-emerald-200', text: 'text-emerald-700', dot: 'bg-emerald-500',
+    label: 'นำเข้า Odoo แล้ว', hint: 'พบใบนี้เป็นเอกสารในระบบ Odoo แล้ว',
+  },
+  pending: {
+    bg: 'bg-amber-50 border-amber-200', text: 'text-amber-700', dot: 'bg-amber-400',
+    label: 'รอนำเข้า', hint: 'ส่งออกไฟล์แล้วแต่ยังไม่พบใบนี้ใน Odoo — อาจยังไม่ได้อัปโหลด หรืออัปโหลดไม่สำเร็จ',
+  },
+  not_exported: {
+    bg: 'bg-slate-50 border-slate-200', text: 'text-slate-500', dot: 'bg-slate-300',
+    label: 'ยังไม่ส่งออก', hint: 'ยังไม่เคยอยู่ในไฟล์นำเข้า Odoo',
+  },
+};
+
+function getOdooStage(quote: Quotation): OdooStage {
+  if (quote.odoo_imported_at) return 'imported';
+  if (quote.odoo_exported_at) return 'pending';
+  return 'not_exported';
 }
 
 function formatNumber(num: number) {
@@ -651,7 +684,7 @@ export const Quotations: React.FC = () => {
                     onClick={() => handleSort('odoo_exported_at')}
                     className="px-4 py-3 text-center cursor-pointer hover:bg-slate-100 transition-colors"
                   >
-                    ส่งออก Odoo {renderSortIcon('odoo_exported_at')}
+                    สถานะ Odoo {renderSortIcon('odoo_exported_at')}
                   </th>
                   <th className="px-4 py-3 text-center">จัดการ</th>
                 </tr>
@@ -714,20 +747,26 @@ export const Quotations: React.FC = () => {
                           </span>
                         </td>
 
-                        {/* Odoo export status */}
+                        {/* Odoo status: ยังไม่ส่งออก → รอนำเข้า → นำเข้า Odoo แล้ว */}
                         <td className="px-4 py-2.5 text-center">
-                          {quote.odoo_exported_at ? (
-                            <div className="flex flex-col items-center gap-0.5">
-                              <span className="inline-flex items-center px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border bg-emerald-50 border-emerald-200 text-emerald-700">
-                                ส่งออกแล้ว
-                              </span>
-                              <span className="text-[10px] text-slate-400">{formatDate(quote.odoo_exported_at)}</span>
-                            </div>
-                          ) : (
-                            <span className="inline-flex items-center px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border bg-slate-50 border-slate-200 text-slate-500">
-                              ยังไม่ส่งออก
-                            </span>
-                          )}
+                          {(() => {
+                            const stage = getOdooStage(quote);
+                            const st = ODOO_STAGE_STYLES[stage];
+                            return (
+                              <div className="flex flex-col items-center gap-0.5" title={st.hint}>
+                                <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-bold tracking-wider border ${st.bg} ${st.text}`}>
+                                  <span className={`w-1.5 h-1.5 rounded-full ${st.dot}`} />
+                                  {st.label}
+                                </span>
+                                {stage === 'imported' && (
+                                  <span className="text-[10px] text-slate-400">{formatDate(quote.odoo_imported_at as string)}</span>
+                                )}
+                                {stage === 'pending' && (
+                                  <span className="text-[10px] text-slate-400">ส่งออก {formatDate(quote.odoo_exported_at as string)}</span>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </td>
 
                         {/* Actions */}

@@ -203,6 +203,14 @@ CREATE TABLE public.customers (
 --
 -- Name: sale_orders; Type: TABLE; Schema: public; Owner: -
 --
+-- 1 แถว = 1 เอกสารขายของ Odoo (sync ตัดให้เหลือรายการสินค้าแรกรายการเดียว) — PK คือ
+-- order_reference ซึ่ง Odoo "เปลี่ยนได้" ตอนยืนยันใบเสนอราคา (QP-xxx → OP-xxx) sync เป็น
+-- upsert ล้วนไม่เคยลบแถว แถวชื่อเก่าจึงค้างอยู่เป็นซากที่ไม่ถูกอัปเดตอีก และของจริงคือแถว
+-- ที่ last_updated ใหม่กว่าภายใต้ sale_order_id เดียวกัน (sale_order_id ไม่เปลี่ยนตามชื่อ)
+--
+-- สถานะมี 2 ชั้นคนละความหมาย: order_status = สถานะเอกสาร (Quotation/Approved/Locked/
+-- Cancelled/Demo Order) · invoice_status = ตั้งบิลหรือยัง (no/to invoice/invoiced)
+--
 
 CREATE TABLE public.sale_orders (
     order_reference character varying(255) CONSTRAINT sale_orders_order_reference_not_null1 NOT NULL,
@@ -248,6 +256,9 @@ CREATE TABLE public.sale_orders (
     product_group text,
     product_sub_category text,
     product_series text,
+    order_status text,
+    invoice_date timestamp with time zone,
+    source text,
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP
 );
@@ -827,6 +838,12 @@ CREATE TABLE public.quotations (
     delivery_type_override text,
     delivery_terms jsonb,
     print_snapshot jsonb,
+    -- สถานะ "นำเข้า Odoo แล้ว" — snapshot เขียนครั้งเดียวตอนรอบ sync เห็นใบนี้ใน sale_orders ครั้งแรก
+    -- (ห้าม join สดกับ sale_orders.order_reference: Odoo เปลี่ยนชื่อเอกสารตอนยืนยัน แถวชื่อ Q* เป็นซาก
+    --  ที่วันหนึ่งจะหายไป → สถานะจะเด้งกลับจาก "นำเข้าแล้ว" เป็น "รอนำเข้า" เอง)
+    odoo_imported_at timestamp with time zone,
+    -- id ของเอกสารในฐาน Odoo — ไม่เปลี่ยนแม้เอกสารถูกเปลี่ยนชื่อ ใช้เป็นสมอตามหาสถานะปัจจุบันได้
+    odoo_so_id integer,
     CONSTRAINT quotations_delivery_days_override_check CHECK (
         (delivery_days_override IS NULL)
         OR ((delivery_days_override >= 0) AND (delivery_days_override <= 3650))

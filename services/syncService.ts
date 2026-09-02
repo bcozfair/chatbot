@@ -3,6 +3,7 @@ import { GatewayUnreachableError } from '../scripts/sync/gatewayClient.js';
 import { refreshCustomerDataView } from '../scripts/sync/refreshCustomerDirectory.js';
 import { clockNow, fmtDur, serr, slog, swarn, vlog } from '../scripts/sync/syncLog.js';
 import { clearCustomerSearchCache } from './customerService.js';
+import { reconcileQuotationOdooLinks } from './quotationOdooLink.js';
 import { thaiDateParts } from '../utils/thaiTime.js';
 
 // ============================================================
@@ -293,6 +294,9 @@ export function startSync(
       // guard: เตือนถ้ามี contact ที่แอปหาไม่เจอ (อ่าน DB อย่างเดียว ไม่ throw)
       // ต้องอยู่หลัง refresh — เทียบกับ view ที่เพิ่ง rebuild เท่านั้นถึงจะไม่เตือนหลอก
       const orphans = await reconcileOrphanContacts();
+      // มาร์กใบเสนอราคาที่โผล่ใน sale_orders แล้ว (สถานะ "นำเข้า Odoo แล้ว" ของหน้าประวัติใบเสนอราคา)
+      // ต้องอยู่หลัง sync saleorders ของรอบนี้ — อ่านจากตารางที่เพิ่งอัปเดต ไม่ใช่ของรอบก่อน
+      await reconcileQuotationOdooLinks();
 
       // บรรทัดปิดรอบ: อ่านบรรทัดเดียวต้องรู้ว่าครบไหม พังตัวไหน และข้อมูลลูกค้าใช้ได้ไหม
       const parts = [`สำเร็จ ${okCount}/${list.length}`];
