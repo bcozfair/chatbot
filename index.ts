@@ -103,6 +103,20 @@ import {
   type WebhookOutcome,
 } from './services/apiLogService.js';
 import {
+  getTableDef,
+  fetchPage,
+  fetchIds,
+  buildManifest,
+  DEFAULT_LIMIT,
+  MAX_LIMIT,
+} from './services/externalSync.js';
+import {
+  syncApiAuthMiddleware,
+  syncConcurrencyGuard,
+  keyCanRead,
+  type SyncApiRequest,
+} from './config/syncApiAuth.js';
+import {
   startSync,
   isRunning,
   getStatus as getSyncStatus,
@@ -3847,6 +3861,126 @@ app.get('/api/admin/api-logs/:id', adminAuthMiddleware, requireRole('admin'), as
     res.json(row);
   } catch (err: any) {
     console.error('GET /api/admin/api-logs/:id error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  /api/sync/v1/* — ให้ระบบภายนอกดึงข้อมูลออกไป sync (เครื่องปลายทางเป็นฝ่ายเรียกเข้ามา)
+//
+//  อ่านอย่างเดียวทั้งชุด ไม่มี endpoint ไหนเขียนอะไรลง DB นอกจาก last_used_at ของกุญแจตัวเอง
+//  ตารางไหนเปิดให้ดึงบ้าง/ดึงยังไง อยู่ที่ TABLE_REGISTRY ใน services/externalSync.ts ที่เดียว
+//  ตารางที่ไม่อยู่ในทะเบียน = 404 เสมอ (default deny) ตารางใหม่จึงไม่หลุดออกไปเองโดยไม่มีคนตัดสินใจ
+//
+//  ลำดับ middleware: นับ concurrent ก่อนตรวจกุญแจ — ตอน 429 จะได้ไม่ต้องยิง DB ตรวจกุญแจก่อน
+//  ซึ่งขัดกับเหตุผลที่มีตัวนับนี้อยู่ (คือกัน DB ไม่ให้โดนถล่ม)
+// ═════════════════════════════════════════════════════════════════════════════
+const syncApiGuards = [syncConcurrencyGuard, syncApiAuthMiddleware];
+
+/** แปลง limit ที่ผู้เรียกส่งมาให้อยู่ในกรอบเสมอ — ค่าเพี้ยน/ไม่ส่ง = ค่าตั้งต้น ไม่ใช่ error */
+function parseSyncLimit(raw: any): number {
+  const n = parseInt(String(raw ?? ''), 10);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_LIMIT;
+  return Math.min(n, MAX_LIMIT);
+}
+
+/** หาตารางจากทะเบียน + ตรวจว่ากุญแจนี้มีสิทธิ์เห็น — ตอบ 404 เหมือนกันทั้งสองกรณีโดยเจตนา */
+function resolveSyncTable(req: any, res: any) {
+  const def = getTableDef(String(req.params.table));
+  if (!def || !keyCanRead((req as SyncApiRequest).syncKey, def.table)) {
+    res.status(404).json({ error: 'ไม่พบตารางนี้ หรือกุญแจนี้ไม่มีสิทธิ์อ่าน' });
+    return null;
+  }
+  return def;
+}
+
+// รายการตารางทั้งหมดที่กุญแจนี้ดึงได้ + วิธี sync ของแต่ละตาราง (ตัวดึงอ่านตัวนี้ตอนเริ่มทำงาน)
+app.get('/api/sync/v1/tables', ...syncApiGuards, async (req: any, res: any) => {
+  try {
+    const key = (req as SyncApiRequest).syncKey!;
+    res.json({
+      server_time: new Date().toISOString(),
+      key_name: key.name,
+      max_limit: MAX_LIMIT,
+      default_limit: DEFAULT_LIMIT,
+      tables: await buildManifest(key.allowedTables),
+    });
+  } catch (err: any) {
+    console.error('GET /api/sync/v1/tables error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ข้อมูลหนึ่งหน้า
+//   ?since=<ISO>   เฉพาะโหมด incremental และเฉพาะการเรียกครั้งแรกของรอบ (เทียบแบบ >= จงใจ)
+//   ?cursor=<tok>  token จากหน้าก่อน — มีแล้วจะเหนือกว่า since เสมอ
+//   ?limit=<n>     ไม่เกิน MAX_LIMIT
+app.get('/api/sync/v1/tables/:table', ...syncApiGuards, async (req: any, res: any) => {
+  const def = resolveSyncTable(req, res);
+  if (!def) return;
+
+  try {
+    const page = await fetchPage({
+      def,
+      since: typeof req.query.since === 'string' ? req.query.since : undefined,
+      cursor: typeof req.query.cursor === 'string' ? req.query.cursor : undefined,
+      limit: parseSyncLimit(req.query.limit),
+    });
+
+    res.json({
+      table: def.table,
+      mode: def.mode,
+      pk: def.pk,
+      // เวลาของ "ฝั่งเรา" — ปลายทางต้องเก็บค่านี้ไว้เป็น since ของรอบถัดไป ห้ามใช้นาฬิกาตัวเอง
+      // เพราะนาฬิกา 2 เครื่องไม่มีวันตรงกันเป๊ะ และคลาดไปทางลบเมื่อไหร่คือข้อมูลหายเงียบ
+      server_time: new Date().toISOString(),
+      count: page.rows.length,
+      has_more: page.hasMore,
+      next_cursor: page.nextCursor,
+      generation: page.generation,
+      rows: page.rows,
+    });
+  } catch (err: any) {
+    if (err?.message === 'cursor ไม่ถูกต้อง') {
+      return res.status(400).json({ error: 'cursor ไม่ถูกต้อง — เริ่มรอบใหม่โดยไม่ส่ง cursor' });
+    }
+    console.error(`GET /api/sync/v1/tables/${def.table} error:`, err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// รายการ pk ทั้งตาราง — ปลายทางใช้ไล่ลบแถวที่หายไปจากต้นทาง (โหมด incremental เท่านั้น)
+// ไม่ต้องเรียกทุกรอบ · quotations เป็นตารางเดียวในกลุ่มนี้ที่มีการลบจริง
+app.get('/api/sync/v1/tables/:table/ids', ...syncApiGuards, async (req: any, res: any) => {
+  const def = resolveSyncTable(req, res);
+  if (!def) return;
+
+  if (def.mode !== 'incremental') {
+    return res.status(400).json({
+      error: `ตาราง ${def.table} เป็นโหมด ${def.mode} — ไม่ต้อง reconcile ด้วย /ids`,
+    });
+  }
+
+  try {
+    const page = await fetchIds(
+      def,
+      typeof req.query.cursor === 'string' ? req.query.cursor : undefined,
+      parseSyncLimit(req.query.limit)
+    );
+    res.json({
+      table: def.table,
+      pk: def.pk,
+      server_time: new Date().toISOString(),
+      count: page.rows.length,
+      has_more: page.hasMore,
+      next_cursor: page.nextCursor,
+      rows: page.rows,
+    });
+  } catch (err: any) {
+    if (err?.message === 'cursor ไม่ถูกต้อง') {
+      return res.status(400).json({ error: 'cursor ไม่ถูกต้อง — เริ่มรอบใหม่โดยไม่ส่ง cursor' });
+    }
+    console.error(`GET /api/sync/v1/tables/${def.table}/ids error:`, err);
     res.status(500).json({ error: err.message });
   }
 });

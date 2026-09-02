@@ -1,0 +1,17 @@
+{
+  "name": "nuc-sync-client",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "ดึงข้อมูลจาก salechatbot ผ่าน HTTPS มาลง MongoDB ของ NUC-Kay",
+  "scripts": {
+    "pull": "node --env-file=.env pull.mjs",
+    "pull:full": "node --env-file=.env pull.mjs --full"
+  },
+  "dependencies": {
+    "mongodb": "^6.10.0"
+  },
+  "engines": {
+    "node": ">=20.6"
+  }
+}

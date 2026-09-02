@@ -456,12 +456,23 @@ export const ODOO_EXPORT_RAW_NAME_COLS =
 //    เพราะทุกตัวถูกเรียกใน withTransaction ของ endpoint export — ถ้ากลืน error ไว้เงียบ ๆ
 //    transaction จะ COMMIT ทั้งที่มาร์กใบไปแล้วแต่ log ไม่ครบ (หรือกลับกัน) แล้วตามแกะทีหลังไม่ได้
 
-export type ExportedFilter = 'no' | 'yes' | 'all';
+/**
+ * ตัวกรองสถานะ Odoo ของใบเสนอราคา — ค่าเรียงตามด่านที่ใบหนึ่งเดินผ่านจริง
+ *   no       = ยังไม่ส่งออก            (odoo_exported_at IS NULL)
+ *   pending  = ส่งออกแล้วแต่ยังไม่เข้า Odoo (รอนำเข้า)
+ *   imported = รอบ sync เห็นใบนี้ใน Odoo แล้ว
+ *   yes      = ส่งออกแล้ว (pending + imported รวมกัน) — ค่าเดิมก่อนมีด่าน "นำเข้าแล้ว"
+ *   all      = ไม่กรอง
+ * ⚠️ 'no' เป็นค่าเดียวที่ endpoint export ใช้ตัดสินว่าต้องใส่ guard กันส่งออกซ้ำ (claimQuotationsForExport)
+ */
+export type ExportedFilter = 'no' | 'yes' | 'all' | 'pending' | 'imported';
+
+const EXPORTED_FILTERS: readonly string[] = ['no', 'yes', 'all', 'pending', 'imported'];
 
 /** แปลง query param เป็นค่าที่ใช้ได้จริง — ค่าที่ไม่รู้จักตกเป็น fallback ที่ผู้เรียกกำหนด */
 export function parseExportedFilter(raw: any, fallback: ExportedFilter): ExportedFilter {
   const v = String(raw ?? '').trim().toLowerCase();
-  return v === 'no' || v === 'yes' || v === 'all' ? v : fallback;
+  return EXPORTED_FILTERS.includes(v) ? (v as ExportedFilter) : fallback;
 }
 
 /**
@@ -472,6 +483,10 @@ export function parseExportedFilter(raw: any, fallback: ExportedFilter): Exporte
 export function exportedFilterCondition(filter: ExportedFilter): string {
   if (filter === 'no') return 'q.odoo_exported_at IS NULL';
   if (filter === 'yes') return 'q.odoo_exported_at IS NOT NULL';
+  // อ่านจาก snapshot odoo_imported_at ให้ตรงกับป้ายสถานะบนหน้าจอ (ดู services/quotationOdooLink.ts)
+  // "รอนำเข้า" ต้องเช็ค exported ด้วย ไม่ใช่แค่ imported IS NULL — ไม่งั้นใบที่ยังไม่ส่งออกจะติดมาด้วย
+  if (filter === 'pending') return 'q.odoo_exported_at IS NOT NULL AND q.odoo_imported_at IS NULL';
+  if (filter === 'imported') return 'q.odoo_imported_at IS NOT NULL';
   return '';
 }
 

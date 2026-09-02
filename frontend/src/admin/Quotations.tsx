@@ -92,8 +92,11 @@ const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 /** รูปแบบไฟล์นำเข้า Sale Order ของ Odoo — ตรงกับ query param `format` ของ endpoint export */
 type ExportFormat = 'xlsx' | 'csv';
 
-/** ตัวกรอง "สถานะการส่งออก Odoo" — ตรงกับ query param `exported` ของ backend */
-type ExportedFilter = 'no' | 'yes' | 'all';
+/**
+ * ตัวกรอง "สถานะ Odoo" — ตรงกับ query param `exported` ของ backend (db/repositories.ts)
+ * ค่าเรียงตามด่านที่ใบเดินผ่านจริง: no → pending → imported · yes = pending + imported
+ */
+type ExportedFilter = 'no' | 'yes' | 'all' | 'pending' | 'imported';
 
 /**
  * บริษัทที่ส่งออก — ตรงกับ query param `company` ของ backend (ดูจากคำนำหน้าเลขที่ใบ)
@@ -560,7 +563,8 @@ export const Quotations: React.FC = () => {
             <Filter className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
           </div>
 
-          {/* Export Status Filter — ตั้งต้น "ยังไม่ส่งออก" เพื่อให้กดส่งออกได้เลยโดยไม่ซ้ำ */}
+          {/* Odoo Status Filter — ตั้งต้น "ยังไม่ส่งออก" เพื่อให้กดส่งออกได้เลยโดยไม่ซ้ำ
+              ค่าที่เลือกใช้กับทั้งตารางและปุ่มส่งออก (ส่ง param `exported` ตัวเดียวกัน) */}
           <div className="relative">
             <select
               id="quotation-exported-filter"
@@ -568,9 +572,11 @@ export const Quotations: React.FC = () => {
               onChange={(e) => { setExportedFilter(e.target.value as ExportedFilter); setCurrentPage(1); }}
               className="w-full bg-white border border-slate-200 focus:border-[#009032] focus:ring-2 focus:ring-[#009032]/10 focus:outline-none rounded-xl px-4 py-2.5 text-sm text-slate-800 transition-all appearance-none cursor-pointer"
             >
-              <option value="no">ยังไม่ส่งออก Odoo</option>
-              <option value="yes">ส่งออก Odoo แล้ว</option>
-              <option value="all">การส่งออกทั้งหมด</option>
+              <option value="no">ยังไม่ส่งออก</option>
+              <option value="pending">รอนำเข้า Odoo</option>
+              <option value="imported">นำเข้า Odoo แล้ว</option>
+              <option value="yes">ส่งออกแล้ว (รอนำเข้า + นำเข้าแล้ว)</option>
+              <option value="all">สถานะ Odoo ทั้งหมด</option>
             </select>
             <FileSpreadsheet className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
           </div>
@@ -652,41 +658,41 @@ export const Quotations: React.FC = () => {
                 <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 text-[11px] font-semibold uppercase tracking-wider select-none">
                   <th 
                     onClick={() => handleSort('created_at')}
-                    className="px-4 py-3 cursor-pointer hover:bg-slate-100 transition-colors"
+                    className="px-4 py-3 whitespace-nowrap cursor-pointer hover:bg-slate-100 transition-colors"
                   >
                     เลขที่ / วันที่ {renderSortIcon('created_at')}
                   </th>
                   <th 
                     onClick={() => handleSort('customer_name')}
-                    className="px-4 py-3 cursor-pointer hover:bg-slate-100 transition-colors"
+                    className="px-4 py-3 w-full whitespace-nowrap cursor-pointer hover:bg-slate-100 transition-colors"
                   >
                     ลูกค้า {renderSortIcon('customer_name')}
                   </th>
                   <th 
                     onClick={() => handleSort('salesperson_name')}
-                    className="px-4 py-3 cursor-pointer hover:bg-slate-100 transition-colors"
+                    className="px-4 py-3 whitespace-nowrap cursor-pointer hover:bg-slate-100 transition-colors"
                   >
                     พนักงานขาย {renderSortIcon('salesperson_name')}
                   </th>
                   <th 
                     onClick={() => handleSort('total_sum')}
-                    className="px-4 py-3 text-right cursor-pointer hover:bg-slate-100 transition-colors"
+                    className="px-4 py-3 text-right whitespace-nowrap cursor-pointer hover:bg-slate-100 transition-colors"
                   >
                     ยอดรวม {renderSortIcon('total_sum')}
                   </th>
                   <th 
                     onClick={() => handleSort('status')}
-                    className="px-4 py-3 text-center cursor-pointer hover:bg-slate-100 transition-colors"
+                    className="px-4 py-3 text-center whitespace-nowrap cursor-pointer hover:bg-slate-100 transition-colors"
                   >
                     สถานะ {renderSortIcon('status')}
                   </th>
                   <th
                     onClick={() => handleSort('odoo_exported_at')}
-                    className="px-4 py-3 text-center cursor-pointer hover:bg-slate-100 transition-colors"
+                    className="px-4 py-3 text-center whitespace-nowrap cursor-pointer hover:bg-slate-100 transition-colors"
                   >
                     สถานะ Odoo {renderSortIcon('odoo_exported_at')}
                   </th>
-                  <th className="px-4 py-3 text-center">จัดการ</th>
+                  <th className="px-4 py-3 text-center whitespace-nowrap">จัดการ</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -701,7 +707,7 @@ export const Quotations: React.FC = () => {
                         onClick={() => setExpandedId(isExpanded ? null : quote.id)}
                       >
                         {/* Quotation No / Date */}
-                        <td className="px-4 py-2.5">
+                        <td className="px-4 py-2.5 whitespace-nowrap">
                           <div className="flex flex-col">
                             <span className="font-mono font-bold text-slate-900 text-sm">
                               {quote.quotation_no || '-'}
@@ -712,8 +718,9 @@ export const Quotations: React.FC = () => {
                           </div>
                         </td>
 
-                        {/* Customer */}
-                        <td className="px-4 py-2.5">
+                        {/* Customer — คอลัมน์เดียวที่ยอมให้ตัดบรรทัด ชื่อบริษัทไทยยาวเกินกว่าจะบังคับบรรทัดเดียว
+                            w-full ทำให้มันดูดพื้นที่ที่เหลือทั้งหมด คอลัมน์อื่นจึงไม่ถูกบีบจนข้อความตกบรรทัด */}
+                        <td className="px-4 py-2.5 w-full min-w-[16rem]">
                           <div className="flex flex-col">
                             <span className="font-semibold text-slate-800 text-sm">
                               {quote.company_name || (quote.customer_name || '')}
@@ -727,35 +734,35 @@ export const Quotations: React.FC = () => {
                         </td>
 
                         {/* Salesperson */}
-                        <td className="px-4 py-2.5">
+                        <td className="px-4 py-2.5 whitespace-nowrap">
                           <span className="text-slate-700 text-sm">
                             {quote.salesperson_name || '-'}
                           </span>
                         </td>
 
                         {/* Total */}
-                        <td className="px-4 py-2.5 text-right">
+                        <td className="px-4 py-2.5 text-right whitespace-nowrap">
                           <span className="font-mono font-semibold text-slate-900 text-sm">
                             ฿{formatNumber(quote.total_sum || 0)}
                           </span>
                         </td>
 
                         {/* Status */}
-                        <td className="px-4 py-2.5 text-center">
-                          <span className={`inline-flex items-center px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border ${statusStyle.bg} ${statusStyle.text}`}>
+                        <td className="px-4 py-2.5 text-center whitespace-nowrap">
+                          <span className={`inline-flex items-center whitespace-nowrap px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border ${statusStyle.bg} ${statusStyle.text}`}>
                             {statusStyle.label}
                           </span>
                         </td>
 
                         {/* Odoo status: ยังไม่ส่งออก → รอนำเข้า → นำเข้า Odoo แล้ว */}
-                        <td className="px-4 py-2.5 text-center">
+                        <td className="px-4 py-2.5 text-center whitespace-nowrap">
                           {(() => {
                             const stage = getOdooStage(quote);
                             const st = ODOO_STAGE_STYLES[stage];
                             return (
                               <div className="flex flex-col items-center gap-0.5" title={st.hint}>
-                                <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-bold tracking-wider border ${st.bg} ${st.text}`}>
-                                  <span className={`w-1.5 h-1.5 rounded-full ${st.dot}`} />
+                                <span className={`inline-flex items-center gap-1.5 whitespace-nowrap px-3 py-1 rounded-full text-[10px] font-bold tracking-wider border ${st.bg} ${st.text}`}>
+                                  <span className={`w-1.5 h-1.5 shrink-0 rounded-full ${st.dot}`} />
                                   {st.label}
                                 </span>
                                 {stage === 'imported' && (
@@ -770,7 +777,7 @@ export const Quotations: React.FC = () => {
                         </td>
 
                         {/* Actions */}
-                        <td className="px-4 py-2.5 text-center">
+                        <td className="px-4 py-2.5 text-center whitespace-nowrap">
                           <div className="flex items-center justify-center gap-2">
                             {quote.quotation_no && (
                               <a

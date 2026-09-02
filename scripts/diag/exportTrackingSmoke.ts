@@ -58,6 +58,10 @@ ok('exported=no  → กรองเฉพาะใบที่ยังไม�
 ok('exported=yes → กรองเฉพาะใบที่มี odoo_exported_at แล้ว',
   exportedFilterCondition('yes') === 'q.odoo_exported_at IS NOT NULL');
 ok('exported=all → ไม่ใส่เงื่อนไข', exportedFilterCondition('all') === '');
+ok('exported=pending → ส่งออกแล้วแต่ยังไม่เห็นใน Odoo (ต้องมีทั้งสองเงื่อนไข ไม่งั้นใบที่ยังไม่ส่งออกติดมาด้วย)',
+  exportedFilterCondition('pending') === 'q.odoo_exported_at IS NOT NULL AND q.odoo_imported_at IS NULL');
+ok('exported=imported → กรองเฉพาะใบที่มี odoo_imported_at แล้ว',
+  exportedFilterCondition('imported') === 'q.odoo_imported_at IS NOT NULL');
 ok('param ที่ไม่รู้จักตกเป็นค่า fallback ที่ผู้เรียกกำหนด',
   parseExportedFilter('อะไรก็ไม่รู้', 'no') === 'no' && parseExportedFilter(undefined, 'all') === 'all');
 ok('param ที่ถูกต้องถูกรับตามนั้น (ไม่แคร์ตัวพิมพ์/ช่องว่าง)',

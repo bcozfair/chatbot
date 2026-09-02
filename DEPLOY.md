@@ -428,6 +428,50 @@ docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" -v ON_ERROR_STOP=
   ```
 - ย้อนกลับ: `DROP INDEX CONCURRENTLY IF EXISTS <ชื่อ>;` (ต้อง revert โค้ด stage 2 ด้วย ไม่งั้นช้ากว่าเดิม)
 
+### ขั้น 4.9 — เปิด API ให้ระบบภายนอกดึงข้อมูลไป sync (ครั้งเดียวต่อ DB)
+
+เปิด `/api/sync/v1/*` ให้เครื่องภายนอก (ตัวแรกคือ **NUC-Kay** `192.168.109.69` ที่เก็บลง MongoDB)
+ดึงข้อมูลออกไปเองผ่าน **HTTPS สาธารณะ** ไม่ต้องต่อ LAN ไม่ต้องเปิดพอร์ตเพิ่มทั้งสองฝั่ง
+(ยืนยันแล้วว่า LAN ใช้ไม่ได้: เซิร์ฟเวอร์อยู่ `192.168.100.17/24` NUC อยู่คนละ subnet และ TCP ยิงไม่ถึง)
+
+```bash
+docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" -v ON_ERROR_STOP=1 \
+  -f - < migrations/changes/2026-09-02_05_sync_api.sql
+```
+
+- ⚠️ **ต้องรันผ่าน `psql` เท่านั้น ห้ามผ่าน `scripts/runMigration.ts`** — `CREATE INDEX CONCURRENTLY`
+  อยู่ใน transaction ไม่ได้
+- สร้างตาราง `sync_api_keys` + index `(updated_at, pk)` ของ 4 ตารางโหมด incremental
+  (`sale_orders` `customers` `products` `quotations`) เพิ่มพื้นที่รวม ~30 MB
+- **CONCURRENTLY จะ "รอ" ทุก transaction ที่เปิดค้างอยู่ก่อนหน้าให้จบก่อน** — ถ้ารอบ refresh
+  `customers_data_view` กำลังวิ่ง (กินหลายนาที) คำสั่งนี้จะค้างรอจนกว่ามันจบ ซึ่งเป็นพฤติกรรมปกติ
+  ไม่ใช่อาการแฮงก์ · ห้ามกด Ctrl-C ทิ้งกลางคัน จะเหลือ index ที่ `indisvalid = false` ค้างไว้
+- ตรวจว่าครบและใช้ได้จริง:
+  ```bash
+  docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" -c "
+  SELECT indexrelid::regclass AS idx, indisvalid FROM pg_index
+   WHERE indexrelid::regclass::text LIKE '%sync_cursor%' ORDER BY 1;"
+  ```
+  ต้องได้ 4 แถวและ `indisvalid` เป็น `t` ทั้งหมด · ถ้าเจอ `f` ให้ `DROP INDEX CONCURRENTLY <ชื่อ>;` แล้วรันใหม่
+- รันได้ทุกเวลา — สร้างของใหม่ล้วน ไม่ ALTER ตารางเดิม ไม่ rebuild matview ไม่ล็อกการเขียน
+
+**หลัง rebuild (ขั้น 5) แล้วค่อยออกกุญแจให้เครื่องปลายทาง:**
+
+```bash
+docker compose exec app npm run sync:key -- --name "NUC-Kay"   # กุญแจแสดงครั้งเดียว
+docker compose exec app npm run sync:key -- --list             # ดูว่ามีกุญแจอะไรอยู่ ใช้ล่าสุดเมื่อไหร่
+docker compose exec app npm run sync:key -- --revoke 1         # เพิกถอน มีผลทันทีในครั้งถัดไป
+docker compose exec app npm run diag:sync-api                  # ต้องเขียวหมด (อ่านอย่างเดียว)
+```
+
+- กุญแจใช้ได้อย่างเดียวคือ **อ่านผ่าน `/api/sync/v1/*`** ไม่ใช่สิทธิ์แอดมิน และเพิกถอนได้รายตัว
+- ตารางไหนเปิดให้ดึงบ้างอยู่ใน `TABLE_REGISTRY` ที่ [`services/externalSync.ts`](services/externalSync.ts)
+  **ตารางที่ไม่อยู่ในทะเบียนตอบ 404 เสมอ** — ตารางใหม่จาก migration จึงไม่หลุดออกไปเองโดยไม่มีคนตัดสินใจ
+  (`npm run diag:sync-api` มีข้อคอยเตือนว่ามีตารางตกทะเบียน)
+- คอลัมน์ที่ตัดไม่ให้ออกไปเด็ดขาด: `admin_users.password_hash` และ `messages.reply_token`
+- สคริปต์ฝั่งเครื่องปลายทางอยู่ที่ [`integrations/nuc-sync-client/`](integrations/nuc-sync-client/) พร้อม README
+- **คู่มือใช้งาน API ฉบับเต็ม** (endpoint, พารามิเตอร์, วิธีดึงที่ถูกต้อง, รหัสข้อผิดพลาด): [`docs/SYNC_API.md`](docs/SYNC_API.md)
+
 ### ขั้น 5 — rebuild + up
 ```bash
 docker compose up -d --build          # สร้างกล่องใหม่จากโค้ดล่าสุด แล้วสลับให้อัตโนมัติ
