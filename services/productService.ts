@@ -1,5 +1,5 @@
 import { createChatCompletion } from '../config/clients.js';
-import { pool } from '../config/db.js'; 
+import { pool, withTransaction } from '../config/db.js';
 
 // ─────────────────────────────────────────────
 //  Types
@@ -485,7 +485,20 @@ async function fuzzySearch(codeTrimmed: string, qNorm: string, chatContext?: str
   // normalize สำหรับ pg_trgm — ตัด () เช่นเดียวกัน
   const qNormForTrgm = qNorm; // ตัด () ไปแล้วใน normalize()
 
-  const result = await pool.query<Product & { _score: number; _matched_from: string }>(
+  // ── ด่านกรองที่ใช้ index ได้ ────────────────────────────────────────────────
+  // เงื่อนไข similarity(...) > 0.25 ใช้ index ไม่ได้ ต้องคำนวณทีละแถวบนทั้งตาราง
+  // จึงเติม operator % (ตัวเดียวที่ GIN trgm index รองรับ) เข้าไป "เพิ่ม" โดยคงเงื่อนไข
+  // เดิมไว้ครบทุกข้อ ⇒ ชุดผลลัพธ์และลำดับเท่าเดิมเป๊ะ แต่ตัดแถวทิ้งได้ตั้งแต่ชั้น index
+  //
+  // ⚠️ a % b เป็นจริงเมื่อ similarity(a, b) >= pg_trgm.similarity_threshold ซึ่ง default = 0.3
+  //    "เข้มกว่า" เกณฑ์ 0.25 ของเรา ⇒ ถ้าปล่อยตามค่า default แถวที่ similarity อยู่ใน
+  //    [0.25, 0.3) จะถูกตัดหายเงียบ ๆ ไม่มี error ให้เห็น = ผลค้นหาเพี้ยนแบบตรวจจับไม่ได้
+  //    จึงตั้งค่าไว้ในโค้ดตรงนี้เอง ไม่ฝากไว้กับ config ของ DB ซึ่งหายได้ตอนสร้าง DB ใหม่
+  //    (SET LOCAL ต้องอยู่ใน transaction ถึงจะมีผล และหมดผลเองตอน COMMIT จึงไม่ค้างติด
+  //     ไปกับ connection ที่คืนเข้า pool)
+  const result = await withTransaction(async (client) => {
+    await client.query(`SET LOCAL pg_trgm.similarity_threshold = 0.25`);
+    return client.query<Product & { _score: number; _matched_from: string }>(
     `
     SELECT *,
       GREATEST(
@@ -513,6 +526,10 @@ async function fuzzySearch(codeTrimmed: string, qNorm: string, chatContext?: str
     WHERE
       production NOT ILIKE '%buytosell%'
       AND is_system_item = false
+      AND (
+        LOWER(REGEXP_REPLACE(COALESCE(model, ''), '[\\s,\\(\\)]', '', 'g')) % $1
+        OR LOWER(REGEXP_REPLACE(COALESCE(name, ''), '[\\s,\\(\\)]', '', 'g')) % $1
+      )
       AND GREATEST(
         similarity(
           LOWER(REGEXP_REPLACE(COALESCE(model, ''), '[\\s,\\(\\)]', '', 'g')), $1
@@ -525,8 +542,9 @@ async function fuzzySearch(codeTrimmed: string, qNorm: string, chatContext?: str
     ORDER BY _score DESC
     LIMIT 8
     `,
-    [qNormForTrgm]
-  );
+      [qNormForTrgm]
+    );
+  });
 
   const candidates = result.rows;
 

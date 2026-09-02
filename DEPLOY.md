@@ -390,6 +390,44 @@ docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" \
   pool ในแอปตั้ง max 40 (`config/db.ts`) ⇒ กรณีสุดโต่งประมาณ 1.3 GB ซึ่งเครื่องนี้รับไหว
   แต่ถ้าวันหน้าขยาย pool หรือเพิ่มบริการอื่นบนเครื่องเดียวกัน ต้องคิดเพดานนี้ใหม่
 
+### ขั้น 4.8 — สร้าง expression index ของ `products` (ครั้งเดียวต่อ DB)
+
+`findProduct()` ค้นบน "ค่าที่ normalize แล้ว" ไม่ใช่คอลัมน์ดิบ ⇒ index เดิมบน `model`/`name`
+ใช้ไม่ได้เลย ทุก stage ตกไป Seq Scan บน 51,456 แถวทุกครั้งที่มีคนพิมพ์รหัสสินค้าเข้ามา
+
+```bash
+docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" -v ON_ERROR_STOP=1 \
+  -f - < migrations/changes/2026-09-02_04_products_expression_indexes.sql
+```
+
+- ⚠️ **ต้องรันผ่าน `psql` เท่านั้น ห้ามผ่าน `scripts/runMigration.ts`** — `CREATE INDEX CONCURRENTLY`
+  อยู่ใน transaction ไม่ได้
+- ใช้เวลา ~6 วินาที ไม่ล็อกตาราง เพิ่มขนาด `products` จาก 47 → 62 MB
+- **ต้องขึ้นคู่กับโค้ด** — [`services/productService.ts`](services/productService.ts) stage 2 เติมด่าน
+  `%` เข้าไปเพื่อให้ใช้ GIN index ได้ ถ้าขึ้นโค้ดโดยไม่มี index จะ**ช้ากว่าเดิม** (Seq Scan เดิม
+  บวกการคำนวณ similarity อีกชุดจาก `%`) ส่วนการมี index โดยยังไม่ขึ้นโค้ดนั้นปลอดภัย
+  (stage 1/1.3/1.5/1.7 ได้ประโยชน์ทันที มีแต่ stage 2 ที่ต้องรอโค้ด)
+- ⚠️ **ห้ามถอด `SET LOCAL pg_trgm.similarity_threshold = 0.25` ใน `fuzzySearch()` ออก** —
+  operator `%` เทียบกับค่านี้ ซึ่ง default = 0.3 คือ "เข้มกว่า" เกณฑ์ `> 0.25` ของโค้ด
+  ถ้าไม่ตั้ง แถวที่ similarity อยู่ใน [0.25, 0.3) จะหายไปเงียบ ๆ โดยไม่มี error ให้เห็น
+  (เลือกตั้งในโค้ดแทน `ALTER DATABASE` เพราะค่าที่ผูกกับ DB จะหายไปตอนสร้าง DB ใหม่จาก schema.sql)
+- วัดจริงบน prod (`EXPLAIN ANALYZE`, ตารางเดียวกัน):
+
+  | stage | ก่อน | หลัง |
+  |---|---|---|
+  | 1 — exact (`norm = $1`) | 348.6 ms · Seq Scan 1,833 buffers | **0.081 ms** · BitmapOr 7 buffers |
+  | 1.5 — numeric (`LIKE '%220%'`) | 441.9 ms · Seq Scan | **46.1 ms** · Bitmap Index Scan |
+  | 2 — fuzzy (`similarity > 0.25`) | 1,080.0 ms · Seq Scan | **195.4 ms** · Bitmap Index Scan |
+
+- ตรวจว่าใช้ได้จริง (ต้องได้ 4 แถว `indisvalid = t`):
+  ```bash
+  docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" -c "
+  SELECT indexrelid::regclass AS idx, indisvalid, pg_size_pretty(pg_relation_size(indexrelid))
+  FROM pg_index WHERE indrelid = 'public.products'::regclass
+    AND indexrelid::regclass::text LIKE '%_norm%' ORDER BY 1;"
+  ```
+- ย้อนกลับ: `DROP INDEX CONCURRENTLY IF EXISTS <ชื่อ>;` (ต้อง revert โค้ด stage 2 ด้วย ไม่งั้นช้ากว่าเดิม)
+
 ### ขั้น 5 — rebuild + up
 ```bash
 docker compose up -d --build          # สร้างกล่องใหม่จากโค้ดล่าสุด แล้วสลับให้อัตโนมัติ

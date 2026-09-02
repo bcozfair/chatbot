@@ -1317,6 +1317,31 @@ CREATE INDEX idx_products_template_id_text ON public.products USING btree (((pro
 
 
 --
+-- Name: idx_products_*_norm / idx_products_*_norm_trgm; Type: INDEX; Schema: public; Owner: -
+--
+-- findProduct() ใน services/productService.ts ค้นบน "ค่าที่ normalize แล้ว" ไม่ใช่คอลัมน์ดิบ
+-- ⇒ idx_products_model_trgm / idx_products_name_trgm ข้างบนใช้กับ query พวกนี้ไม่ได้เลย
+-- ทุก stage (1 exact, 1.3 multi-token, 1.5 numeric LIKE, 1.7 split fuzzy, 2 pg_trgm)
+-- จึงตกไป Seq Scan บน 51,456 แถวทุกครั้ง — เป็นต้นทุนที่ใหญ่ที่สุดของการตอบ 1 ข้อความ
+--   btree 2 ตัว = stage 1 (norm = $1)
+--   gin  2 ตัว = stage 1.5/1.7 (LIKE '%...%') และ stage 2 (operator %)
+-- ⚠️ expression ต้องตรงกับ SQL ในโค้ด ไม่งั้น planner จับคู่ไม่ได้แล้วกลับไป Seq Scan เงียบ ๆ
+-- ⚠️ stage 2 ใช้ operator % ซึ่งอิง pg_trgm.similarity_threshold (default 0.3) ที่เข้มกว่า
+--    เกณฑ์ 0.25 ของโค้ด — productService.ts จึงสั่ง SET LOCAL 0.25 คร่อม query นั้นเอง
+--    ห้ามถอดออก ไม่งั้นผลค้นหาจะขาดแถวไปเงียบ ๆ
+-- ⚠️ บน DB ที่มีข้อมูลแล้วให้สร้างด้วย CREATE INDEX CONCURRENTLY ผ่าน psql (ห้าม runMigration.ts)
+--
+
+CREATE INDEX idx_products_model_norm ON public.products USING btree ((lower(regexp_replace(COALESCE(model, ''::text), '[\s,\(\)]'::text, ''::text, 'g'::text))));
+
+CREATE INDEX idx_products_name_norm ON public.products USING btree ((lower(regexp_replace(COALESCE(name, ''::text), '[\s,\(\)]'::text, ''::text, 'g'::text))));
+
+CREATE INDEX idx_products_model_norm_trgm ON public.products USING gin ((lower(regexp_replace(COALESCE(model, ''::text), '[\s,\(\)]'::text, ''::text, 'g'::text))) public.gin_trgm_ops);
+
+CREATE INDEX idx_products_name_norm_trgm ON public.products USING gin ((lower(regexp_replace(COALESCE(name, ''::text), '[\s,\(\)]'::text, ''::text, 'g'::text))) public.gin_trgm_ops);
+
+
+--
 -- Name: idx_products_internal_reference; Type: INDEX; Schema: public; Owner: -
 --
 -- internal_reference เป็น key ที่ใช้ join จริงหลายที่ (stock-rules, products/search, productService)
@@ -1446,6 +1471,41 @@ ALTER TABLE ONLY public.quotation_blacklist
 
 ALTER TABLE ONLY public.quotation_credit_policy
     ADD CONSTRAINT quotation_credit_policy_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES public.admin_users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: sync_api_keys; Type: TABLE; Schema: public; Owner: -
+--
+-- กุญแจของเครื่องภายนอกที่มาดึงข้อมูลผ่าน /api/sync/v1/* (ดู services/externalSync.ts)
+-- ตัวกุญแจจริงไม่เคยถูกเก็บ — เก็บแค่ sha256 · ตารางนี้ไม่ถูกส่งออกไปกับ sync เอง
+--
+
+CREATE TABLE public.sync_api_keys (
+    id serial PRIMARY KEY,
+    name character varying(80) NOT NULL,
+    key_prefix character varying(16) NOT NULL,
+    key_hash character(64) NOT NULL UNIQUE,
+    allowed_tables text[],
+    is_active boolean DEFAULT true NOT NULL,
+    created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    created_by character varying(80),
+    last_used_at timestamp with time zone,
+    revoked_at timestamp with time zone,
+    note text
+);
+
+
+--
+-- Name: index สำหรับ keyset pagination ของ sync API; Type: INDEX; Schema: public; Owner: -
+--
+-- ต้องเป็น (cursor, pk) ไม่ใช่ cursor เดี่ยว ๆ — upsert เป็น batch ทำให้หลายพันแถวมี updated_at
+-- ค่าเดียวกันเป๊ะ ถ้าตัดหน้าด้วยเวลาอย่างเดียว แถวที่เหลือของกองนั้นจะถูกข้ามไปเงียบ ๆ
+--
+
+CREATE INDEX idx_sale_orders_sync_cursor ON public.sale_orders (updated_at, order_reference);
+CREATE INDEX idx_customers_sync_cursor   ON public.customers (updated_at, company_id, contact_id);
+CREATE INDEX idx_products_sync_cursor    ON public.products (updated_at, product_template_id);
+CREATE INDEX idx_quotations_sync_cursor  ON public.quotations (updated_at, id);
 
 
 --
