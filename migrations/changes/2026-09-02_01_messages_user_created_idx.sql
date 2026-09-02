@@ -1,0 +1,47 @@
+-- ─────────────────────────────────────────────────────────────────────────────
+--  index สำหรับดึงประวัติแชทล่าสุดของผู้ใช้ จาก messages
+--
+--  ปัญหาที่แก้ — getRecentMessages() ใน db/repositories.ts:
+--      SELECT content, reply_content, created_at FROM messages
+--      WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2
+--    query นี้ถูกเรียก "ทุกข้อความที่เข้ามา" ในเส้นทาง /callback (async) ซึ่งเป็น route
+--    ที่กินเวลารวมมากที่สุดในระบบ (82% ของเวลาทั้งหมด จาก log 7 วัน)
+--
+--  สถานะก่อนสร้าง (วัดจริง 2026-09-02):
+--    - messages มี index เดียวคือ messages_pkey (id) ซึ่ง query นี้ใช้ไม่ได้เลย
+--    - pg_stat_user_tables: seq_scan = 3,821 · idx_scan = 0 · seq_tup_read = 12,405,769
+--      คือ scan ทั้งตารางทุกครั้ง เฉลี่ย 3,246 แถวต่อครั้ง เพื่อคืนแค่ 10 แถว
+--    - EXPLAIN (ANALYZE, BUFFERS): Seq Scan 4,695 แถว → Filter เหลือ 627 → top-N heapsort
+--      Buffers: shared hit=414 · Execution Time 2.0-4.9 ms
+--
+--  ⚠️ ตอนนี้ "ยังไม่เจ็บ" — ตาราง 4,691 แถว / 3,448 kB อยู่ใน cache ครบ 2 มิลลิวินาทีจบ
+--    ที่สร้างตอนนี้เพราะต้นทุนโตเป็นเชิงเส้นตามจำนวนแถว และตารางนี้โตทางเดียวไม่มีลบ
+--    (INSERT ทุกข้อความ) ⇒ ยิ่งระบบถูกใช้มาก ยิ่งช้าลง โดยไม่มีอะไรเตือน
+--    สร้างตอนตารางเล็กคือตอนที่ถูกที่สุดและเสี่ยงน้อยที่สุด
+--
+--  ทำไมเป็น (user_id, created_at DESC) — ตรงกับรูป WHERE + ORDER BY พอดี
+--    planner หยิบ 10 แถวแรกจาก index ได้เลย ไม่ต้อง scan ไม่ต้อง sort
+--
+--  ทำไมไม่ใส่ INCLUDE (content, reply_content) เพื่อเอา Index Only Scan:
+--    สองคอลัมน์นั้นเป็น text ยาว (เนื้อความแชท + คำตอบบอท) การยัดลง index จะทำให้ index
+--    ใหญ่กว่าตารางเอง และทำให้ INSERT ทุกข้อความแพงขึ้นโดยไม่จำเป็น —
+--    query นี้ LIMIT 10 การตาม pointer ไปหยิบ heap แค่ 10 แถวถูกกว่ามาก
+--
+--  ⚠️ ห้ามรันไฟล์นี้ผ่าน scripts/runMigration.ts — ใช้ psql ตรงเท่านั้น
+--    runMigration ใช้ pool เดียวกับแอปที่ตั้ง statement_timeout/query_timeout = 15 วิ
+--    และ client.query() จะห่อเป็น implicit transaction ซึ่ง CREATE INDEX CONCURRENTLY
+--    รันข้างในไม่ได้ (ตอนนี้ตารางเล็ก ใช้เวลาไม่ถึงวินาที แต่กฎเดิมยังต้องถือ)
+--
+--  วิธีรัน (รันตอนระบบเปิดอยู่ได้ CONCURRENTLY ไม่ล็อกอ่าน/เขียน):
+--    docker compose exec -T db psql -U postgres -d chatbot_primus \
+--      -f - < migrations/changes/2026-09-02_01_messages_user_created_idx.sql
+--
+--  แล้วต้องตรวจว่าสร้างสำเร็จจริง (CONCURRENTLY ล้มแล้วทิ้งซากไว้ได้ โดยตัว CREATE ไม่ error):
+--    SELECT indisvalid FROM pg_index WHERE indexrelid = 'idx_messages_user_created'::regclass;
+--    ถ้าได้ f ให้ DROP INDEX CONCURRENTLY idx_messages_user_created; แล้วเริ่มใหม่
+--
+--  ไฟล์นี้ idempotent — รันซ้ำได้ผลเท่าเดิม
+-- ─────────────────────────────────────────────────────────────────────────────
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_messages_user_created
+  ON public.messages (user_id, created_at DESC);

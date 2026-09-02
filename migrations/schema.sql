@@ -1325,6 +1325,20 @@ CREATE INDEX idx_so_salesperson_cover ON public.sale_orders USING btree (salespe
 
 
 --
+-- Name: idx_messages_user_created; Type: INDEX; Schema: public; Owner: -
+--
+-- getRecentMessages() ใน db/repositories.ts: WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2
+-- ถูกเรียกทุกข้อความในเส้นทาง /callback (async) — ก่อนมี index คือ Seq Scan ทั้งตารางทุกครั้ง
+-- (seq_scan 3,821 / idx_scan 0 / seq_tup_read 12.4M เพื่อคืนแค่ 10 แถว) วัดได้ 2.0 ms / 414 buffers
+-- หลังสร้าง: Index Scan หยิบ 10 แถวแรกจาก index ตรง ๆ ไม่ต้อง sort = 0.046 ms / 6 buffers
+-- ไม่ใส่ INCLUDE (content, reply_content) เพราะเป็น text ยาว จะทำให้ index ใหญ่กว่าตารางเอง
+-- และทำให้ INSERT ทุกข้อความแพงขึ้น — query นี้ LIMIT 10 ตาม pointer ไป heap แค่ 10 แถวถูกกว่ามาก
+--
+
+CREATE INDEX idx_messages_user_created ON public.messages USING btree (user_id, created_at DESC);
+
+
+--
 -- Name: idx_quotations_status; Type: INDEX; Schema: public; Owner: -
 --
 

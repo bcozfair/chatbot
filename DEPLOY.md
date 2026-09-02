@@ -326,6 +326,54 @@ API_LOG_RETENTION_DAYS=30
   ```
   ตัวช่วยที่มีอยู่แล้วคือ retention 30 วันซึ่งลบให้อัตโนมัติทุกชั่วโมง — ข้อมูลไม่ค้างยาว
 
+### ขั้น 4.7 — จูน PostgreSQL ให้ตรงสเปกเครื่อง (ครั้งเดียวต่อ server)
+
+⚠️ **ค่าเหล่านี้ไม่ได้อยู่ในโค้ด** — เก็บอยู่ใน `postgresql.auto.conf` ข้างใน volume `pgdata`
+ถ้าย้ายเครื่องหรือสร้าง volume ใหม่ ต้องตั้งใหม่ ไม่งั้น Postgres จะกลับไปใช้ค่า default
+ซึ่งคิดว่าตัวเองอยู่บนเครื่องเล็กและดิสก์เป็นจานหมุน
+
+ตั้งครั้งแรก 2026-09-02 บน server 8 core / 32 GB (แชร์กับ `appsale-mongo-prod` ที่กิน ~5 GB):
+
+```bash
+docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" \
+ -c "ALTER SYSTEM SET work_mem = '32MB'" \
+ -c "ALTER SYSTEM SET maintenance_work_mem = '512MB'" \
+ -c "ALTER SYSTEM SET effective_cache_size = '12GB'" \
+ -c "ALTER SYSTEM SET random_page_cost = 1.1" \
+ -c "ALTER SYSTEM SET max_parallel_workers_per_gather = 4" \
+ -c "ALTER SYSTEM SET track_io_timing = on" \
+ -c "SELECT pg_reload_conf()"
+```
+
+- **ไม่ต้อง restart ไม่มี downtime** — ทั้งหกค่าเป็น reload-only `pg_reload_conf()` พอ
+- เหตุผลของแต่ละค่า (วัดจาก `pg_stat_database` ตอนตั้ง):
+  - `work_mem` 4MB → 32MB — query spill ลงดิสก์ไปแล้ว **temp_files 6,299 / temp_bytes 24 GB**
+  - `maintenance_work_mem` 64MB → 512MB — เร่ง `CREATE INDEX` / `ANALYZE` ตอน rebuild `customers_data_view`
+  - `effective_cache_size` 4GB → 12GB — เครื่องมี buff/cache จริง ~15 GB
+  - `random_page_cost` 4 → 1.1 — เครื่องเป็น SSD และ DB ทั้งก้อนแค่ ~626 MB อยู่ใน OS cache ครบ
+  - `max_parallel_workers_per_gather` 2 → 4 — มี 8 core (`max_parallel_workers` default = 8 อยู่แล้ว)
+  - `track_io_timing` off → on — จำเป็นสำหรับแยก "อ่านนอก shared_buffers" ออกจาก "รอดิสก์จริง"
+    ต้นทุนแทบเป็นศูนย์บนเครื่องที่มี clocksource เร็ว (เช็คด้วย `pg_test_timing`)
+- **ตรวจว่าขึ้นจริง** — ต้องได้ `source = configuration file` และ `pending_restart = f` ทุกแถว:
+  ```bash
+  docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" -c "
+  SELECT name, setting, unit, source, pending_restart FROM pg_settings
+  WHERE name IN ('work_mem','maintenance_work_mem','effective_cache_size','random_page_cost',
+                 'max_parallel_workers_per_gather','track_io_timing') ORDER BY name;"
+  ```
+- **ย้อนกลับได้ทันทีถ้ามีปัญหา** (ทีละค่าหรือทั้งหมด) แล้ว reload:
+  ```bash
+  docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" \
+    -c "ALTER SYSTEM RESET random_page_cost" -c "SELECT pg_reload_conf()"
+  ```
+- ⚠️ **`shared_buffers` ยังคงไว้ที่ 128MB โดยตั้งใจ** — วัดแล้วไม่ใช่คอขวด: ตอน rebuild
+  `customers_data_view` มี `Buffers: shared read=85074` (~665 MB) แต่ `I/O Timings: shared read=25.9 ms`
+  จาก ~5,000 ms ทั้ง query ⇒ OS page cache รับไปหมดแล้ว ต้นทุนจริงเป็น CPU ล้วน
+  (และ `shared_buffers` ต้อง restart ถึงจะมีผล จึงไม่คุ้มเสี่ยงโดยไม่มีหลักฐานว่าช่วย)
+- ⚠️ **`work_mem` เป็นค่าต่อ sort/hash node ไม่ใช่ต่อ connection** — query ที่ซับซ้อนใช้ได้หลายก้อน
+  pool ในแอปตั้ง max 40 (`config/db.ts`) ⇒ กรณีสุดโต่งประมาณ 1.3 GB ซึ่งเครื่องนี้รับไหว
+  แต่ถ้าวันหน้าขยาย pool หรือเพิ่มบริการอื่นบนเครื่องเดียวกัน ต้องคิดเพดานนี้ใหม่
+
 ### ขั้น 5 — rebuild + up
 ```bash
 docker compose up -d --build          # สร้างกล่องใหม่จากโค้ดล่าสุด แล้วสลับให้อัตโนมัติ
