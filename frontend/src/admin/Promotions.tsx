@@ -32,6 +32,7 @@ import {
   ChevronRight,
   FileSpreadsheet
 } from 'lucide-react';
+import { PageHeader } from './PageHeader';
 
 interface Promotion {
   id: number;
@@ -857,40 +858,32 @@ export const Promotions: React.FC = () => {
         </div>
       )}
 
-      {/* Compact single-row header + filters */}
+      {/* หัวเรื่อง + ปุ่ม action ขึ้นไปอยู่บนแถบบน (ดู PageHeader.tsx) เหลือแค่การ์ดตัวกรองในเนื้อหา */}
+      <PageHeader
+        icon={Tag}
+        title="จัดการโปรโมชันส่วนลด"
+        description="สร้าง ปรับปรุง หรือระงับโปรโมชันส่วนลดพิเศษสำหรับลูกค้า"
+      >
+        <button
+          onClick={() => handleExportCsv()}
+          className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[#009032] hover:bg-[#007b2b] text-white text-sm font-bold rounded-xl shadow-sm transition-all active:scale-95 flex-shrink-0"
+        >
+          <FileSpreadsheet className="w-4 h-4" />
+          <span className="hidden sm:inline">ส่งออก CSV</span>
+        </button>
+        <button
+          id="add-promo-btn"
+          onClick={handleCreateOpen}
+          className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-xl shadow-sm transition-all active:scale-95 flex-shrink-0"
+        >
+          <Plus className="w-4 h-4" />
+          <span className="hidden sm:inline">สร้างโปรโมชันใหม่</span>
+        </button>
+      </PageHeader>
+
+      {/* Filters */}
       <div className="bg-white border border-slate-200 rounded-2xl px-5 py-3.5 shadow-sm space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-          <div className="flex items-center gap-2 flex-shrink-0">
-            <Tag className="w-5 h-5 text-[#009032]" />
-            <h2 className="text-base font-bold text-slate-900 whitespace-nowrap">จัดการโปรโมชันส่วนลด</h2>
-            <span className="text-xs text-slate-400 hidden lg:inline">
-              สร้าง ปรับปรุง หรือระงับโปรโมชันส่วนลดพิเศษสำหรับลูกค้า
-            </span>
-          </div>
-
-          <div className="flex-1" />
-
-          <div className="flex items-center gap-2 w-full sm:w-auto">
-            <button
-              onClick={() => handleExportCsv()}
-              className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[#009032] hover:bg-[#007b2b] text-white text-sm font-bold rounded-xl shadow-sm transition-all active:scale-95 flex-shrink-0"
-            >
-              <FileSpreadsheet className="w-4 h-4" />
-              <span className="hidden sm:inline">ส่งออก CSV</span>
-            </button>
-            <button
-              id="add-promo-btn"
-              onClick={handleCreateOpen}
-              className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-xl shadow-sm transition-all active:scale-95 flex-shrink-0"
-            >
-              <Plus className="w-4 h-4" />
-              <span className="hidden sm:inline">สร้างโปรโมชันใหม่</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Filters */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-4 border-t border-slate-100">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {/* Search */}
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />

@@ -16,6 +16,7 @@ import {
   ChevronLeft,
   ChevronRight
 } from 'lucide-react';
+import { PageHeader } from './PageHeader';
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 
@@ -812,39 +813,30 @@ export const StockRules: React.FC = () => {
         </div>
       )}
 
-      {/* Compact single-row header */}
-      <div className="bg-white border border-slate-200 rounded-2xl px-5 py-3.5 shadow-sm flex flex-col sm:flex-row sm:items-center gap-3">
-        <div className="flex items-center gap-2 flex-shrink-0">
-          <ShieldAlert className="w-5 h-5 text-[#009032]" />
-          <h2 className="text-base font-bold text-slate-900 whitespace-nowrap">กฎระงับเสนอขายสต็อกหมด</h2>
-          <span className="text-xs text-slate-400 hidden lg:inline">
-            ป้องกันการเสนอขายสินค้าที่สต็อกหมดหรือติดลบ
-          </span>
+      <PageHeader
+        icon={ShieldAlert}
+        title="กฎระงับเสนอขายสต็อกหมด"
+        description="ป้องกันการเสนอขายสินค้าที่สต็อกหมดหรือติดลบ"
+      >
+        <div className="relative flex-1 sm:w-60">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+          <input
+            type="text"
+            placeholder="ค้นหา..."
+            value={searchQuery}
+            onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
+            className="w-full pl-9 pr-3 py-2 text-sm bg-slate-50 border border-slate-200 hover:border-slate-300 focus:border-[#009032] focus:bg-white rounded-xl outline-none transition-all"
+          />
         </div>
 
-        <div className="flex-1" />
-
-        <div className="flex items-center gap-2 w-full sm:w-auto">
-          <div className="relative flex-1 sm:w-60">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
-            <input
-              type="text"
-              placeholder="ค้นหา..."
-              value={searchQuery}
-              onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
-              className="w-full pl-9 pr-3 py-2 text-sm bg-slate-50 border border-slate-200 hover:border-slate-300 focus:border-[#009032] focus:bg-white rounded-xl outline-none transition-all"
-            />
-          </div>
-
-          <button
-            onClick={handleCreateOpen}
-            className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[#009032] hover:bg-[#007b2b] text-white text-sm font-bold rounded-xl shadow-sm transition-all active:scale-95 flex-shrink-0"
-          >
-            <Plus className="w-4 h-4" />
-            <span className="hidden sm:inline">สร้างกฎใหม่</span>
-          </button>
-        </div>
-      </div>
+        <button
+          onClick={handleCreateOpen}
+          className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[#009032] hover:bg-[#007b2b] text-white text-sm font-bold rounded-xl shadow-sm transition-all active:scale-95 flex-shrink-0"
+        >
+          <Plus className="w-4 h-4" />
+          <span className="hidden sm:inline">สร้างกฎใหม่</span>
+        </button>
+      </PageHeader>
 
       {/* Loading & Empty States */}
       {isLoading ? (

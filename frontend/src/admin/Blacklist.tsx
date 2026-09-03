@@ -14,6 +14,7 @@ import {
   User,
   X,
 } from 'lucide-react';
+import { PageHeader } from './PageHeader';
 
 const BRAND = '#009032';
 const MIN_SEARCH_CHARS = 2;
@@ -127,18 +128,11 @@ export const Blacklist: React.FC = () => {
         </div>
       )}
 
-      {/* Header */}
-      <div className="bg-white border border-slate-200 rounded-2xl px-5 py-3.5 shadow-sm flex flex-col sm:flex-row sm:items-center gap-3">
-        <div className="flex items-center gap-2 flex-shrink-0">
-          <Ban className="w-5 h-5 text-[#009032]" />
-          <h2 className="text-base font-bold text-slate-900 whitespace-nowrap">บัญชีห้ามเสนอราคา</h2>
-          <span className="text-xs text-slate-400 hidden lg:inline">
-            บริษัทหรือผู้ติดต่อในบัญชีนี้ เซลล์จะกดยืนยันออกใบเสนอราคาไม่ได้
-          </span>
-        </div>
-
-        <div className="flex-1" />
-
+      <PageHeader
+        icon={Ban}
+        title="บัญชีห้ามเสนอราคา"
+        description="บริษัทหรือผู้ติดต่อในบัญชีนี้ เซลล์จะกดยืนยันออกใบเสนอราคาไม่ได้"
+      >
         <button
           onClick={() => setIsAdding(true)}
           className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[#009032] hover:bg-[#007b2b] text-white text-sm font-bold rounded-xl shadow-sm transition-all active:scale-95 flex-shrink-0"
@@ -146,7 +140,7 @@ export const Blacklist: React.FC = () => {
           <Plus className="w-4 h-4" />
           <span>เพิ่มรายการ</span>
         </button>
-      </div>
+      </PageHeader>
 
       {isLoading ? (
         <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center shadow-sm flex flex-col items-center justify-center gap-3">

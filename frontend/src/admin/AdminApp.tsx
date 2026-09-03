@@ -9,6 +9,7 @@ import { ChangePasswordModal } from './ChangePasswordModal';
 import { Promotions } from './Promotions';
 import { Salespersons } from './Salespersons';
 import { Quotations } from './Quotations';
+import { PageHeaderProvider, PageHeaderOutlet } from './PageHeader';
 import { QuotationRules } from './QuotationRules';
 import { OptionalLinks } from './OptionalLinks';
 import { StockRules } from './StockRules';
@@ -428,23 +429,20 @@ function AdminContent() {
       {/* Main column */}
       <div className="flex-1 min-w-0 flex flex-col">
         {/* Top bar */}
-        <header className="bg-white border-b border-slate-200 sticky top-0 z-30 h-16 flex items-center gap-3 px-4 sm:px-6 shrink-0">
+        {/* แถบบน = หัวเรื่องของหน้า + ปุ่ม action ของหน้านั้น (มาจาก <PageHeader /> ผ่าน portal)
+            ตัดบรรทัด "PRIMUS ADMIN" ทิ้งเพราะซ้ำกับโลโก้บน sidebar และกินความสูงฟรี ๆ */}
+        <header className="bg-white border-b border-slate-200 sticky top-0 z-30 min-h-14 flex items-center gap-3 px-4 sm:px-6 py-2 shrink-0">
           <button
             onClick={() => setMobileOpen(true)}
-            className="lg:hidden flex items-center justify-center w-9 h-9 rounded-lg text-slate-500 hover:bg-slate-50 border border-slate-200"
+            className="lg:hidden flex items-center justify-center w-9 h-9 rounded-lg text-slate-500 hover:bg-slate-50 border border-slate-200 shrink-0"
             aria-label="เปิดเมนู"
           >
             <Menu className="w-4 h-4" />
           </button>
-          <div>
-            <p className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">Primus Admin</p>
-            <h2 className="text-base font-bold text-slate-900 leading-tight">
-              {PAGE_TITLES[effectiveTab]}
-            </h2>
-          </div>
+          <PageHeaderOutlet fallbackTitle={PAGE_TITLES[effectiveTab]} />
         </header>
 
-        <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+        <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5 space-y-6">
           {effectiveTab === 'blacklist' ? (
             /* เมนูเดียวที่ role 'user' เข้าถึงได้ — admin ก็เข้าได้เหมือนกัน */
             <div className="animate-fade-in">
@@ -565,13 +563,13 @@ function AdminContent() {
               {subTab === 'stock' && <StockRules />}
               {subTab === 'moq' && <ProductMoqRules />}
               {/* สองกฎคนละตาราง/คนละ endpoint แต่รวมหน้าเดียวกันเพราะแอดมินตั้งค่าทีเดียวจบ
-                  อยากแยกหน้าเมื่อไหร่ก็ย้าย <CreditPolicy /> ไป subTab ใหม่ได้เลย */}
+                  อยากแยกหน้าเมื่อไหร่ก็ย้าย <CreditPolicy /> ไป subTab ใหม่ได้เลย
+                  วางซ้าย-ขวาบนจอกว้าง (ทั้งคู่เป็นบล็อกแคบ max-w-3xl อยู่แล้ว) และเรียงบนลงล่างเมื่อจอแคบกว่า xl
+                  ไม่ใส่ items-start เพื่อให้ grid ยืดสองคอลัมน์สูงเท่ากัน (ตัวหน้าเองจัดการ่วนที่ยืดด้วย flex-1) */}
               {subTab === 'shipping' && (
-                <div className="space-y-6">
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
                   <ShippingFee />
-                  <div className="border-t border-slate-200 pt-6">
-                    <CreditPolicy />
-                  </div>
+                  <CreditPolicy />
                 </div>
               )}
             </div>
@@ -588,7 +586,10 @@ function AdminContent() {
 export default function AdminApp() {
   return (
     <AuthProvider>
-      <AdminContent />
+      {/* ช่องหัวเรื่องบนแถบบนเป็น state ร่วมของทั้งแอป — วางไว้เหนือ AdminContent ที่เดียว */}
+      <PageHeaderProvider>
+        <AdminContent />
+      </PageHeaderProvider>
     </AuthProvider>
   );
 }

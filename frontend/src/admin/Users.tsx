@@ -14,6 +14,7 @@ import {
   CheckCircle2,
   X,
 } from 'lucide-react';
+import { PageHeader } from './PageHeader';
 
 const BRAND = '#009032';
 const MIN_PASSWORD_LENGTH = 8;
@@ -123,18 +124,11 @@ export const Users: React.FC = () => {
         </div>
       )}
 
-      {/* Header */}
-      <div className="bg-white border border-slate-200 rounded-2xl px-5 py-3.5 shadow-sm flex flex-col sm:flex-row sm:items-center gap-3">
-        <div className="flex items-center gap-2 flex-shrink-0">
-          <UsersIcon className="w-5 h-5 text-[#009032]" />
-          <h2 className="text-base font-bold text-slate-900 whitespace-nowrap">ผู้ใช้งานระบบหลังบ้าน</h2>
-          <span className="text-xs text-slate-400 hidden lg:inline">
-            เพิ่ม ลบ แก้ไข และกำหนดสิทธิ์ผู้เข้าใช้ Admin Portal
-          </span>
-        </div>
-
-        <div className="flex-1" />
-
+      <PageHeader
+        icon={UsersIcon}
+        title="ผู้ใช้งานระบบหลังบ้าน"
+        description="เพิ่ม ลบ แก้ไข และกำหนดสิทธิ์ผู้เข้าใช้ Admin Portal"
+      >
         <button
           onClick={() => setFormMode({ kind: 'create' })}
           className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[#009032] hover:bg-[#007b2b] text-white text-sm font-bold rounded-xl shadow-sm transition-all active:scale-95 flex-shrink-0"
@@ -142,7 +136,7 @@ export const Users: React.FC = () => {
           <Plus className="w-4 h-4" />
           <span>เพิ่มผู้ใช้</span>
         </button>
-      </div>
+      </PageHeader>
 
       {isLoading ? (
         <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center shadow-sm flex flex-col items-center justify-center gap-3">

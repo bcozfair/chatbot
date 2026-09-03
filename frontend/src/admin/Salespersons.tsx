@@ -22,6 +22,7 @@ import {
   X,
   FileSpreadsheet
 } from 'lucide-react';
+import { PageHeader } from './PageHeader';
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 
@@ -457,20 +458,13 @@ export function Salespersons() {
         className="hidden"
       />
 
-      {/* Header and Search Actions */}
-      <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-            <UserCheck className="w-6 h-6 text-[#009032]" />
-            จัดการข้อมูลพนักงาน
-          </h2>
-          <p className="text-xs text-slate-500 mt-1">
-            ค้นหาข้อมูลพนักงานขาย แก้ไขชื่อ/เบอร์โทร/รหัสพนักงาน/employee_name และอัปโหลด/ลบลายเซ็นรูปภาพ (รองรับไฟล์ PNG และ JPG/JPEG)
-          </p>
-        </div>
-
-        {/* Search Bar */}
-        <div className="relative max-w-md w-full md:w-80">
+      {/* หัวเรื่อง + ช่องค้นหา ขึ้นไปอยู่บนแถบบน (ดู PageHeader.tsx) */}
+      <PageHeader
+        icon={UserCheck}
+        title="จัดการข้อมูลพนักงาน"
+        description="แก้ไขชื่อ/เบอร์โทร/รหัสพนักงาน และอัปโหลดลายเซ็น (PNG, JPG/JPEG)"
+      >
+        <div className="relative w-48 sm:w-64 lg:w-80">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
           <input
             id="salesperson-search-input"
@@ -481,7 +475,7 @@ export function Salespersons() {
             className="w-full pl-10 pr-4 py-2 text-sm bg-slate-50 border border-slate-200 hover:border-slate-300 focus:border-[#009032] focus:bg-white rounded-2xl outline-none transition-all shadow-inner"
           />
         </div>
-      </div>
+      </PageHeader>
 
       {/* Loading state */}
       {loading ? (

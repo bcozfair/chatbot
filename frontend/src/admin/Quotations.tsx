@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { DateInput } from './DateInput';
+import { PageHeader } from './PageHeader';
 import {
   FileText,
   Search,
@@ -457,81 +458,73 @@ export const Quotations: React.FC = () => {
         </div>
       )}
 
-      {/* Compact single-row header + filters */}
-      <div className="bg-white border border-slate-200 rounded-2xl px-5 py-3.5 shadow-sm space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-          <div className="flex items-center gap-2 flex-shrink-0">
-            <FileText className="w-5 h-5 text-[#009032]" />
-            <h2 className="text-base font-bold text-slate-900 whitespace-nowrap">ประวัติใบเสนอราคา</h2>
-            <span className="text-xs text-slate-400 hidden lg:inline">
-              ค้นหา ดูข้อมูล และส่งออกใบเสนอราคาทั้งหมดในระบบ
-            </span>
-          </div>
+      {/* หัวเรื่อง + ปุ่มส่งออก ขึ้นไปอยู่บนแถบบน (ดู PageHeader.tsx) เหลือแค่การ์ดตัวกรองในเนื้อหา */}
+      <PageHeader
+        icon={FileText}
+        title="ประวัติใบเสนอราคา"
+        description="ค้นหา ดูข้อมูล และส่งออกใบเสนอราคาทั้งหมดในระบบ"
+      >
+        <div className="relative" ref={exportMenuRef}>
+          <button
+            onClick={() => setExportMenuOpen(open => !open)}
+            disabled={isExporting}
+            className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[#009032] hover:bg-[#007b2b] disabled:opacity-60 disabled:cursor-not-allowed text-white text-sm font-bold rounded-xl shadow-sm transition-all active:scale-95 flex-shrink-0"
+          >
+            {isExporting
+              ? <Loader2 className="w-4 h-4 animate-spin" />
+              : <FileSpreadsheet className="w-4 h-4" />}
+            <span className="hidden sm:inline">ส่งออก Odoo</span>
+            <ChevronDown className="w-3.5 h-3.5" />
+          </button>
 
-          <div className="flex-1" />
-
-          <div className="flex items-center gap-2 w-full sm:w-auto">
-            <div className="relative w-full sm:w-auto" ref={exportMenuRef}>
-              <button
-                onClick={() => setExportMenuOpen(open => !open)}
-                disabled={isExporting}
-                className="w-full flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[#009032] hover:bg-[#007b2b] disabled:opacity-60 disabled:cursor-not-allowed text-white text-sm font-bold rounded-xl shadow-sm transition-all active:scale-95 flex-shrink-0"
-              >
-                {isExporting
-                  ? <Loader2 className="w-4 h-4 animate-spin" />
-                  : <FileSpreadsheet className="w-4 h-4" />}
-                <span className="hidden sm:inline">ส่งออก Odoo</span>
-                <ChevronDown className="w-3.5 h-3.5" />
-              </button>
-
-              {exportMenuOpen && (
-                <div className="absolute right-0 top-full mt-2 z-30 w-[19rem] bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden">
-                  {/* 1 ครั้ง = 1 บริษัท — Odoo ของ PM กับ THT เป็นคนละระบบ ไฟล์จึงรวมกันไม่ได้ */}
-                  {EXPORT_COMPANIES.map(({ value, company }) => (
-                    <div key={value} className="flex items-center gap-2 px-3 py-2 border-b border-slate-100">
-                      <div className="flex items-baseline gap-1.5 flex-1 min-w-0">
-                        <span className="px-1.5 py-0.5 rounded-md bg-[#009032]/10 text-[#009032] text-xs font-extrabold tracking-wide">
-                          {value}
-                        </span>
-                        <span className="text-sm font-bold text-slate-800 truncate">{company}</span>
-                      </div>
-                      <button
-                        onClick={() => handleExportOdoo('xlsx', value)}
-                        title={`ส่งออก ${value} (${company}) เป็น Excel`}
-                        className="flex items-center gap-1 px-2 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-slate-600 hover:border-[#009032] hover:text-[#009032] hover:bg-[#009032]/5 transition-colors"
-                      >
-                        <FileSpreadsheet className="w-3.5 h-3.5" />
-                        Excel
-                      </button>
-                      <button
-                        onClick={() => handleExportOdoo('csv', value)}
-                        title={`ส่งออก ${value} (${company}) เป็น CSV`}
-                        className="flex items-center gap-1 px-2 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-slate-600 hover:border-[#009032] hover:text-[#009032] hover:bg-[#009032]/5 transition-colors"
-                      >
-                        <FileText className="w-3.5 h-3.5" />
-                        CSV
-                      </button>
-                    </div>
-                  ))}
+          {exportMenuOpen && (
+            <div className="absolute right-0 top-full mt-2 z-30 w-[19rem] bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden">
+              {/* 1 ครั้ง = 1 บริษัท — Odoo ของ PM กับ THT เป็นคนละระบบ ไฟล์จึงรวมกันไม่ได้ */}
+              {EXPORT_COMPANIES.map(({ value, company }) => (
+                <div key={value} className="flex items-center gap-2 px-3 py-2 border-b border-slate-100">
+                  <div className="flex items-baseline gap-1.5 flex-1 min-w-0">
+                    <span className="px-1.5 py-0.5 rounded-md bg-[#009032]/10 text-[#009032] text-xs font-extrabold tracking-wide">
+                      {value}
+                    </span>
+                    <span className="text-sm font-bold text-slate-800 truncate">{company}</span>
+                  </div>
                   <button
-                    onClick={openHistory}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 transition-colors"
+                    onClick={() => handleExportOdoo('xlsx', value)}
+                    title={`ส่งออก ${value} (${company}) เป็น Excel`}
+                    className="flex items-center gap-1 px-2 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-slate-600 hover:border-[#009032] hover:text-[#009032] hover:bg-[#009032]/5 transition-colors"
                   >
-                    <History className="w-4 h-4 text-slate-400" />
-                    ประวัติการส่งออก
+                    <FileSpreadsheet className="w-3.5 h-3.5" />
+                    Excel
                   </button>
-                  <p className="px-3 py-2 text-[11px] leading-snug text-slate-500 border-t border-slate-100 bg-slate-50">
-                    ส่งออกตามตัวกรองบนหน้าจอ (ตั้งต้น: เฉพาะใบที่ยังไม่เคยส่ง) ใบที่อยู่ในไฟล์จะถูกทำเครื่องหมายว่าส่งแล้วทันที
-                    · เลขที่ที่ไม่ขึ้นต้นด้วย QP/QT จะไม่อยู่ในไฟล์
-                  </p>
+                  <button
+                    onClick={() => handleExportOdoo('csv', value)}
+                    title={`ส่งออก ${value} (${company}) เป็น CSV`}
+                    className="flex items-center gap-1 px-2 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-slate-600 hover:border-[#009032] hover:text-[#009032] hover:bg-[#009032]/5 transition-colors"
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                    CSV
+                  </button>
                 </div>
-              )}
+              ))}
+              <button
+                onClick={openHistory}
+                className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 transition-colors"
+              >
+                <History className="w-4 h-4 text-slate-400" />
+                ประวัติการส่งออก
+              </button>
+              <p className="px-3 py-2 text-[11px] leading-snug text-slate-500 border-t border-slate-100 bg-slate-50">
+                ส่งออกตามตัวกรองบนหน้าจอ (ตั้งต้น: เฉพาะใบที่ยังไม่เคยส่ง) ใบที่อยู่ในไฟล์จะถูกทำเครื่องหมายว่าส่งแล้วทันที
+                · เลขที่ที่ไม่ขึ้นต้นด้วย QP/QT จะไม่อยู่ในไฟล์
+              </p>
             </div>
-          </div>
+          )}
         </div>
+      </PageHeader>
 
-        {/* Filters */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 pt-4 border-t border-slate-100">
+      {/* Filters */}
+      <div className="bg-white border border-slate-200 rounded-2xl px-5 py-3.5 shadow-sm space-y-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
           {/* Search */}
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />

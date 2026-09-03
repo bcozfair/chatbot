@@ -123,9 +123,11 @@ export const CreditPolicy: React.FC = () => {
   }
 
   return (
-    <div className="max-w-3xl space-y-3">
+    // ทั้งหน้าเป็นการ์ดใบเดียว: แถบคำอธิบาย → เนื้อฟอร์ม → แถบปุ่ม
+    // h-full ให้การ์ดสูงเท่าคอลัมน์ เพราะหน้าตั้งค่าวางสองหน้านี้ซ้าย-ขวา
+    <div className="flex h-full max-w-3xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
       {/* อธิบายกฎให้แอดมินเข้าใจก่อนแก้ตัวเลข */}
-      <div className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-3.5">
+      <div className="flex items-start gap-3 border-b border-slate-100 bg-slate-50/60 p-3.5">
         <div
           className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg"
           style={{ backgroundColor: 'rgba(0, 144, 50, 0.10)' }}
@@ -142,7 +144,8 @@ export const CreditPolicy: React.FC = () => {
         </div>
       </div>
 
-      <div className="rounded-xl border border-slate-200 bg-white p-3.5 space-y-3.5">
+      {/* flex-1 = เนื้อฟอร์มยืดเติมความสูงที่เหลือ แถบปุ่มของสองคอลัมน์จึงอยู่ระดับเดียวกัน */}
+      <div className="flex-1 space-y-3.5 p-3.5">
         <SettingToggle
           checked={form.mode === 'block'}
           onChange={(next) => setForm({ ...form, mode: next ? 'block' : 'off' })}
@@ -174,22 +177,26 @@ export const CreditPolicy: React.FC = () => {
             ไม่ต้องรอรอบ sync
           </p>
         </div>
+
+        {error && (
+          <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>{error}</span>
+          </div>
+        )}
+        {savedAt && !isDirty && (
+          <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <span>บันทึกแล้วเมื่อ {savedAt} — มีผลกับใบที่บันทึก/ยืนยันหลังจากนี้ทันที</span>
+          </div>
+        )}
       </div>
 
-      {error && (
-        <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-          <span>{error}</span>
-        </div>
-      )}
-      {savedAt && !isDirty && (
-        <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
-          <CheckCircle2 className="w-4 h-4 shrink-0" />
-          <span>บันทึกแล้วเมื่อ {savedAt} — มีผลกับใบที่บันทึก/ยืนยันหลังจากนี้ทันที</span>
-        </div>
-      )}
-
-      <div className="flex items-center gap-2">
+      {/* แถบปุ่มติดขอบล่างการ์ด */}
+      <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/60 px-3.5 py-3">
+        {isDirty && (
+          <span className="mr-auto text-xs font-bold text-amber-600">⚠️ ยังไม่ได้บันทึก</span>
+        )}
         <button
           type="button"
           onClick={handleSave}
@@ -209,7 +216,6 @@ export const CreditPolicy: React.FC = () => {
           <RotateCcw className="w-4 h-4" />
           ย้อนกลับ
         </button>
-        {isDirty && <span className="text-xs font-bold text-amber-600">⚠️ ยังไม่ได้บันทึก</span>}
       </div>
     </div>
   );

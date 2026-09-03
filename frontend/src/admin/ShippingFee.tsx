@@ -172,9 +172,11 @@ export const ShippingFee: React.FC = () => {
   );
 
   return (
-    <div className="max-w-3xl space-y-3">
+    // ทั้งหน้าเป็นการ์ดใบเดียว: แถบคำอธิบาย → เนื้อฟอร์ม → แถบปุ่ม
+    // h-full ให้การ์ดสูงเท่าคอลัมน์ เพราะหน้าตั้งค่าวางสองหน้านี้ซ้าย-ขวา
+    <div className="flex h-full max-w-3xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
       {/* อธิบายกฎให้แอดมินเข้าใจก่อนแก้ตัวเลข — ย่อสั้นเก็บใจความหลัก */}
-      <div className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-3.5">
+      <div className="flex items-start gap-3 border-b border-slate-100 bg-slate-50/60 p-3.5">
         <div
           className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg"
           style={{ backgroundColor: 'rgba(0, 144, 50, 0.10)' }}
@@ -190,7 +192,8 @@ export const ShippingFee: React.FC = () => {
       </div>
 
       {/* ฟอร์มค่าคงที่ */}
-      <div className="rounded-xl border border-slate-200 bg-white p-3.5 space-y-3.5">
+      {/* flex-1 = เนื้อฟอร์มยืดเติมความสูงที่เหลือ แถบปุ่มของสองคอลัมน์จึงอยู่ระดับเดียวกัน */}
+      <div className="flex-1 space-y-3.5 p-3.5">
         <SettingToggle
           checked={form.is_active}
           onChange={(next) => setForm({ ...form, is_active: next })}
@@ -225,56 +228,60 @@ export const ShippingFee: React.FC = () => {
             ใบที่เซลล์ตั้งชื่อเองไว้แล้วจะไม่ถูกเปลี่ยนย้อนหลัง
           </p>
         </div>
+
+        {/* ข้อมูล Odoo — อ่านอย่างเดียว แก้ผ่านตาราง products/migration เท่านั้น
+            กรณี map ไม่เจอ = คำเตือนสำคัญ โชว์เต็มเสมอ; ปกติยุบเป็น disclosure ประหยัดที่ */}
+        {config.product_template_id === null ? (
+          <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-3.5 text-sm text-red-700">
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>
+              ไม่พบสินค้าที่ <span className="font-mono">{config.product_internal_reference}</span> ในตาราง
+              products — กฎจะไม่ทำงานจนกว่าจะรัน migration
+            </span>
+          </div>
+        ) : (
+          <details className="group rounded-xl border border-slate-200 bg-slate-50 [&_summary::-webkit-details-marker]:hidden">
+            <summary className="flex cursor-pointer items-center gap-1.5 px-3.5 py-2.5 text-xs font-bold text-slate-600 select-none">
+              <ChevronRight className="w-3.5 h-3.5 shrink-0 transition-transform group-open:rotate-90" />
+              ข้อมูลที่ใช้ map กลับ Odoo (แก้ที่นี่ไม่ได้)
+            </summary>
+            <dl className="grid gap-x-6 gap-y-1.5 px-3.5 pb-3 text-xs sm:grid-cols-2">
+              {[
+                ['Internal Reference', config.product_internal_reference],
+                ['Name (Odoo)', config.product_name],
+                ['Model', config.model],
+                ['Product Group', config.product_group],
+                ['Product Category', config.product_category],
+                ['Product Sub Category', config.product_sub_category],
+              ].map(([label, value]) => (
+                <div key={label as string} className="flex justify-between gap-3 border-b border-slate-200 py-1">
+                  <dt className="text-slate-500">{label}</dt>
+                  <dd className="font-mono text-slate-800 text-right break-all">{value || '-'}</dd>
+                </div>
+              ))}
+            </dl>
+          </details>
+        )}
+
+        {error && (
+          <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>{error}</span>
+          </div>
+        )}
+        {savedAt && !isDirty && (
+          <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <span>บันทึกแล้วเมื่อ {savedAt} — มีผลกับใบที่บันทึก/ยืนยันหลังจากนี้ทันที</span>
+          </div>
+        )}
       </div>
 
-      {/* ข้อมูล Odoo — อ่านอย่างเดียว แก้ผ่านตาราง products/migration เท่านั้น
-          กรณี map ไม่เจอ = คำเตือนสำคัญ โชว์เต็มเสมอ; ปกติยุบเป็น disclosure ประหยัดที่ */}
-      {config.product_template_id === null ? (
-        <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-3.5 text-sm text-red-700">
-          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-          <span>
-            ไม่พบสินค้าที่ <span className="font-mono">{config.product_internal_reference}</span> ในตาราง
-            products — กฎจะไม่ทำงานจนกว่าจะรัน migration
-          </span>
-        </div>
-      ) : (
-        <details className="group rounded-xl border border-slate-200 bg-slate-50 [&_summary::-webkit-details-marker]:hidden">
-          <summary className="flex cursor-pointer items-center gap-1.5 px-3.5 py-2.5 text-xs font-bold text-slate-600 select-none">
-            <ChevronRight className="w-3.5 h-3.5 shrink-0 transition-transform group-open:rotate-90" />
-            ข้อมูลที่ใช้ map กลับ Odoo (แก้ที่นี่ไม่ได้)
-          </summary>
-          <dl className="grid gap-x-6 gap-y-1.5 px-3.5 pb-3 text-xs sm:grid-cols-2">
-            {[
-              ['Internal Reference', config.product_internal_reference],
-              ['Name (Odoo)', config.product_name],
-              ['Model', config.model],
-              ['Product Group', config.product_group],
-              ['Product Category', config.product_category],
-              ['Product Sub Category', config.product_sub_category],
-            ].map(([label, value]) => (
-              <div key={label as string} className="flex justify-between gap-3 border-b border-slate-200 py-1">
-                <dt className="text-slate-500">{label}</dt>
-                <dd className="font-mono text-slate-800 text-right break-all">{value || '-'}</dd>
-              </div>
-            ))}
-          </dl>
-        </details>
-      )}
-
-      {error && (
-        <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-          <span>{error}</span>
-        </div>
-      )}
-      {savedAt && !isDirty && (
-        <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
-          <CheckCircle2 className="w-4 h-4 shrink-0" />
-          <span>บันทึกแล้วเมื่อ {savedAt} — มีผลกับใบที่บันทึก/ยืนยันหลังจากนี้ทันที</span>
-        </div>
-      )}
-
-      <div className="flex items-center gap-2">
+      {/* แถบปุ่มติดขอบล่างการ์ด */}
+      <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/60 px-3.5 py-3">
+        {isDirty && (
+          <span className="mr-auto text-xs font-bold text-amber-600">⚠️ ยังไม่ได้บันทึก</span>
+        )}
         <button
           type="button"
           onClick={handleSave}
@@ -294,9 +301,6 @@ export const ShippingFee: React.FC = () => {
           <RotateCcw className="w-4 h-4" />
           ย้อนกลับ
         </button>
-        {isDirty && (
-          <span className="text-xs font-bold text-amber-600">⚠️ ยังไม่ได้บันทึก</span>
-        )}
       </div>
     </div>
   );
