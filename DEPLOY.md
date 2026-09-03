@@ -86,6 +86,7 @@ docker compose exec db psql -U "$PG_USER" -d "$PG_DATABASE" -c "SELECT count(*) 
 ```bash
 docker compose up -d --build         # ครั้งแรก build นาน (โหลด Chromium + ฟอนต์) รอสักครู่
 docker compose logs -f app           # เห็น "listening on 3011" = สำเร็จ (กด Ctrl+C ออกจาก log ได้ แอปยังรันอยู่)
+docker image prune -f --filter "until=24h"   # ลบ image เก่าที่ไม่มีใครใช้ (ของอายุน้อยกว่า 24 ชม. ไม่โดน)
 ```
 
 ### 2.5 เช็คว่าแอปตอบ (บน server)
@@ -478,7 +479,10 @@ docker compose up -d --build          # สร้างกล่องใหม�
 docker compose ps                     # db ต้อง healthy, app ต้อง running
 docker compose logs -f app            # เห็น listening on 3011 = สำเร็จ
 curl -I http://127.0.0.1:${APP_PORT:-3011}/
+docker image prune -f --filter "until=24h"   # ⚠️ ทำทุกครั้งหลัง build — ไม่งั้น image เก่าสะสมจนดิสก์ตัน
 ```
+- **`docker image prune` ต่อท้ายทุก build ห้ามข้าม** — แต่ละ build ทิ้ง image เก่าไว้ 1 ตัว วันละ ~20 ตัว
+  ประมาณ 2 เดือนดิสก์เต็ม · `--filter "until=24h"` กันไม่ให้ลบ image ที่เพิ่ง build (เผื่อต้อง rollback)
 - ข้อมูลใน database **ไม่หาย** (อยู่ใน volume `pgdata`) และรูปลายเซ็นก็ไม่หาย (volume `sig_*`)
 - แก้เฉพาะหน้า admin (frontend) ก็ต้อง `--build` เหมือนกัน
 - ถ้า `docker-compose.yml` เปลี่ยนในช่วงที่ค้าง **กล่อง db จะถูก recreate ด้วย ไม่ใช่แค่ app** → เช็คขั้น 3 ให้ผ่านก่อนเสมอ
