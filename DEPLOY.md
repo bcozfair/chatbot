@@ -233,8 +233,14 @@ SELECT to_regclass('public.customers_data_view')  AS matview,
        EXISTS(SELECT 1 FROM information_schema.columns
               WHERE table_name='sale_orders' AND column_name='order_status')                  AS so_status_cols,
        EXISTS(SELECT 1 FROM information_schema.columns
-              WHERE table_name='quotations' AND column_name='odoo_imported_at')               AS q_odoo_link;"
+              WHERE table_name='quotations' AND column_name='odoo_imported_at')               AS q_odoo_link,
+       EXISTS(SELECT 1 FROM information_schema.columns
+              WHERE table_name='api_logs' AND column_name='llm_ms')                           AS api_logs_llm,
+       EXISTS(SELECT 1 FROM pg_extension WHERE extname='pg_stat_statements')                  AS pg_stat_stmts;"
 ```
+> `pg_stat_stmts` = false ทั้งที่รัน `2026-09-03_02` ไปแล้ว แปลว่ากล่อง db ยังไม่ได้ start ด้วย
+> `-c shared_preload_libraries=pg_stat_statements` — ต้อง `docker compose up -d db` (recreate) ก่อน
+> แล้วค่อยรัน migration นั้น ไม่ใช่รัน migration ซ้ำ
 > คอลัมน์ `clean_text` ต้องใช้ **`to_regprocedure`** ไม่ใช่ `to_regproc` — `to_regproc` รับได้แค่ชื่อฟังก์ชันเปล่า
 > ใส่ `(text)` ต่อท้ายจะคืน null ทุกครั้งแม้ฟังก์ชันมีอยู่จริง = สัญญาณเตือนหลอกว่า migration ขาด
 รันเฉพาะไฟล์ที่ผลข้างบนบอกว่ายังไม่มี เรียงตามชื่อไฟล์ (วันที่):
