@@ -245,7 +245,7 @@ function AdminContent() {
         )}
         {/* mr-2 กันชนกับปุ่มย่อ sidebar ที่ลอยคร่อมขอบขวาอยู่ระดับเดียวกัน */}
         {!collapsed && (
-          <ThemeToggle className="ml-auto mr-2 flex items-center justify-center w-8 h-8 rounded-lg text-slate-400 hover:text-[var(--brand-fg)] hover:bg-[var(--brand)]/10 transition-all active:scale-[0.95] shrink-0" />
+          <ThemeToggle className="ml-auto mr-2" />
         )}
         <button
           onClick={() => setMobileOpen(false)}

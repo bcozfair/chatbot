@@ -24,6 +24,14 @@ function readStoredTheme(): Theme {
   }
 }
 
+/** สไตล์พื้นฐาน — เขียวจาง + ขอบ ให้เห็นว่าเป็นปุ่ม ไม่กลืนพื้นหลังทั้งสองธีม */
+const BASE_CLASS =
+  'flex items-center justify-center w-8 h-8 rounded-lg shrink-0 border ' +
+  'border-[var(--brand-fg)]/30 bg-[var(--brand-fg)]/10 text-[var(--brand-fg)] ' +
+  'hover:bg-[var(--brand-fg)]/20 hover:border-[var(--brand-fg)]/55 ' +
+  'transition-all active:scale-[0.95]';
+
+/** className ที่ส่งเข้ามาเป็นส่วนเสริม (เช่นตำแหน่ง) ไม่ทับสไตล์พื้นฐาน */
 export const ThemeToggle: React.FC<{ className?: string }> = ({ className }) => {
   const [theme, setTheme] = useState<Theme>(readStoredTheme);
 
@@ -46,10 +54,7 @@ export const ThemeToggle: React.FC<{ className?: string }> = ({ className }) => 
       onClick={() => setTheme(isDark ? 'light' : 'dark')}
       title={label}
       aria-label={label}
-      className={
-        className ??
-        'flex items-center justify-center w-8 h-8 rounded-lg text-slate-400 hover:text-[var(--brand-fg)] hover:bg-[var(--brand)]/10 transition-all active:scale-[0.95] shrink-0'
-      }
+      className={className ? `${BASE_CLASS} ${className}` : BASE_CLASS}
     >
       {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
     </button>
