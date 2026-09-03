@@ -24,12 +24,13 @@ function readStoredTheme(): Theme {
   }
 }
 
-/** สไตล์พื้นฐาน — เขียวจาง + ขอบ ให้เห็นว่าเป็นปุ่ม ไม่กลืนพื้นหลังทั้งสองธีม */
+/** รางสวิตช์ — สัดส่วนล้อ SettingToggle ของหน้าตั้งค่า แต่ใหญ่ขึ้นเล็กน้อยให้ใส่ไอคอนได้
+    เขียวจาง + ขอบ ทำให้เห็นว่าเป็นปุ่มทั้งธีมมืดและสว่าง */
 const BASE_CLASS =
-  'flex items-center justify-center w-8 h-8 rounded-lg shrink-0 border ' +
-  'border-[var(--brand-fg)]/30 bg-[var(--brand-fg)]/10 text-[var(--brand-fg)] ' +
-  'hover:bg-[var(--brand-fg)]/20 hover:border-[var(--brand-fg)]/55 ' +
-  'transition-all active:scale-[0.95]';
+  'relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border ' +
+  'border-[var(--brand-fg)]/30 bg-[var(--brand-fg)]/10 ' +
+  'hover:border-[var(--brand-fg)]/55 hover:bg-[var(--brand-fg)]/20 ' +
+  'transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-fg)]/50';
 
 /** className ที่ส่งเข้ามาเป็นส่วนเสริม (เช่นตำแหน่ง) ไม่ทับสไตล์พื้นฐาน */
 export const ThemeToggle: React.FC<{ className?: string }> = ({ className }) => {
@@ -47,16 +48,25 @@ export const ThemeToggle: React.FC<{ className?: string }> = ({ className }) => 
   const isDark = theme === 'dark';
   const label = isDark ? 'สลับเป็นธีมสว่าง' : 'สลับเป็นธีมมืด';
 
+  // aria-checked ผูกกับ "ธีมสว่าง" ให้ตรงกับที่ตาเห็น: ติ๊กถูก = ปุ่มเลื่อนไปขวา
   return (
     <button
       id="admin-theme-toggle-btn"
       type="button"
+      role="switch"
+      aria-checked={!isDark}
       onClick={() => setTheme(isDark ? 'light' : 'dark')}
       title={label}
       aria-label={label}
       className={className ? `${BASE_CLASS} ${className}` : BASE_CLASS}
     >
-      {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+      <span
+        className={`inline-flex h-5 w-5 items-center justify-center rounded-full bg-card text-[var(--brand-fg)] shadow transition-transform ${
+          isDark ? 'translate-x-[2px]' : 'translate-x-[20px]'
+        }`}
+      >
+        {isDark ? <Moon className="w-3 h-3" /> : <Sun className="w-3 h-3" />}
+      </span>
     </button>
   );
 };
