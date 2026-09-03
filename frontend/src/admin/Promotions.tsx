@@ -128,7 +128,7 @@ const MultiSelectSearch: React.FC<MultiSelectSearchProps> = ({
       </label>
       
       {/* Selected Tags list */}
-      <div className="flex flex-wrap gap-1.5 p-2 bg-white border border-slate-200 rounded-xl min-h-[46px] focus-within:border-[#009032] focus-within:ring-2 focus-within:ring-[#009032]/10 transition-all">
+      <div className="flex flex-wrap gap-1.5 p-2 bg-card border border-slate-200 rounded-xl min-h-[46px] focus-within:border-[var(--brand-fg)] focus-within:ring-2 focus-within:ring-[var(--brand-fg)]/10 transition-all">
         <span className="flex items-center text-slate-400 pl-1.5 pr-0.5">
           {icon}
         </span>
@@ -159,13 +159,13 @@ const MultiSelectSearch: React.FC<MultiSelectSearchProps> = ({
 
       {/* Dropdown list */}
       {isOpen && (
-        <div className="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl max-h-48 overflow-y-auto divide-y divide-slate-100">
+        <div className="absolute z-50 w-full mt-1 bg-card border border-slate-200 rounded-xl shadow-xl max-h-48 overflow-y-auto divide-y divide-slate-100">
           {/* Custom value input add option */}
           {query.trim() && !selectedValues.includes(query.trim()) && (
             <button
               type="button"
               onMouseDown={() => addValue(query.trim())}
-              className="w-full text-left px-4 py-2.5 text-xs text-[#009032] bg-emerald-55/30 hover:bg-emerald-50 transition-colors font-semibold flex items-center justify-between"
+              className="w-full text-left px-4 py-2.5 text-xs text-[var(--brand-fg)] bg-emerald-55/30 hover:bg-emerald-50 transition-colors font-semibold flex items-center justify-between"
             >
               <span>เพิ่มค่ากำหนดเอง: "{query.trim()}"</span>
               <Plus className="w-3.5 h-3.5" />
@@ -174,7 +174,7 @@ const MultiSelectSearch: React.FC<MultiSelectSearchProps> = ({
 
           {isLoading ? (
             <div className="p-3 text-center text-xs text-slate-400 flex items-center justify-center gap-2">
-              <Loader2 className="w-4 h-4 text-[#009032] animate-spin" />
+              <Loader2 className="w-4 h-4 text-[var(--brand-fg)] animate-spin" />
               กำลังโหลดข้อมูล...
             </div>
           ) : results.length === 0 ? (
@@ -273,7 +273,7 @@ const CustomerRefMultiSelect: React.FC<CustomerRefSelectProps> = ({
       </label>
       
       {/* Selected Tags list */}
-      <div className="flex flex-wrap gap-1.5 p-2 bg-white border border-slate-200 rounded-xl min-h-[46px] focus-within:border-[#009032] focus-within:ring-2 focus-within:ring-[#009032]/10 transition-all">
+      <div className="flex flex-wrap gap-1.5 p-2 bg-card border border-slate-200 rounded-xl min-h-[46px] focus-within:border-[var(--brand-fg)] focus-within:ring-2 focus-within:ring-[var(--brand-fg)]/10 transition-all">
         <span className="flex items-center text-slate-400 pl-1.5 pr-0.5">
           <Users className="w-4 h-4" />
         </span>
@@ -304,10 +304,10 @@ const CustomerRefMultiSelect: React.FC<CustomerRefSelectProps> = ({
 
       {/* Dropdown list */}
       {isOpen && (
-        <div className="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl max-h-48 overflow-y-auto divide-y divide-slate-100">
+        <div className="absolute z-50 w-full mt-1 bg-card border border-slate-200 rounded-xl shadow-xl max-h-48 overflow-y-auto divide-y divide-slate-100">
           {isLoading ? (
             <div className="p-3 text-center text-xs text-slate-400 flex items-center justify-center gap-2">
-              <Loader2 className="w-4 h-4 text-[#009032] animate-spin" />
+              <Loader2 className="w-4 h-4 text-[var(--brand-fg)] animate-spin" />
               กำลังโหลดข้อมูล...
             </div>
           ) : results.length === 0 ? (
@@ -395,8 +395,8 @@ export const Promotions: React.FC = () => {
       return <ArrowUpDown className="w-3.5 h-3.5 text-slate-300 ml-1.5 inline-block" />;
     }
     return sortDirection === 'asc'
-      ? <ArrowUp className="w-3.5 h-3.5 text-[#009032] ml-1.5 inline-block font-bold" />
-      : <ArrowDown className="w-3.5 h-3.5 text-[#009032] ml-1.5 inline-block font-bold" />;
+      ? <ArrowUp className="w-3.5 h-3.5 text-[var(--brand-fg)] ml-1.5 inline-block font-bold" />
+      : <ArrowDown className="w-3.5 h-3.5 text-[var(--brand-fg)] ml-1.5 inline-block font-bold" />;
   };
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -852,8 +852,8 @@ export const Promotions: React.FC = () => {
     <div className="space-y-4">
       {/* Success Alert (Toast) */}
       {successMsg && (
-        <div className="fixed bottom-5 right-5 z-50 flex items-center gap-3 bg-white border border-slate-200 border-l-4 border-l-[#009032] p-4 rounded-2xl shadow-xl shadow-slate-200/50 text-slate-800 text-sm animate-fade-in">
-          <CheckCircle2 className="w-5 h-5 text-[#009032]" />
+        <div className="fixed bottom-5 right-5 z-50 flex items-center gap-3 bg-card border border-slate-200 border-l-4 border-l-[var(--brand-fg)] p-4 rounded-2xl shadow-xl shadow-slate-200/50 text-slate-800 text-sm animate-fade-in">
+          <CheckCircle2 className="w-5 h-5 text-[var(--brand-fg)]" />
           <span>{successMsg}</span>
         </div>
       )}
@@ -866,7 +866,7 @@ export const Promotions: React.FC = () => {
       >
         <button
           onClick={() => handleExportCsv()}
-          className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[#009032] hover:bg-[#007b2b] text-white text-sm font-bold rounded-xl shadow-sm transition-all active:scale-95 flex-shrink-0"
+          className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[var(--brand)] hover:bg-[var(--brand-hover)] text-white text-sm font-bold rounded-xl shadow-sm transition-all active:scale-95 flex-shrink-0"
         >
           <FileSpreadsheet className="w-4 h-4" />
           <span className="hidden sm:inline">ส่งออก CSV</span>
@@ -874,7 +874,7 @@ export const Promotions: React.FC = () => {
         <button
           id="add-promo-btn"
           onClick={handleCreateOpen}
-          className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-xl shadow-sm transition-all active:scale-95 flex-shrink-0"
+          className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-card hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-xl shadow-sm transition-all active:scale-95 flex-shrink-0"
         >
           <Plus className="w-4 h-4" />
           <span className="hidden sm:inline">สร้างโปรโมชันใหม่</span>
@@ -882,7 +882,7 @@ export const Promotions: React.FC = () => {
       </PageHeader>
 
       {/* Filters */}
-      <div className="bg-white border border-slate-200 rounded-2xl px-5 py-3.5 shadow-sm space-y-4">
+      <div className="bg-card border border-slate-200 rounded-2xl px-5 py-3.5 shadow-sm space-y-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {/* Search */}
           <div className="relative">
@@ -893,7 +893,7 @@ export const Promotions: React.FC = () => {
               placeholder="ค้นหาด้วยชื่อแคมเปญ รหัสแคมเปญ หรือรหัสรุ่นสินค้า..."
               value={searchQuery}
               onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
-              className="w-full bg-white border border-slate-200 focus:border-[#009032] focus:ring-2 focus:ring-[#009032]/10 focus:outline-none rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 transition-all"
+              className="w-full bg-card border border-slate-200 focus:border-[var(--brand-fg)] focus:ring-2 focus:ring-[var(--brand-fg)]/10 focus:outline-none rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 transition-all"
             />
           </div>
 
@@ -903,7 +903,7 @@ export const Promotions: React.FC = () => {
               id="promo-status-filter"
               value={statusFilter}
               onChange={(e) => { setStatusFilter(e.target.value); setCurrentPage(1); }}
-              className="w-full bg-white border border-slate-200 focus:border-[#009032] focus:ring-2 focus:ring-[#009032]/10 focus:outline-none rounded-xl px-4 py-2.5 text-sm text-slate-800 transition-all appearance-none cursor-pointer"
+              className="w-full bg-card border border-slate-200 focus:border-[var(--brand-fg)] focus:ring-2 focus:ring-[var(--brand-fg)]/10 focus:outline-none rounded-xl px-4 py-2.5 text-sm text-slate-800 transition-all appearance-none cursor-pointer"
             >
               <option value="">สถานะทั้งหมด</option>
               <option value="active">เปิดใช้งาน</option>
@@ -919,7 +919,7 @@ export const Promotions: React.FC = () => {
               value={dateFrom}
               onChange={(v) => { setDateFrom(v); setCurrentPage(1); }}
               aria-label="กรองตั้งแต่วันที่"
-              className="w-full bg-white border border-slate-200 focus-within:border-[#009032] focus-within:ring-2 focus-within:ring-[#009032]/10 focus:border-[#009032] focus:ring-2 focus:ring-[#009032]/10 focus:outline-none rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-800 transition-all"
+              className="w-full bg-card border border-slate-200 focus-within:border-[var(--brand-fg)] focus-within:ring-2 focus-within:ring-[var(--brand-fg)]/10 focus:border-[var(--brand-fg)] focus:ring-2 focus:ring-[var(--brand-fg)]/10 focus:outline-none rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-800 transition-all"
             />
           </div>
 
@@ -930,7 +930,7 @@ export const Promotions: React.FC = () => {
               value={dateTo}
               onChange={(v) => { setDateTo(v); setCurrentPage(1); }}
               aria-label="กรองถึงวันที่"
-              className="w-full bg-white border border-slate-200 focus-within:border-[#009032] focus-within:ring-2 focus-within:ring-[#009032]/10 focus:border-[#009032] focus:ring-2 focus:ring-[#009032]/10 focus:outline-none rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-800 transition-all"
+              className="w-full bg-card border border-slate-200 focus-within:border-[var(--brand-fg)] focus-within:ring-2 focus-within:ring-[var(--brand-fg)]/10 focus:border-[var(--brand-fg)] focus:ring-2 focus:ring-[var(--brand-fg)]/10 focus:outline-none rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-800 transition-all"
             />
           </div>
         </div>
@@ -963,15 +963,15 @@ export const Promotions: React.FC = () => {
 
       {/* Loading State */}
       {isLoading && (
-        <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center shadow-sm flex flex-col items-center justify-center gap-3">
-          <Loader2 className="w-7 h-7 text-[#009032] animate-spin" />
+        <div className="bg-card border border-slate-200 rounded-2xl p-10 text-center shadow-sm flex flex-col items-center justify-center gap-3">
+          <Loader2 className="w-7 h-7 text-[var(--brand-fg)] animate-spin" />
           <p className="text-slate-500 text-sm font-medium">กำลังค้นหาข้อมูล...</p>
         </div>
       )}
 
       {/* Empty State */}
       {!isLoading && !error && filteredPromotions.length === 0 && (
-        <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center shadow-sm text-slate-500 flex flex-col items-center justify-center gap-2">
+        <div className="bg-card border border-slate-200 rounded-2xl p-10 text-center shadow-sm text-slate-500 flex flex-col items-center justify-center gap-2">
           <Tag className="w-9 h-9 text-slate-300" />
           <p className="font-bold">ไม่พบรายการโปรโมชัน</p>
           <p className="text-xs">ลองปรับเปลี่ยนตัวกรองหรือค้นหาด้วยคำอื่น</p>
@@ -980,7 +980,7 @@ export const Promotions: React.FC = () => {
 
       {/* Table Section */}
       {!isLoading && !error && filteredPromotions.length > 0 && (
-        <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+        <div className="bg-card border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm border-collapse">
               <thead>
@@ -1019,7 +1019,7 @@ export const Promotions: React.FC = () => {
                     {/* Code & Name */}
                     <td className="py-2.5 px-4">
                       <div className="flex flex-col gap-0.5 max-w-[200px]">
-                        <span className="font-mono font-bold text-[10px] text-[#009032] bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded w-fit">
+                        <span className="font-mono font-bold text-[10px] text-[var(--brand-fg)] bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded w-fit">
                           {promo.code}
                         </span>
                         <span className="font-semibold text-slate-900 text-xs truncate leading-snug" title={promo.name}>{promo.name}</span>
@@ -1034,7 +1034,7 @@ export const Promotions: React.FC = () => {
                     {/* Discount Value */}
                     <td className="py-2.5 px-4">
                       <div className="flex items-center gap-1.5">
-                        <div className="w-6 h-6 rounded-lg bg-emerald-50 border border-emerald-100 flex items-center justify-center text-[#009032] shrink-0">
+                        <div className="w-6 h-6 rounded-lg bg-emerald-50 border border-emerald-100 flex items-center justify-center text-[var(--brand-fg)] shrink-0">
                           {promo.discount_type === 'percent' ? <Percent className="w-3 h-3" /> : <DollarSign className="w-3 h-3" />}
                         </div>
                         <div>
@@ -1100,7 +1100,7 @@ export const Promotions: React.FC = () => {
                           </span>
                         </div>
                         {/* Info icon */}
-                        <Info className="w-3.5 h-3.5 text-slate-300 group-hover:text-[#009032] flex-shrink-0 transition-colors" />
+                        <Info className="w-3.5 h-3.5 text-slate-300 group-hover:text-[var(--brand-fg)] flex-shrink-0 transition-colors" />
                       </button>
                     </td>
 
@@ -1120,7 +1120,7 @@ export const Promotions: React.FC = () => {
                         title={promo.is_active ? 'กดเพื่อปิดใช้งาน' : 'กดเพื่อเปิดใช้งาน'}
                       >
                         {promo.is_active ? (
-                          <ToggleRight className="w-8 h-8 text-[#009032]" />
+                          <ToggleRight className="w-8 h-8 text-[var(--brand-fg)]" />
                         ) : (
                           <ToggleLeft className="w-8 h-8 text-slate-300" />
                         )}
@@ -1132,21 +1132,21 @@ export const Promotions: React.FC = () => {
                       <div className="flex items-center justify-end gap-1.5">
                         <button
                           onClick={() => handleExportCsv(promo.code)}
-                          className="p-1.5 bg-white hover:bg-slate-50 text-slate-500 hover:text-blue-600 border border-slate-200 rounded-lg transition-all active:scale-95 shadow-sm"
+                          className="p-1.5 bg-card hover:bg-slate-50 text-slate-500 hover:text-blue-600 border border-slate-200 rounded-lg transition-all active:scale-95 shadow-sm"
                           title="ส่งออก CSV แคมเปญนี้"
                         >
                           <Download className="w-3.5 h-3.5" />
                         </button>
                         <button
                           onClick={() => handleEditOpen(promo)}
-                          className="p-1.5 bg-white hover:bg-slate-50 text-slate-500 hover:text-slate-900 border border-slate-200 rounded-lg transition-all active:scale-95 shadow-sm"
+                          className="p-1.5 bg-card hover:bg-slate-50 text-slate-500 hover:text-slate-900 border border-slate-200 rounded-lg transition-all active:scale-95 shadow-sm"
                           title="แก้ไขข้อมูล"
                         >
                           <Edit2 className="w-3.5 h-3.5" />
                         </button>
                         <button
                           onClick={() => handleDeleteOpen(promo)}
-                          className="p-1.5 bg-white hover:bg-red-50 text-slate-500 hover:text-red-600 border border-slate-200 hover:border-red-200 rounded-lg transition-all active:scale-95 shadow-sm"
+                          className="p-1.5 bg-card hover:bg-red-50 text-slate-500 hover:text-red-600 border border-slate-200 hover:border-red-200 rounded-lg transition-all active:scale-95 shadow-sm"
                           title="ลบโปรโมชัน"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -1172,7 +1172,7 @@ export const Promotions: React.FC = () => {
                 <select
                   value={pageSize}
                   onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
-                  className="h-7 px-2 rounded-lg border border-slate-200 bg-white text-xs font-semibold outline-none focus:border-[#009032]"
+                  className="h-7 px-2 rounded-lg border border-slate-200 bg-card text-xs font-semibold outline-none focus:border-[var(--brand-fg)]"
                 >
                   {PAGE_SIZE_OPTIONS.map(n => (
                     <option key={n} value={n}>{n}</option>
@@ -1185,7 +1185,7 @@ export const Promotions: React.FC = () => {
               <button
                 onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
                 disabled={safePage <= 1}
-                className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-card text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 <ChevronLeft className="w-3.5 h-3.5" />
               </button>
@@ -1198,8 +1198,8 @@ export const Promotions: React.FC = () => {
                     key={p}
                     onClick={() => setCurrentPage(p)}
                     className={`w-7 h-7 flex items-center justify-center rounded-lg text-xs font-bold transition-colors ${p === safePage
-                      ? 'bg-[#009032] text-white'
-                      : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                      ? 'bg-[var(--brand)] text-white'
+                      : 'bg-card border border-slate-200 text-slate-600 hover:bg-slate-100'
                       }`}
                   >
                     {p}
@@ -1210,7 +1210,7 @@ export const Promotions: React.FC = () => {
               <button
                 onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
                 disabled={safePage >= totalPages}
-                className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-card text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 <ChevronRight className="w-3.5 h-3.5" />
               </button>
@@ -1221,12 +1221,12 @@ export const Promotions: React.FC = () => {
 
       {/* ── CREATE / EDIT MODAL ── */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm overflow-y-auto">
-          <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-lg shadow-2xl relative flex flex-col my-8">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm overflow-y-auto">
+          <div className="bg-card border border-slate-200 rounded-2xl w-full max-w-lg shadow-2xl relative flex flex-col my-8">
             {/* Modal Header */}
             <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
               <h3 className="text-lg font-bold text-slate-950 flex items-center gap-2">
-                <Tag className="w-5 h-5 text-[#009032]" />
+                <Tag className="w-5 h-5 text-[var(--brand-fg)]" />
                 {editingPromo ? 'แก้ไขรายละเอียดโปรโมชัน' : 'สร้างโปรโมชันส่วนลดใหม่'}
               </h3>
               <button
@@ -1260,7 +1260,7 @@ export const Promotions: React.FC = () => {
                     disabled={!!editingPromo}
                     value={code}
                     onChange={(e) => setCode(e.target.value.toUpperCase())}
-                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[#009032] focus:ring-2 focus:ring-[#009032]/10 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="w-full bg-card border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[var(--brand-fg)] focus:ring-2 focus:ring-[var(--brand-fg)]/10 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   />
                 </div>
 
@@ -1275,7 +1275,7 @@ export const Promotions: React.FC = () => {
                     placeholder="ส่วนลดพิเศษแคมเปญมิถุนายน"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[#009032] focus:ring-2 focus:ring-[#009032]/10 transition-all"
+                    className="w-full bg-card border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[var(--brand-fg)] focus:ring-2 focus:ring-[var(--brand-fg)]/10 transition-all"
                   />
                 </div>
 
@@ -1289,7 +1289,7 @@ export const Promotions: React.FC = () => {
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
                     rows={2}
-                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[#009032] focus:ring-2 focus:ring-[#009032]/10 transition-all resize-none"
+                    className="w-full bg-card border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[var(--brand-fg)] focus:ring-2 focus:ring-[var(--brand-fg)]/10 transition-all resize-none"
                   />
                 </div>
 
@@ -1303,7 +1303,7 @@ export const Promotions: React.FC = () => {
                   <select
                     value={discountType}
                     onChange={(e) => setDiscountType(e.target.value as 'percent' | 'fixed' | 'override')}
-                    className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-800 focus:outline-none focus:border-[#009032] focus:ring-2 focus:ring-[#009032]/10 transition-all"
+                    className="w-full bg-card border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-800 focus:outline-none focus:border-[var(--brand-fg)] focus:ring-2 focus:ring-[var(--brand-fg)]/10 transition-all"
                   >
                     <option value="percent">ลดเป็นเปอร์เซ็นต์ (%)</option>
                     <option value="fixed">ลดเป็นบาท (฿)</option>
@@ -1322,7 +1322,7 @@ export const Promotions: React.FC = () => {
                     min={0}
                     value={discountValue}
                     onChange={(e) => setDiscountValue(Number(e.target.value))}
-                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[#009032] focus:ring-2 focus:ring-[#009032]/10 transition-all"
+                    className="w-full bg-card border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[var(--brand-fg)] focus:ring-2 focus:ring-[var(--brand-fg)]/10 transition-all"
                   />
                 </div>
 
@@ -1338,7 +1338,7 @@ export const Promotions: React.FC = () => {
                       อัปโหลด CSV เพื่อกรอกสินค้า/ลูกค้าของรายการนี้แบบอัตโนมัติ
                     </span>
                   </div>
-                  <label className="flex items-center justify-center gap-1.5 text-xs font-semibold px-3 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-xl shadow-sm transition-all active:scale-95 cursor-pointer flex-shrink-0">
+                  <label className="flex items-center justify-center gap-1.5 text-xs font-semibold px-3 py-2 bg-card hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-xl shadow-sm transition-all active:scale-95 cursor-pointer flex-shrink-0">
                     <Upload className="w-3.5 h-3.5 text-slate-500" />
                     อัปโหลด CSV
                     <input
@@ -1399,7 +1399,7 @@ export const Promotions: React.FC = () => {
                     min={0}
                     value={minQty}
                     onChange={(e) => setMinQty(Number(e.target.value))}
-                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[#009032] focus:ring-2 focus:ring-[#009032]/10 transition-all"
+                    className="w-full bg-card border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[var(--brand-fg)] focus:ring-2 focus:ring-[var(--brand-fg)]/10 transition-all"
                   />
                 </div>
 
@@ -1414,7 +1414,7 @@ export const Promotions: React.FC = () => {
                     value={startDate}
                     onChange={setStartDate}
                     aria-label="วันที่เริ่มต้น"
-                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm text-slate-800 focus-within:border-[#009032] focus-within:ring-2 focus-within:ring-[#009032]/10 transition-all"
+                    className="w-full bg-card border border-slate-200 rounded-xl px-4 py-2 text-sm text-slate-800 focus-within:border-[var(--brand-fg)] focus-within:ring-2 focus-within:ring-[var(--brand-fg)]/10 transition-all"
                   />
                 </div>
 
@@ -1427,7 +1427,7 @@ export const Promotions: React.FC = () => {
                     value={endDate}
                     onChange={setEndDate}
                     aria-label="วันที่สิ้นสุด"
-                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm text-slate-800 focus-within:border-[#009032] focus-within:ring-2 focus-within:ring-[#009032]/10 transition-all"
+                    className="w-full bg-card border border-slate-200 rounded-xl px-4 py-2 text-sm text-slate-800 focus-within:border-[var(--brand-fg)] focus-within:ring-2 focus-within:ring-[var(--brand-fg)]/10 transition-all"
                   />
                 </div>
 
@@ -1438,7 +1438,7 @@ export const Promotions: React.FC = () => {
                     id="promo-active-checkbox"
                     checked={isActive}
                     onChange={(e) => setIsActive(e.target.checked)}
-                    className="w-4.5 h-4.5 text-[#009032] bg-white border-slate-200 rounded focus:ring-offset-white focus:ring-[#009032] focus:ring-2"
+                    className="w-4.5 h-4.5 text-[var(--brand-fg)] bg-card border-slate-200 rounded focus:ring-offset-card focus:ring-[var(--brand-fg)] focus:ring-2"
                   />
                   <label htmlFor="promo-active-checkbox" className="text-xs font-semibold text-slate-600 select-none">
                     เปิดใช้งานโปรโมชันทันที (Active Status)
@@ -1451,14 +1451,14 @@ export const Promotions: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
-                  className="px-5 py-2.5 border border-slate-200 hover:border-slate-350 bg-white hover:bg-slate-50 text-slate-700 rounded-xl text-sm font-semibold transition-all active:scale-95"
+                  className="px-5 py-2.5 border border-slate-200 hover:border-slate-350 bg-card hover:bg-slate-50 text-slate-700 rounded-xl text-sm font-semibold transition-all active:scale-95"
                 >
                   ยกเลิก
                 </button>
                 <button
                   type="submit"
                   disabled={isSaving}
-                  className="flex items-center justify-center gap-2 px-6 py-2.5 bg-[#009032] hover:bg-[#009032]/95 text-white rounded-xl text-sm font-semibold shadow-md shadow-[#009032]/10 transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex items-center justify-center gap-2 px-6 py-2.5 bg-[var(--brand)] hover:bg-[var(--brand)]/95 text-white rounded-xl text-sm font-semibold shadow-md shadow-[var(--brand-fg)]/10 transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                   บันทึก
@@ -1471,8 +1471,8 @@ export const Promotions: React.FC = () => {
 
       {/* ── DELETE CONFIRMATION MODAL ── */}
       {isDeleteConfirmOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
-          <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-sm shadow-2xl p-6 relative">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-card border border-slate-200 rounded-2xl w-full max-w-sm shadow-2xl p-6 relative">
             <div className="text-center space-y-4">
               <div className="w-12 h-12 rounded-full bg-red-50 border border-red-100 text-red-500 flex items-center justify-center mx-auto">
                 <Trash2 className="w-6 h-6" />
@@ -1480,7 +1480,7 @@ export const Promotions: React.FC = () => {
               <div className="space-y-1.5">
                 <h3 className="text-base font-bold text-slate-950">ยืนยันการลบโปรโมชัน?</h3>
                 <p className="text-xs text-slate-500">
-                  คุณต้องการที่จะลบโปรโมชันรหัส <span className="font-mono text-[#009032] font-bold">"{promoToDelete?.code}"</span> หรือไม่? การลบข้อมูลจะไม่สามารถย้อนกลับได้
+                  คุณต้องการที่จะลบโปรโมชันรหัส <span className="font-mono text-[var(--brand-fg)] font-bold">"{promoToDelete?.code}"</span> หรือไม่? การลบข้อมูลจะไม่สามารถย้อนกลับได้
                 </p>
               </div>
               
@@ -1488,7 +1488,7 @@ export const Promotions: React.FC = () => {
                 <button
                   onClick={() => setIsDeleteConfirmOpen(false)}
                   disabled={isSaving}
-                  className="flex-1 py-2.5 border border-slate-200 hover:border-slate-350 bg-white hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-bold transition-all active:scale-95 disabled:opacity-50"
+                  className="flex-1 py-2.5 border border-slate-200 hover:border-slate-350 bg-card hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-bold transition-all active:scale-95 disabled:opacity-50"
                 >
                   ยกเลิก
                 </button>
@@ -1508,8 +1508,8 @@ export const Promotions: React.FC = () => {
 
       {/* ── CONDITIONS DETAIL MODAL ── */}
       {selectedPromoForDetails && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
-          <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-lg shadow-2xl p-6 relative animate-scale-up">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
+          <div className="bg-card border border-slate-200 rounded-2xl w-full max-w-lg shadow-2xl p-6 relative animate-scale-up">
             <button
               onClick={() => setSelectedPromoForDetails(null)}
               className="absolute top-4 right-4 p-1.5 hover:bg-slate-100 rounded-full transition-colors text-slate-400 hover:text-slate-600"
@@ -1519,13 +1519,13 @@ export const Promotions: React.FC = () => {
             
             <div className="space-y-4">
               <div className="flex items-center gap-2.5 border-b border-slate-100 pb-3">
-                <div className="w-9 h-9 rounded-xl bg-emerald-50 text-[#009032] flex items-center justify-center border border-emerald-105">
+                <div className="w-9 h-9 rounded-xl bg-emerald-50 text-[var(--brand-fg)] flex items-center justify-center border border-emerald-105">
                   <Info className="w-5 h-5" />
                 </div>
                 <div>
                   <h3 className="text-sm font-bold text-slate-950">รายละเอียดเงื่อนไขการใช้</h3>
                   <p className="text-[11px] text-slate-500 font-semibold mt-0.5">
-                    โปรโมชัน: <span className="text-[#009032]">{selectedPromoForDetails.name}</span> ({selectedPromoForDetails.code})
+                    โปรโมชัน: <span className="text-[var(--brand-fg)]">{selectedPromoForDetails.name}</span> ({selectedPromoForDetails.code})
                   </p>
                 </div>
               </div>
@@ -1539,7 +1539,7 @@ export const Promotions: React.FC = () => {
                   {selectedPromoForDetails.product_code ? (
                     <div className="flex flex-wrap gap-1.5 pl-5">
                       {selectedPromoForDetails.product_code.split(',').map((code, idx) => (
-                        <span key={idx} className="font-mono text-[10px] px-2 py-0.5 bg-emerald-50 text-[#009032] border border-emerald-100 rounded-md font-semibold">
+                        <span key={idx} className="font-mono text-[10px] px-2 py-0.5 bg-emerald-50 text-[var(--brand-fg)] border border-emerald-100 rounded-md font-semibold">
                           {code}
                         </span>
                       ))}

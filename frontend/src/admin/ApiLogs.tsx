@@ -33,7 +33,7 @@ import {
  *    ทุกที่ที่แสดงค่านี้ต้องมีคำว่า "เอกสารของ" กำกับเสมอ ห้ามปล่อยให้อ่านแล้วเข้าใจว่าเป็นคนกด
  */
 
-const BRAND = '#009032';
+const BRAND = 'var(--brand-fg)';
 const PAGE_SIZE_OPTIONS = [20, 50, 100, 200];
 
 interface ApiLogBase {
@@ -152,7 +152,7 @@ function shortUser(id: string | null) {
 const METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'TASK'];
 
 const inputCls =
-  'w-full bg-white border border-slate-200 focus:border-[#009032] focus:ring-2 focus:ring-[#009032]/10' +
+  'w-full bg-card border border-slate-200 focus:border-[var(--brand-fg)] focus:ring-2 focus:ring-[var(--brand-fg)]/10' +
   ' focus:outline-none rounded-xl px-4 py-2.5 text-sm text-slate-800 transition-all';
 
 export function ApiLogs() {
@@ -280,7 +280,7 @@ export function ApiLogs() {
   return (
     <div className="space-y-4">
       {/* แท็บ + ช่วงวัน */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-4 md:p-5 space-y-4">
+      <div className="bg-card rounded-2xl border border-slate-200 p-4 md:p-5 space-y-4">
         <div className="flex flex-wrap items-center gap-3 justify-between">
           <div className="inline-flex bg-slate-100 rounded-xl p-1">
             {([['overview', 'ภาพรวม', Gauge], ['list', 'รายการ', Activity]] as const).map(([key, label, Icon]) => (
@@ -288,7 +288,7 @@ export function ApiLogs() {
                 key={key}
                 onClick={() => setTab(key)}
                 className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-all ${
-                  tab === key ? 'bg-white shadow-sm text-slate-900 font-medium' : 'text-slate-500 hover:text-slate-700'
+                  tab === key ? 'bg-card shadow-sm text-slate-900 font-medium' : 'text-slate-500 hover:text-slate-700'
                 }`}
               >
                 <Icon className="w-4 h-4" style={tab === key ? { color: BRAND } : undefined} />
@@ -370,7 +370,7 @@ export function ApiLogs() {
               )}
 
               {/* endpoint เรียงตามเวลารวม */}
-              <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+              <div className="bg-card rounded-2xl border border-slate-200 overflow-hidden">
                 <div className="px-5 py-4 border-b border-slate-100">
                   <h3 className="font-medium text-slate-800">endpoint ที่กินเวลาเครื่องรวมมากที่สุด</h3>
                   <p className="text-xs text-slate-400 mt-0.5">
@@ -409,7 +409,7 @@ export function ApiLogs() {
                             <div className="flex items-center gap-2">
                               <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
                                 <div className="h-full rounded-full"
-                                  style={{ width: `${Number(r.total_ms) / maxTotalMs * 100}%`, background: BRAND }} />
+                                  style={{ width: `${Number(r.total_ms) / maxTotalMs * 100}%`, background: 'var(--brand)' }} />
                               </div>
                               <span className="text-xs text-slate-500 tabular-nums w-16 text-right">
                                 {(Number(r.total_ms) / 1000).toFixed(1)} วิ
@@ -428,7 +428,7 @@ export function ApiLogs() {
 
               {/* กราฟรายชั่วโมง — ใช้ div ล้วน ไม่เพิ่ม dependency กราฟเข้าโปรเจกต์ */}
               {stats!.byHour.length > 0 && (
-                <div className="bg-white rounded-2xl border border-slate-200 p-5">
+                <div className="bg-card rounded-2xl border border-slate-200 p-5">
                   <h3 className="font-medium text-slate-800">ปริมาณรายชั่วโมง (เวลาไทย)</h3>
                   <p className="text-xs text-slate-400 mt-0.5 mb-4">
                     แท่งสูง = คนใช้เยอะ · สีแดง = ชั่วโมงที่ connection pool ไม่พอ
@@ -440,12 +440,12 @@ export function ApiLogs() {
                           className="w-full rounded-t transition-all"
                           style={{
                             height: `${Math.max(2, h.count / maxHourCount * 100)}%`,
-                            background: (h.max_db_waiting ?? 0) > 0 ? '#dc2626' : BRAND,
+                            background: (h.max_db_waiting ?? 0) > 0 ? 'var(--color-red-600)' : BRAND,
                             opacity: h.errors > 0 ? 0.65 : 1,
                           }}
                         />
                         <div className="hidden group-hover:block absolute bottom-full left-1/2 -translate-x-1/2 mb-1 z-10
-                                        bg-slate-800 text-white text-[11px] rounded-lg px-2.5 py-1.5 whitespace-nowrap">
+                                        bg-slate-200 text-slate-900 border border-slate-300 text-[11px] rounded-lg px-2.5 py-1.5 whitespace-nowrap">
                           {h.hour} น.<br />
                           {h.count.toLocaleString()} request · p95 {formatMs(h.p95)}<br />
                           พร้อมกันสูงสุด {h.max_inflight ?? '-'} · error {h.errors}
@@ -461,7 +461,7 @@ export function ApiLogs() {
               )}
 
               {/* 20 อันดับที่ช้าที่สุด */}
-              <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+              <div className="bg-card rounded-2xl border border-slate-200 overflow-hidden">
                 <div className="px-5 py-4 border-b border-slate-100">
                   <h3 className="font-medium text-slate-800">20 request ที่ช้าที่สุดในช่วงนี้</h3>
                   <p className="text-xs text-slate-400 mt-0.5">กดแถวเพื่อไปดูรายละเอียดในแท็บรายการ</p>
@@ -519,7 +519,7 @@ export function ApiLogs() {
       {/* ══════════════ รายการ ══════════════ */}
       {tab === 'list' && (
         <>
-          <div className="bg-white rounded-2xl border border-slate-200 p-4 md:p-5 space-y-3">
+          <div className="bg-card rounded-2xl border border-slate-200 p-4 md:p-5 space-y-3">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
               <div className="relative xl:col-span-2">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
@@ -597,7 +597,7 @@ export function ApiLogs() {
             </div>
           )}
 
-          <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+          <div className="bg-card rounded-2xl border border-slate-200 overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 text-slate-500 text-xs">
@@ -728,7 +728,7 @@ export function ApiLogs() {
 
                                   <div className="text-xs">
                                     <div className="text-slate-400 mb-1">path เต็ม</div>
-                                    <code className="block bg-white border border-slate-200 rounded-lg px-3 py-2 break-all text-slate-700">
+                                    <code className="block bg-card border border-slate-200 rounded-lg px-3 py-2 break-all text-slate-700">
                                       {decodePath(detail.path)}
                                     </code>
                                   </div>
@@ -741,7 +741,7 @@ export function ApiLogs() {
                                       <div className="space-y-1">
                                         {detail.related.map((rel) => (
                                           <div key={rel.id}
-                                            className="flex items-center gap-3 bg-white border border-slate-200 rounded-lg px-3 py-2">
+                                            className="flex items-center gap-3 bg-card border border-slate-200 rounded-lg px-3 py-2">
                                             <span className="font-mono text-[11px] text-slate-400 w-12">{rel.method}</span>
                                             <span className="font-mono text-slate-700 flex-1 break-all">{decodePath(rel.path)}</span>
                                             <span className={`px-2 py-0.5 rounded-md border ${statusStyle(rel.status_code)}`}>
@@ -782,7 +782,7 @@ export function ApiLogs() {
                   -{Math.min(safePage * pageSize, total)} จาก {total.toLocaleString()}
                 </span>
                 <select value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
-                  className="bg-white border border-slate-200 rounded-lg px-2 py-1 text-xs cursor-pointer">
+                  className="bg-card border border-slate-200 rounded-lg px-2 py-1 text-xs cursor-pointer">
                   {PAGE_SIZE_OPTIONS.map(n => <option key={n} value={n}>{n} ต่อหน้า</option>)}
                 </select>
               </div>
@@ -799,7 +799,7 @@ export function ApiLogs() {
                     : <button key={p} onClick={() => setPage(p)}
                         className={`min-w-[32px] h-8 rounded-lg text-xs transition-all ${
                           p === safePage ? 'text-white' : 'text-slate-600 hover:bg-slate-100'}`}
-                        style={p === safePage ? { background: BRAND } : undefined}>
+                        style={p === safePage ? { background: 'var(--brand)' } : undefined}>
                         {p}
                       </button>
                 )}
@@ -821,7 +821,7 @@ function StatCard({ label, value, sub, danger }: {
   label: string; value: string; sub?: string; danger?: boolean;
 }) {
   return (
-    <div className={`bg-white rounded-2xl border p-4 ${danger ? 'border-red-200' : 'border-slate-200'}`}>
+    <div className={`bg-card rounded-2xl border p-4 ${danger ? 'border-red-200' : 'border-slate-200'}`}>
       <div className="text-xs text-slate-500">{label}</div>
       <div className={`text-2xl font-semibold mt-1 ${danger ? 'text-red-600' : 'text-slate-800'}`}>{value}</div>
       {sub && <div className={`text-[11px] mt-1 ${danger ? 'text-red-500' : 'text-slate-400'}`}>{sub}</div>}

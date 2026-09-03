@@ -15,7 +15,7 @@ import {
   MoreVertical,
 } from 'lucide-react';
 
-const BRAND = '#009032';
+const BRAND = 'var(--brand-fg)';
 
 type ResourceId = 'products' | 'customers' | 'saleorders';
 
@@ -454,7 +454,7 @@ export function SyncPanel() {
 
   if (loading) {
     return (
-      <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center shadow-sm flex flex-col items-center justify-center gap-3">
+      <div className="bg-card border border-slate-200 rounded-2xl p-10 text-center shadow-sm flex flex-col items-center justify-center gap-3">
         <Loader2 className="w-7 h-7 animate-spin" style={{ color: BRAND }} />
         <p className="text-slate-500 text-sm font-medium">กำลังโหลดสถานะการ sync...</p>
       </div>
@@ -463,7 +463,7 @@ export function SyncPanel() {
 
   if (error) {
     return (
-      <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
+      <div className="bg-card border border-slate-200 rounded-2xl p-6 shadow-sm">
         <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-red-700 text-sm">
           <AlertTriangle className="w-4 h-4 shrink-0" />
           <span>{error}</span>
@@ -487,13 +487,13 @@ export function SyncPanel() {
   );
 
   return (
-    <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+    <div className="bg-card border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between gap-3 px-4 sm:px-5 py-3 border-b border-slate-100">
         <div className="flex items-center gap-2.5 min-w-0">
           <div
             className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
-            style={{ backgroundColor: 'rgba(0,144,50,0.10)', color: BRAND }}
+            style={{ backgroundColor: 'var(--brand-soft)', color: BRAND }}
           >
             <Database className="w-4 h-4" />
           </div>
@@ -508,7 +508,7 @@ export function SyncPanel() {
           onClick={() => triggerSync('all')}
           disabled={running}
           className="flex items-center justify-center gap-1.5 px-3.5 py-2 text-white text-xs font-bold rounded-lg shadow-sm transition-all active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed shrink-0"
-          style={{ backgroundColor: BRAND }}
+          style={{ backgroundColor: 'var(--brand)' }}
         >
           {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
           {running ? 'กำลัง sync...' : 'Sync ทั้งหมด'}
@@ -604,7 +604,7 @@ export function SyncPanel() {
                 <button
                   onClick={() => triggerSync([r.id])}
                   disabled={running}
-                  className="flex items-center gap-1 px-2.5 py-1 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-md text-[11px] font-semibold shadow-sm transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex items-center gap-1 px-2.5 py-1 bg-card hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-md text-[11px] font-semibold shadow-sm transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isCurrent && !fullRun ? (
                     <Loader2 className="w-3 h-3 animate-spin" />
@@ -638,7 +638,7 @@ export function SyncPanel() {
                   {menuFor === r.id && (
                     <div
                       role="menu"
-                      className="absolute right-0 top-full mt-1 z-20 w-60 bg-white border border-slate-200 rounded-lg shadow-lg py-1 animate-fade-in"
+                      className="absolute right-0 top-full mt-1 z-20 w-60 bg-card border border-slate-200 rounded-lg shadow-lg py-1 animate-fade-in"
                     >
                       <button
                         role="menuitem"
@@ -675,10 +675,10 @@ export function SyncPanel() {
               className={`relative w-9 h-5 rounded-full flex-shrink-0 transition-colors ${
                 form.auto_enabled ? '' : 'bg-slate-300'
               }`}
-              style={form.auto_enabled ? { backgroundColor: BRAND } : undefined}
+              style={form.auto_enabled ? { backgroundColor: 'var(--brand)' } : undefined}
             >
               <div
-                className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-all ${
+                className={`absolute top-0.5 w-4 h-4 bg-card rounded-full shadow-sm transition-all ${
                   form.auto_enabled ? 'left-4' : 'left-0.5'
                 }`}
               />
@@ -709,9 +709,9 @@ export function SyncPanel() {
                         onClick={() => toggleDay(d.value)}
                         aria-pressed={active}
                         className={`flex-1 min-w-0 py-1 text-[11px] font-bold transition-colors ${
-                          active ? 'text-white' : 'bg-slate-50 text-slate-400 hover:bg-white'
+                          active ? 'text-white' : 'bg-slate-50 text-slate-400 hover:bg-card'
                         }`}
-                        style={active ? { backgroundColor: BRAND } : undefined}
+                        style={active ? { backgroundColor: 'var(--brand)' } : undefined}
                       >
                         {d.label}
                       </button>
@@ -731,7 +731,7 @@ export function SyncPanel() {
                         className={`px-2 py-0.5 rounded text-[10px] font-bold transition-colors ${
                           active ? '' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'
                         }`}
-                        style={active ? { backgroundColor: 'rgba(0,144,50,0.10)', color: BRAND } : undefined}
+                        style={active ? { backgroundColor: 'var(--brand-soft)', color: BRAND } : undefined}
                       >
                         {p.label}
                       </button>
@@ -748,14 +748,14 @@ export function SyncPanel() {
                     type="time"
                     value={form.window_start}
                     onChange={(e) => setForm({ ...form, window_start: e.target.value })}
-                    className="px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#009032]/20 focus:border-[#009032]"
+                    className="px-2.5 py-1.5 border border-slate-200 rounded-lg bg-card focus:outline-none focus:ring-2 focus:ring-[var(--brand-fg)]/20 focus:border-[var(--brand-fg)]"
                   />
                   <span className="text-slate-500">ถึง</span>
                   <input
                     type="time"
                     value={form.window_end}
                     onChange={(e) => setForm({ ...form, window_end: e.target.value })}
-                    className="px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#009032]/20 focus:border-[#009032]"
+                    className="px-2.5 py-1.5 border border-slate-200 rounded-lg bg-card focus:outline-none focus:ring-2 focus:ring-[var(--brand-fg)]/20 focus:border-[var(--brand-fg)]"
                   />
                   <span className="text-slate-400">น.</span>
                 </div>
@@ -767,12 +767,12 @@ export function SyncPanel() {
                     min={1}
                     value={intervalInput}
                     onChange={(e) => applyInterval(e.target.value, intervalUnit)}
-                    className="w-16 px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#009032]/20 focus:border-[#009032]"
+                    className="w-16 px-2.5 py-1.5 border border-slate-200 rounded-lg bg-card focus:outline-none focus:ring-2 focus:ring-[var(--brand-fg)]/20 focus:border-[var(--brand-fg)]"
                   />
                   <select
                     value={intervalUnit}
                     onChange={(e) => applyInterval(intervalInput, e.target.value as IntervalUnit)}
-                    className="px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#009032]/20 focus:border-[#009032]"
+                    className="px-2.5 py-1.5 border border-slate-200 rounded-lg bg-card focus:outline-none focus:ring-2 focus:ring-[var(--brand-fg)]/20 focus:border-[var(--brand-fg)]"
                   >
                     <option value="sec">วินาที</option>
                     <option value="min">นาที</option>
@@ -804,11 +804,11 @@ export function SyncPanel() {
                     <label
                       key={r.id}
                       className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold border cursor-pointer transition-all ${
-                        checked ? 'border-transparent' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'
+                        checked ? 'border-transparent' : 'bg-card text-slate-500 border-slate-200 hover:bg-slate-50'
                       }`}
                       style={
                         checked
-                          ? { backgroundColor: 'rgba(0,144,50,0.10)', color: BRAND, borderColor: 'rgba(0,144,50,0.24)' }
+                          ? { backgroundColor: 'var(--brand-soft)', color: BRAND, borderColor: 'var(--brand-border)' }
                           : undefined
                       }
                     >
@@ -850,7 +850,7 @@ export function SyncPanel() {
               onClick={saveSettings}
               disabled={isSaving}
               className="flex items-center gap-1.5 px-4 py-1.5 text-[11px] font-bold text-white rounded-lg transition-all active:scale-95 shadow-sm disabled:opacity-60 shrink-0"
-              style={{ backgroundColor: BRAND }}
+              style={{ backgroundColor: 'var(--brand)' }}
             >
               {isSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
               บันทึก
@@ -864,9 +864,9 @@ export function SyncPanel() {
         <div
           role="dialog"
           aria-modal="true"
-          className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
         >
-          <div className="bg-white rounded-2xl border border-slate-200 w-full max-w-md shadow-2xl">
+          <div className="bg-card rounded-2xl border border-slate-200 w-full max-w-md shadow-2xl">
             <div className="px-5 py-4 border-b border-slate-100 flex items-start gap-3">
               <div className="w-9 h-9 rounded-xl bg-amber-50 border border-amber-100 flex items-center justify-center shrink-0">
                 <AlertTriangle className="w-4 h-4 text-amber-600" />
@@ -908,7 +908,7 @@ export function SyncPanel() {
                     if (e.key === 'Enter') confirmFullSync();
                   }}
                   placeholder={CONFIRM_WORD}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-card text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
                 />
               </div>
             </div>

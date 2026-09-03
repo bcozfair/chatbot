@@ -58,9 +58,9 @@ function ComboBox({
       <div
         onClick={() => setOpen(o => !o)}
         className={`flex items-center gap-2 w-full h-9 px-3 rounded-xl border text-sm cursor-pointer transition-all ${open
-          ? 'border-[#009032] bg-white ring-2 ring-[#009032]/10'
+          ? 'border-[var(--brand-fg)] bg-card ring-2 ring-[var(--brand-fg)]/10'
           : value
-            ? 'border-slate-300 bg-white'
+            ? 'border-slate-300 bg-card'
             : 'border-slate-200 bg-slate-50 hover:border-slate-300'
           }`}
       >
@@ -94,7 +94,7 @@ function ComboBox({
       </div>
 
       {open && (
-        <div className="absolute z-50 mt-1 w-full bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden">
+        <div className="absolute z-50 mt-1 w-full bg-card border border-slate-200 rounded-xl shadow-lg overflow-hidden">
           <div className="max-h-48 overflow-y-auto">
             {filtered.length === 0 ? (
               <p className="px-4 py-3 text-xs text-slate-400 text-center">ไม่พบผลลัพธ์</p>
@@ -105,7 +105,7 @@ function ComboBox({
                   type="button"
                   onClick={() => { onChange(opt); setQuery(''); setOpen(false); }}
                   className={`w-full text-left px-4 py-2.5 text-sm transition-colors ${opt === value
-                    ? 'bg-emerald-50 text-[#009032] font-semibold'
+                    ? 'bg-emerald-50 text-[var(--brand-fg)] font-semibold'
                     : 'text-slate-700 hover:bg-slate-50'
                     }`}
                 >
@@ -322,8 +322,8 @@ export function QuotationRules() {
       return <ArrowUpDown className="w-3 h-3 text-slate-300 ml-1 inline-block opacity-65" />;
     }
     return sortDirection === 'asc'
-      ? <ArrowUp className="w-3 h-3 text-[#009032] ml-1 inline-block" />
-      : <ArrowDown className="w-3 h-3 text-[#009032] ml-1 inline-block" />;
+      ? <ArrowUp className="w-3 h-3 text-[var(--brand-fg)] ml-1 inline-block" />
+      : <ArrowDown className="w-3 h-3 text-[var(--brand-fg)] ml-1 inline-block" />;
   };
 
   const openAddModal = () => {
@@ -547,13 +547,13 @@ export function QuotationRules() {
             placeholder="ค้นหา..."
             value={searchQuery}
             onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
-            className="w-full pl-9 pr-3 py-2 text-sm bg-slate-50 border border-slate-200 hover:border-slate-300 focus:border-[#009032] focus:bg-white rounded-xl outline-none transition-all"
+            className="w-full pl-9 pr-3 py-2 text-sm bg-slate-50 border border-slate-200 hover:border-slate-300 focus:border-[var(--brand-fg)] focus:bg-card rounded-xl outline-none transition-all"
           />
         </div>
 
         <button
           onClick={openAddModal}
-          className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[#009032] hover:bg-[#007b2b] text-white text-sm font-bold rounded-xl shadow-sm transition-all active:scale-95 flex-shrink-0"
+          className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[var(--brand)] hover:bg-[var(--brand-hover)] text-white text-sm font-bold rounded-xl shadow-sm transition-all active:scale-95 flex-shrink-0"
         >
           <Plus className="w-4 h-4" />
           <span className="hidden sm:inline">เพิ่มเงื่อนไข</span>
@@ -562,8 +562,8 @@ export function QuotationRules() {
 
       {/* Loading & Empty States */}
       {loading ? (
-        <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center shadow-sm flex flex-col items-center justify-center gap-3">
-          <Loader2 className="w-7 h-7 text-[#009032] animate-spin" />
+        <div className="bg-card border border-slate-200 rounded-2xl p-10 text-center shadow-sm flex flex-col items-center justify-center gap-3">
+          <Loader2 className="w-7 h-7 text-[var(--brand-fg)] animate-spin" />
           <p className="text-slate-500 text-sm font-medium">กำลังโหลดข้อมูลเงื่อนไข...</p>
         </div>
       ) : error ? (
@@ -573,20 +573,20 @@ export function QuotationRules() {
           <p className="text-sm text-red-600">{error}</p>
           <button
             onClick={fetchRules}
-            className="mt-3 px-4 py-2 bg-white border border-red-200 text-red-700 hover:bg-red-50 rounded-xl text-xs font-semibold transition-all active:scale-95"
+            className="mt-3 px-4 py-2 bg-card border border-red-200 text-red-700 hover:bg-red-50 rounded-xl text-xs font-semibold transition-all active:scale-95"
           >
             ลองใหม่อีกครั้ง
           </button>
         </div>
       ) : sortedRules.length === 0 ? (
-        <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center shadow-sm text-slate-500 flex flex-col items-center justify-center gap-2">
+        <div className="bg-card border border-slate-200 rounded-2xl p-10 text-center shadow-sm text-slate-500 flex flex-col items-center justify-center gap-2">
           <FileText className="w-9 h-9 text-slate-300" />
           <p className="font-bold">ไม่พบเงื่อนไขใบเสนอราคา</p>
           <p className="text-xs">ลองค้นหาด้วยคำอื่น หรือกดปุ่ม "เพิ่มเงื่อนไข" เพื่อเริ่มสร้างกฎ</p>
         </div>
       ) : (
         /* Rules Table */
-        <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+        <div className="bg-card border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
           <div className="overflow-x-auto">
             <table className="w-full border-collapse text-left">
               <thead className="sticky top-0 z-10">
@@ -636,7 +636,7 @@ export function QuotationRules() {
                             <span className="text-slate-400 text-xs italic">ปรับใช้กับทั้งฝ่ายผลิต</span>
                           )}
                           {rule.series && (
-                            <span className="text-xs text-[#009032] font-semibold">· ซีรีส์ {rule.series}</span>
+                            <span className="text-xs text-[var(--brand-fg)] font-semibold">· ซีรีส์ {rule.series}</span>
                           )}
                         </div>
                       </td>
@@ -746,7 +746,7 @@ export function QuotationRules() {
                 <select
                   value={pageSize}
                   onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
-                  className="h-7 px-2 rounded-lg border border-slate-200 bg-white text-xs font-semibold outline-none focus:border-[#009032]"
+                  className="h-7 px-2 rounded-lg border border-slate-200 bg-card text-xs font-semibold outline-none focus:border-[var(--brand-fg)]"
                 >
                   {PAGE_SIZE_OPTIONS.map(n => (
                     <option key={n} value={n}>{n}</option>
@@ -759,7 +759,7 @@ export function QuotationRules() {
               <button
                 onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
                 disabled={safePage <= 1}
-                className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-card text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 <ChevronLeft className="w-3.5 h-3.5" />
               </button>
@@ -772,8 +772,8 @@ export function QuotationRules() {
                     key={p}
                     onClick={() => setCurrentPage(p)}
                     className={`w-7 h-7 flex items-center justify-center rounded-lg text-xs font-bold transition-colors ${p === safePage
-                      ? 'bg-[#009032] text-white'
-                      : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                      ? 'bg-[var(--brand)] text-white'
+                      : 'bg-card border border-slate-200 text-slate-600 hover:bg-slate-100'
                       }`}
                   >
                     {p}
@@ -784,7 +784,7 @@ export function QuotationRules() {
               <button
                 onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
                 disabled={safePage >= totalPages}
-                className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-card text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 <ChevronRight className="w-3.5 h-3.5" />
               </button>
@@ -796,11 +796,11 @@ export function QuotationRules() {
       {/* รายละเอียดวันจัดส่งตามจำนวน — อ่านอย่างเดียว เปิดจากปุ่มในตาราง */}
       {tierDetailRule && (
         <div
-          className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
           onClick={() => setTierDetailRule(null)}
         >
           <div
-            className="bg-white rounded-2xl border border-slate-200 w-full max-w-md shadow-2xl flex flex-col max-h-[90vh]"
+            className="bg-card rounded-2xl border border-slate-200 w-full max-w-md shadow-2xl flex flex-col max-h-[90vh]"
             onClick={e => e.stopPropagation()}
           >
             <div className="flex items-start justify-between px-5 py-3.5 border-b border-slate-100">
@@ -880,7 +880,7 @@ export function QuotationRules() {
               <button
                 type="button"
                 onClick={() => { const r = tierDetailRule; setTierDetailRule(null); openEditModal(r); }}
-                className="px-4 py-2 text-xs font-bold text-white bg-[#009032] hover:bg-[#007b2b] rounded-lg transition-all active:scale-95 shadow-sm"
+                className="px-4 py-2 text-xs font-bold text-white bg-[var(--brand)] hover:bg-[var(--brand-hover)] rounded-lg transition-all active:scale-95 shadow-sm"
               >
                 แก้ไขเงื่อนไข
               </button>
@@ -891,8 +891,8 @@ export function QuotationRules() {
 
       {/* Modal — redesigned for a tighter, easier-to-scan layout */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl border border-slate-200 w-full max-w-lg shadow-2xl flex flex-col max-h-[90vh]">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-card rounded-2xl border border-slate-200 w-full max-w-lg shadow-2xl flex flex-col max-h-[90vh]">
 
             <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100">
               <div>
@@ -996,11 +996,11 @@ export function QuotationRules() {
                     <p className="text-xs font-bold text-slate-700">เสนอในนาม</p>
                     <p className="text-[10px] text-slate-400">บริษัทที่ใช้ออกใบเสนอราคา</p>
                   </div>
-                  <div className="flex rounded-lg border border-slate-200 overflow-hidden text-xs font-bold bg-white flex-shrink-0">
+                  <div className="flex rounded-lg border border-slate-200 overflow-hidden text-xs font-bold bg-card flex-shrink-0">
                     <button
                       type="button"
                       onClick={() => setFormData(p => ({ ...p, quote_company: '' }))}
-                      className={`px-2.5 h-8 transition-colors ${formData.quote_company === '' ? 'bg-slate-700 text-white' : 'text-slate-500 hover:bg-slate-50'}`}
+                      className={`px-2.5 h-8 transition-colors ${formData.quote_company === '' ? 'bg-slate-300 text-slate-900' : 'text-slate-500 hover:bg-slate-50'}`}
                     >
                       อัตโนมัติ
                     </button>
@@ -1038,7 +1038,7 @@ export function QuotationRules() {
                     </div>
                   </div>
                   <div className={`relative w-9 h-5 rounded-full flex-shrink-0 transition-colors ${formData.is_locked ? 'bg-red-500' : 'bg-slate-300'}`}>
-                    <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-all ${formData.is_locked ? 'left-4' : 'left-0.5'}`} />
+                    <div className={`absolute top-0.5 w-4 h-4 bg-card rounded-full shadow-sm transition-all ${formData.is_locked ? 'left-4' : 'left-0.5'}`} />
                     <input
                       type="checkbox"
                       checked={formData.is_locked}
@@ -1067,12 +1067,12 @@ export function QuotationRules() {
                             max="999"
                             value={formData.warranty_years}
                             onChange={e => setFormData(p => ({ ...p, warranty_years: Math.max(0, parseInt(e.target.value) || 0) }))}
-                            className="w-11 h-8 text-center text-xs font-bold bg-white border border-slate-200 rounded-lg outline-none focus:border-[#009032] focus:ring-2 focus:ring-[#009032]/10 transition-all"
+                            className="w-11 h-8 text-center text-xs font-bold bg-card border border-slate-200 rounded-lg outline-none focus:border-[var(--brand-fg)] focus:ring-2 focus:ring-[var(--brand-fg)]/10 transition-all"
                           />
                           <select
                             value={formData.warranty_unit}
                             onChange={e => setFormData(p => ({ ...p, warranty_unit: e.target.value as 'month' | 'year' }))}
-                            className="flex-1 h-8 px-1 text-[11px] font-bold bg-white border border-slate-200 rounded-lg outline-none focus:border-[#009032]"
+                            className="flex-1 h-8 px-1 text-[11px] font-bold bg-card border border-slate-200 rounded-lg outline-none focus:border-[var(--brand-fg)]"
                           >
                             <option value="year">ปี</option>
                             <option value="month">เดือน</option>
@@ -1092,7 +1092,7 @@ export function QuotationRules() {
                             max="365"
                             value={formData.delivery_in_stock_days}
                             onChange={e => setFormData(p => ({ ...p, delivery_in_stock_days: Math.max(1, parseInt(e.target.value) || 1) }))}
-                            className="w-11 h-8 text-center text-xs font-bold bg-white border border-slate-200 rounded-lg outline-none focus:border-[#009032] focus:ring-2 focus:ring-[#009032]/10 transition-all"
+                            className="w-11 h-8 text-center text-xs font-bold bg-card border border-slate-200 rounded-lg outline-none focus:border-[var(--brand-fg)] focus:ring-2 focus:ring-[var(--brand-fg)]/10 transition-all"
                           />
                           <span className="text-[11px] text-slate-500">วัน</span>
                         </div>
@@ -1110,7 +1110,7 @@ export function QuotationRules() {
                             max="365"
                             value={formData.delivery_out_of_stock_days}
                             onChange={e => setFormData(p => ({ ...p, delivery_out_of_stock_days: Math.max(1, parseInt(e.target.value) || 1) }))}
-                            className="w-11 h-8 text-center text-xs font-bold bg-white border border-slate-200 rounded-lg outline-none focus:border-[#009032] focus:ring-2 focus:ring-[#009032]/10 transition-all"
+                            className="w-11 h-8 text-center text-xs font-bold bg-card border border-slate-200 rounded-lg outline-none focus:border-[var(--brand-fg)] focus:ring-2 focus:ring-[var(--brand-fg)]/10 transition-all"
                           />
                           <span className="text-[11px] text-slate-500">วัน</span>
                         </div>
@@ -1153,7 +1153,7 @@ export function QuotationRules() {
                                   [tier.field]: raw === '' ? '' : String(Math.max(0, Math.min(365, parseInt(raw) || 0)))
                                 }));
                               }}
-                              className="w-11 h-8 text-center text-xs font-bold bg-white border border-slate-200 rounded-lg outline-none focus:border-[#009032] focus:ring-2 focus:ring-[#009032]/10 transition-all placeholder:text-slate-300 placeholder:font-normal"
+                              className="w-11 h-8 text-center text-xs font-bold bg-card border border-slate-200 rounded-lg outline-none focus:border-[var(--brand-fg)] focus:ring-2 focus:ring-[var(--brand-fg)]/10 transition-all placeholder:text-slate-300 placeholder:font-normal"
                             />
                             <span className="text-[11px] text-slate-500">วัน</span>
                           </div>
@@ -1174,7 +1174,7 @@ export function QuotationRules() {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 text-xs font-bold text-white bg-[#009032] hover:bg-[#007b2b] rounded-lg transition-all active:scale-95 shadow-sm"
+                  className="px-5 py-2 text-xs font-bold text-white bg-[var(--brand)] hover:bg-[var(--brand-hover)] rounded-lg transition-all active:scale-95 shadow-sm"
                 >
                   {editingRule ? 'บันทึกการแก้ไข' : 'เพิ่มเงื่อนไข'}
                 </button>

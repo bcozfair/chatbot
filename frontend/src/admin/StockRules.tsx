@@ -286,7 +286,7 @@ const ProductMultiSelect: React.FC<ProductMultiSelectProps> = ({
             checked={isChecked}
             readOnly
             disabled={isDisabled}
-            className="w-4 h-4 rounded border-slate-300 text-[#009032] focus:ring-[#009032]/20"
+            className="w-4 h-4 rounded border-slate-300 text-[var(--brand-fg)] focus:ring-[var(--brand-fg)]/20"
           />
         </div>
       </button>
@@ -315,11 +315,11 @@ const ProductMultiSelect: React.FC<ProductMultiSelectProps> = ({
           className={`flex flex-wrap items-center gap-2 w-full min-h-[44px] p-2 rounded-xl border text-sm transition-all ${disabled
               ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
               : isOpen
-                ? 'border-[#009032] bg-white ring-2 ring-[#009032]/10 shadow-sm'
+                ? 'border-[var(--brand-fg)] bg-card ring-2 ring-[var(--brand-fg)]/10 shadow-sm'
                 : error
                   ? 'border-red-300 bg-red-50/10'
                   : selectedProducts.length > 0
-                    ? 'border-slate-300 bg-white'
+                    ? 'border-slate-300 bg-card'
                     : 'border-slate-200 bg-slate-55 hover:border-slate-300'
             }`}
           onClick={() => !disabled && setIsOpen(true)}
@@ -351,7 +351,7 @@ const ProductMultiSelect: React.FC<ProductMultiSelectProps> = ({
         </div>
 
         {isOpen && !disabled && (
-          <div className="absolute z-50 mt-1.5 w-full bg-white border border-slate-200 rounded-xl shadow-xl max-h-80 overflow-hidden flex flex-col">
+          <div className="absolute z-50 mt-1.5 w-full bg-card border border-slate-200 rounded-xl shadow-xl max-h-80 overflow-hidden flex flex-col">
             {results.length > 0 && (
               <div className="p-2 bg-slate-50 flex items-center justify-between gap-2 text-xs border-b border-slate-150 flex-shrink-0">
                 <span className="text-slate-500 font-medium">
@@ -363,7 +363,7 @@ const ProductMultiSelect: React.FC<ProductMultiSelectProps> = ({
                   disabled={isAllResultsSelected || validResults.length === 0}
                   className={`px-2 py-1 rounded font-semibold transition-colors flex-shrink-0 ${isAllResultsSelected || validResults.length === 0
                       ? 'text-slate-400 bg-slate-100 cursor-not-allowed'
-                      : 'text-white bg-[#009032] hover:bg-emerald-700'
+                      : 'text-white bg-[var(--brand)] hover:bg-emerald-700'
                     }`}
                 >
                   {isAllResultsSelected ? 'เลือกทั้งหมดแล้ว' : 'เลือกทั้งหมดในผลลัพธ์'}
@@ -374,7 +374,7 @@ const ProductMultiSelect: React.FC<ProductMultiSelectProps> = ({
             <div className="overflow-y-auto max-h-64">
               {isLoading ? (
                 <div className="p-4 text-center text-xs text-slate-400 flex items-center justify-center gap-2">
-                  <Loader2 className="w-4 h-4 text-[#009032] animate-spin" />
+                  <Loader2 className="w-4 h-4 text-[var(--brand-fg)] animate-spin" />
                   กำลังค้นหา...
                 </div>
               ) : (
@@ -404,7 +404,7 @@ const ProductMultiSelect: React.FC<ProductMultiSelectProps> = ({
                                 onClick={() => handleToggleProduction(p)}
                                 className={`flex items-center gap-1 px-2 py-1 rounded text-[11px] font-semibold transition-colors flex-shrink-0 ${picked
                                   ? 'text-emerald-700 bg-emerald-50 border border-emerald-200'
-                                  : 'text-white bg-[#009032] hover:bg-emerald-700'
+                                  : 'text-white bg-[var(--brand)] hover:bg-emerald-700'
                                   }`}
                               >
                                 {picked
@@ -438,7 +438,7 @@ const ProductMultiSelect: React.FC<ProductMultiSelectProps> = ({
                           <button
                             type="button"
                             onClick={() => addProductsBulk(items)}
-                            className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold text-[#009032] bg-white border border-emerald-200 hover:bg-emerald-50 transition-colors flex-shrink-0"
+                            className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold text-[var(--brand-fg)] bg-card border border-emerald-200 hover:bg-emerald-50 transition-colors flex-shrink-0"
                           >
                             <Plus className="w-2.5 h-2.5" />
                             เลือก {items.length} รายการนี้
@@ -597,8 +597,8 @@ export const StockRules: React.FC = () => {
       return <ArrowUpDown className="w-3.5 h-3.5 text-slate-300 ml-1.5 inline-block" />;
     }
     return sortDirection === 'asc'
-      ? <ArrowUp className="w-3.5 h-3.5 text-[#009032] ml-1.5 inline-block font-bold" />
-      : <ArrowDown className="w-3.5 h-3.5 text-[#009032] ml-1.5 inline-block font-bold" />;
+      ? <ArrowUp className="w-3.5 h-3.5 text-[var(--brand-fg)] ml-1.5 inline-block font-bold" />
+      : <ArrowDown className="w-3.5 h-3.5 text-[var(--brand-fg)] ml-1.5 inline-block font-bold" />;
   };
 
   // Open modal for Create
@@ -825,13 +825,13 @@ export const StockRules: React.FC = () => {
             placeholder="ค้นหา..."
             value={searchQuery}
             onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
-            className="w-full pl-9 pr-3 py-2 text-sm bg-slate-50 border border-slate-200 hover:border-slate-300 focus:border-[#009032] focus:bg-white rounded-xl outline-none transition-all"
+            className="w-full pl-9 pr-3 py-2 text-sm bg-slate-50 border border-slate-200 hover:border-slate-300 focus:border-[var(--brand-fg)] focus:bg-card rounded-xl outline-none transition-all"
           />
         </div>
 
         <button
           onClick={handleCreateOpen}
-          className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[#009032] hover:bg-[#007b2b] text-white text-sm font-bold rounded-xl shadow-sm transition-all active:scale-95 flex-shrink-0"
+          className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[var(--brand)] hover:bg-[var(--brand-hover)] text-white text-sm font-bold rounded-xl shadow-sm transition-all active:scale-95 flex-shrink-0"
         >
           <Plus className="w-4 h-4" />
           <span className="hidden sm:inline">สร้างกฎใหม่</span>
@@ -840,8 +840,8 @@ export const StockRules: React.FC = () => {
 
       {/* Loading & Empty States */}
       {isLoading ? (
-        <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center shadow-sm flex flex-col items-center justify-center gap-3">
-          <Loader2 className="w-7 h-7 text-[#009032] animate-spin" />
+        <div className="bg-card border border-slate-200 rounded-2xl p-10 text-center shadow-sm flex flex-col items-center justify-center gap-3">
+          <Loader2 className="w-7 h-7 text-[var(--brand-fg)] animate-spin" />
           <p className="text-slate-500 text-sm font-medium">กำลังโหลดกฎสินค้าหมดสต็อก...</p>
         </div>
       ) : error ? (
@@ -851,14 +851,14 @@ export const StockRules: React.FC = () => {
           <p className="text-sm text-red-600">{error}</p>
         </div>
       ) : sortedRules.length === 0 ? (
-        <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center shadow-sm text-slate-500 flex flex-col items-center justify-center gap-2">
+        <div className="bg-card border border-slate-200 rounded-2xl p-10 text-center shadow-sm text-slate-500 flex flex-col items-center justify-center gap-2">
           <ShieldAlert className="w-9 h-9 text-slate-300" />
           <p className="font-bold">ไม่พบกฎระงับเสนอขายสินค้าสต็อก</p>
           <p className="text-xs">สินค้าที่ไม่อยู่ในตารางนี้ เซลส์จะสามารถเสนอราคาได้ปกติแม้สต็อกหมด</p>
         </div>
       ) : (
         /* Rules Table */
-        <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+        <div className="bg-card border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
           <div className="overflow-x-auto">
             <table className="w-full border-collapse text-left">
               <thead className="sticky top-0 z-10">
@@ -945,7 +945,7 @@ export const StockRules: React.FC = () => {
                 <select
                   value={pageSize}
                   onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
-                  className="h-7 px-2 rounded-lg border border-slate-200 bg-white text-xs font-semibold outline-none focus:border-[#009032]"
+                  className="h-7 px-2 rounded-lg border border-slate-200 bg-card text-xs font-semibold outline-none focus:border-[var(--brand-fg)]"
                 >
                   {PAGE_SIZE_OPTIONS.map(n => (
                     <option key={n} value={n}>{n}</option>
@@ -958,7 +958,7 @@ export const StockRules: React.FC = () => {
               <button
                 onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
                 disabled={safePage <= 1}
-                className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-card text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 <ChevronLeft className="w-3.5 h-3.5" />
               </button>
@@ -971,8 +971,8 @@ export const StockRules: React.FC = () => {
                     key={p}
                     onClick={() => setCurrentPage(p)}
                     className={`w-7 h-7 flex items-center justify-center rounded-lg text-xs font-bold transition-colors ${p === safePage
-                      ? 'bg-[#009032] text-white'
-                      : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                      ? 'bg-[var(--brand)] text-white'
+                      : 'bg-card border border-slate-200 text-slate-600 hover:bg-slate-100'
                       }`}
                   >
                     {p}
@@ -983,7 +983,7 @@ export const StockRules: React.FC = () => {
               <button
                 onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
                 disabled={safePage >= totalPages}
-                className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-card text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 <ChevronRight className="w-3.5 h-3.5" />
               </button>
@@ -994,8 +994,8 @@ export const StockRules: React.FC = () => {
 
       {/* Create Modal Form */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl border border-slate-200 w-full max-w-lg shadow-2xl flex flex-col max-h-[90vh]">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-card rounded-2xl border border-slate-200 w-full max-w-lg shadow-2xl flex flex-col max-h-[90vh]">
 
             <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100">
               <div>
@@ -1037,8 +1037,8 @@ export const StockRules: React.FC = () => {
                     <p className="text-xs font-bold text-slate-700">สถานะเปิดใช้งานกฎนี้</p>
                     <p className="text-[10px] text-slate-400">หากเปิดไว้ บอท LINE จะปฏิเสธการเซฟใบเสนอราคาหากสินค้านี้หมด</p>
                   </div>
-                  <div className={`relative w-9 h-5 rounded-full flex-shrink-0 transition-colors ${isActive ? 'bg-[#009032]' : 'bg-slate-300'}`}>
-                    <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-all ${isActive ? 'left-4' : 'left-0.5'}`} />
+                  <div className={`relative w-9 h-5 rounded-full flex-shrink-0 transition-colors ${isActive ? 'bg-[var(--brand)]' : 'bg-slate-300'}`}>
+                    <div className={`absolute top-0.5 w-4 h-4 bg-card rounded-full shadow-sm transition-all ${isActive ? 'left-4' : 'left-0.5'}`} />
                     <input
                       type="checkbox"
                       checked={isActive}
@@ -1060,7 +1060,7 @@ export const StockRules: React.FC = () => {
                 <button
                   type="submit"
                   disabled={isSaving}
-                  className="px-5 py-2 text-xs font-bold text-white bg-[#009032] hover:bg-[#007b2b] rounded-lg transition-all active:scale-95 shadow-sm flex items-center gap-1.5"
+                  className="px-5 py-2 text-xs font-bold text-white bg-[var(--brand)] hover:bg-[var(--brand-hover)] rounded-lg transition-all active:scale-95 shadow-sm flex items-center gap-1.5"
                 >
                   {isSaving && <Loader2 className="w-3 h-3 animate-spin" />}
                   บันทึกข้อมูล
@@ -1073,8 +1073,8 @@ export const StockRules: React.FC = () => {
 
       {/* Delete Confirmation Dialog */}
       {isDeleteConfirmOpen && ruleToDelete && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl border border-slate-200 w-full max-w-sm shadow-2xl">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-card rounded-2xl border border-slate-200 w-full max-w-sm shadow-2xl">
             <div className="p-6 text-center">
               <div className="w-12 h-12 rounded-full bg-red-50 flex items-center justify-center mx-auto mb-3">
                 <Trash2 className="w-6 h-6 text-red-500" />

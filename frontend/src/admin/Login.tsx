@@ -56,13 +56,13 @@ export const Login: React.FC = () => {
   return (
     <div className="relative min-h-screen bg-slate-50 text-slate-800 flex flex-col items-center justify-center p-4 overflow-hidden">
       {/* Soft Decorative Glowing Blobs */}
-      <div className="absolute top-1/4 left-1/4 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-[#009032]/5 rounded-full blur-[100px] pointer-events-none"></div>
+      <div className="absolute top-1/4 left-1/4 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-[var(--brand)]/5 rounded-full blur-[100px] pointer-events-none"></div>
       <div className="absolute bottom-1/4 right-1/4 translate-x-1/2 translate-y-1/2 w-96 h-96 bg-emerald-600/5 rounded-full blur-[120px] pointer-events-none"></div>
 
       <div className="max-w-md w-full z-10">
         {/* Company Logo and Title */}
         <div className="flex flex-col items-center mb-8 text-center">
-          <div className="w-24 h-24 p-3 bg-white border border-slate-200 rounded-2xl shadow-md flex items-center justify-center mb-4">
+          <div className="w-24 h-24 p-3 bg-card border border-slate-200 rounded-2xl shadow-md flex items-center justify-center mb-4">
             <img 
               src="/logo.png" 
               alt="Primus Co., Ltd. Logo" 
@@ -78,7 +78,7 @@ export const Login: React.FC = () => {
         </div>
 
         {/* Login Card */}
-        <div className="bg-white/80 border border-slate-200/80 rounded-3xl p-8 shadow-2xl shadow-slate-200/80 backdrop-blur-xl relative overflow-hidden">
+        <div className="bg-card/80 border border-slate-200/80 rounded-3xl p-8 shadow-2xl shadow-slate-200/80 backdrop-blur-xl relative overflow-hidden">
           {/* Card light header line */}
           <div className="absolute top-0 inset-x-0 h-px bg-gradient-to-r from-transparent via-slate-200 to-transparent"></div>
 
@@ -105,7 +105,7 @@ export const Login: React.FC = () => {
                 ชื่อผู้ใช้งาน (Username)
               </label>
               <div className="relative group">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 group-focus-within:text-[#009032] transition-colors">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 group-focus-within:text-[var(--brand-fg)] transition-colors">
                   <User className="w-5 h-5" />
                 </div>
                 <input
@@ -118,7 +118,7 @@ export const Login: React.FC = () => {
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   placeholder="admin"
-                  className="w-full bg-white border border-slate-200 rounded-xl pl-11 pr-4 py-3 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-[#009032] focus:ring-2 focus:ring-[#009032]/10 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-full bg-card border border-slate-200 rounded-xl pl-11 pr-4 py-3 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-[var(--brand-fg)] focus:ring-2 focus:ring-[var(--brand-fg)]/10 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 />
               </div>
             </div>
@@ -129,7 +129,7 @@ export const Login: React.FC = () => {
                 รหัสผ่าน (Password)
               </label>
               <div className="relative group">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 group-focus-within:text-[#009032] transition-colors">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 group-focus-within:text-[var(--brand-fg)] transition-colors">
                   <Lock className="w-5 h-5" />
                 </div>
                 <input
@@ -142,7 +142,7 @@ export const Login: React.FC = () => {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full bg-white border border-slate-200 rounded-xl pl-11 pr-11 py-3 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-[#009032] focus:ring-2 focus:ring-[#009032]/10 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-full bg-card border border-slate-200 rounded-xl pl-11 pr-11 py-3 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-[var(--brand-fg)] focus:ring-2 focus:ring-[var(--brand-fg)]/10 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 />
                 <button
                   id="toggle-password-btn"
@@ -160,7 +160,7 @@ export const Login: React.FC = () => {
               id="login-submit-btn"
               type="submit"
               disabled={isSubmitting}
-              className="w-full py-3.5 px-4 bg-gradient-to-r from-[#009032] to-emerald-600 hover:from-[#009032]/95 hover:to-emerald-600/95 active:scale-[0.98] transition-all text-white font-semibold rounded-xl shadow-md shadow-emerald-600/10 hover:shadow-emerald-600/25 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:scale-100"
+              className="w-full py-3.5 px-4 bg-gradient-to-r from-[var(--brand-fg)] to-emerald-600 hover:from-[var(--brand-fg)]/95 hover:to-emerald-600/95 active:scale-[0.98] transition-all text-white font-semibold rounded-xl shadow-md shadow-emerald-600/10 hover:shadow-emerald-600/25 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:scale-100"
             >
               {isSubmitting ? (
                 <>

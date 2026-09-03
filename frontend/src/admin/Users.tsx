@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { PageHeader } from './PageHeader';
 
-const BRAND = '#009032';
+const BRAND = 'var(--brand-fg)';
 const MIN_PASSWORD_LENGTH = 8;
 
 interface AdminUserRow {
@@ -53,7 +53,7 @@ const ROLE_BADGE: Record<Role, { className: string; Icon: typeof Shield }> = {
 type FormMode = { kind: 'create' } | { kind: 'edit'; target: AdminUserRow };
 
 const inputClass =
-  'w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-[#009032] focus:ring-2 focus:ring-[#009032]/10 transition-all disabled:opacity-50';
+  'w-full bg-card border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-[var(--brand-fg)] focus:ring-2 focus:ring-[var(--brand-fg)]/10 transition-all disabled:opacity-50';
 
 /** แยกการยิง API ออกจาก state เพื่อให้ทุก setState เกิดหลัง await (กฎ react-hooks/set-state-in-effect) */
 async function fetchUsers(token: string): Promise<AdminUserRow[]> {
@@ -131,7 +131,7 @@ export const Users: React.FC = () => {
       >
         <button
           onClick={() => setFormMode({ kind: 'create' })}
-          className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[#009032] hover:bg-[#007b2b] text-white text-sm font-bold rounded-xl shadow-sm transition-all active:scale-95 flex-shrink-0"
+          className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[var(--brand)] hover:bg-[var(--brand-hover)] text-white text-sm font-bold rounded-xl shadow-sm transition-all active:scale-95 flex-shrink-0"
         >
           <Plus className="w-4 h-4" />
           <span>เพิ่มผู้ใช้</span>
@@ -139,8 +139,8 @@ export const Users: React.FC = () => {
       </PageHeader>
 
       {isLoading ? (
-        <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center shadow-sm flex flex-col items-center justify-center gap-3">
-          <Loader2 className="w-7 h-7 text-[#009032] animate-spin" />
+        <div className="bg-card border border-slate-200 rounded-2xl p-10 text-center shadow-sm flex flex-col items-center justify-center gap-3">
+          <Loader2 className="w-7 h-7 text-[var(--brand-fg)] animate-spin" />
           <p className="text-slate-500 text-sm font-medium">กำลังโหลดรายชื่อผู้ใช้...</p>
         </div>
       ) : loadError ? (
@@ -150,7 +150,7 @@ export const Users: React.FC = () => {
           <p className="text-xs">{loadError}</p>
         </div>
       ) : (
-        <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+        <div className="bg-card border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
           <div className="overflow-x-auto">
             <table className="w-full border-collapse text-left">
               <thead>
@@ -254,12 +254,12 @@ const ModalShell: React.FC<{
   onClose: () => void;
   children: React.ReactNode;
 }> = ({ title, icon, onClose, children }) => (
-  <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
-    <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden">
+  <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+    <div className="w-full max-w-md bg-card rounded-2xl shadow-2xl border border-slate-200 overflow-hidden">
       <div className="flex items-center gap-3 px-5 py-4 border-b border-slate-200">
         <div
           className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
-          style={{ backgroundColor: 'rgba(0, 144, 50, 0.10)', color: BRAND }}
+          style={{ backgroundColor: 'var(--brand-soft)', color: BRAND }}
         >
           {icon}
         </div>
@@ -303,7 +303,7 @@ const SubmitRow: React.FC<{
       type="submit"
       disabled={isSubmitting}
       className="flex-1 py-2.5 px-4 text-white text-sm font-semibold rounded-xl transition-all active:scale-[0.98] flex items-center justify-center gap-2 disabled:opacity-50"
-      style={{ backgroundColor: danger ? '#dc2626' : BRAND }}
+      style={{ backgroundColor: danger ? 'var(--color-red-600)' : 'var(--brand)' }}
     >
       {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
       {label}
@@ -324,7 +324,7 @@ const RoleSelect: React.FC<{
         <label
           key={role}
           className={`flex items-start gap-2 p-2.5 rounded-xl border transition-colors ${
-            value === role ? 'border-[#009032] bg-[#009032]/5' : 'border-slate-200'
+            value === role ? 'border-[var(--brand-fg)] bg-[var(--brand)]/5' : 'border-slate-200'
           } ${disabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-slate-50'}`}
         >
           <input
@@ -333,7 +333,7 @@ const RoleSelect: React.FC<{
             checked={value === role}
             disabled={disabled}
             onChange={() => onChange(role)}
-            className="mt-0.5 accent-[#009032] shrink-0"
+            className="mt-0.5 accent-[var(--brand-fg)] shrink-0"
           />
           <span className="min-w-0">
             <span className="block text-sm font-semibold text-slate-800">{ROLE_LABEL[role]}</span>

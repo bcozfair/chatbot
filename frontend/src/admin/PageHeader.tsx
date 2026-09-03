@@ -74,7 +74,7 @@ export const PageHeader: React.FC<PageHeaderProps> = ({ icon: Icon, title, descr
   return createPortal(
     <>
       <div className="flex items-center gap-2 min-w-0">
-        {Icon && <Icon className="w-5 h-5 text-[#009032] shrink-0" />}
+        {Icon && <Icon className="w-5 h-5 text-[var(--brand-fg)] shrink-0" />}
         <h2 className="text-base font-bold text-slate-900 whitespace-nowrap">{title}</h2>
         {description && (
           <span className="text-xs text-slate-400 hidden xl:inline truncate">{description}</span>

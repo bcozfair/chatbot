@@ -1,6 +1,6 @@
 import React from 'react';
 
-const BRAND = '#009032';
+const BRAND = 'var(--brand-fg)';
 
 interface SettingToggleProps {
   checked: boolean;
@@ -33,12 +33,12 @@ export const SettingToggle: React.FC<SettingToggleProps> = ({
     <span
       className="relative mt-px inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors group-focus-visible:ring-2 group-focus-visible:ring-offset-2"
       style={{
-        backgroundColor: checked ? BRAND : '#cbd5e1',
+        backgroundColor: checked ? 'var(--brand)' : 'var(--c-line-strong)',
         ['--tw-ring-color' as string]: BRAND,
       }}
     >
       <span
-        className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${
+        className={`inline-block h-4 w-4 rounded-full bg-card shadow transition-transform ${
           checked ? 'translate-x-[18px]' : 'translate-x-[2px]'
         }`}
       />

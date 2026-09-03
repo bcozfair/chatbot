@@ -81,8 +81,8 @@ export function Salespersons() {
       return <ArrowUpDown className="w-3.5 h-3.5 text-slate-300 ml-1 inline-block opacity-65" />;
     }
     return sortDirection === 'asc'
-      ? <ArrowUp className="w-3.5 h-3.5 text-[#009032] ml-1 inline-block font-bold" />
-      : <ArrowDown className="w-3.5 h-3.5 text-[#009032] ml-1 inline-block font-bold" />;
+      ? <ArrowUp className="w-3.5 h-3.5 text-[var(--brand-fg)] ml-1 inline-block font-bold" />
+      : <ArrowDown className="w-3.5 h-3.5 text-[var(--brand-fg)] ml-1 inline-block font-bold" />;
   };
   
   // Upload State
@@ -472,15 +472,15 @@ export function Salespersons() {
             placeholder="ค้นหาชื่อ, รหัส, เบอร์โทร, สาขา, employee_name..."
             value={searchQuery}
             onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
-            className="w-full pl-10 pr-4 py-2 text-sm bg-slate-50 border border-slate-200 hover:border-slate-300 focus:border-[#009032] focus:bg-white rounded-2xl outline-none transition-all shadow-inner"
+            className="w-full pl-10 pr-4 py-2 text-sm bg-slate-50 border border-slate-200 hover:border-slate-300 focus:border-[var(--brand-fg)] focus:bg-card rounded-2xl outline-none transition-all shadow-inner"
           />
         </div>
       </PageHeader>
 
       {/* Loading state */}
       {loading ? (
-        <div className="bg-white border border-slate-200 rounded-3xl p-12 text-center shadow-sm flex flex-col items-center justify-center gap-3">
-          <Loader2 className="w-8 h-8 text-[#009032] animate-spin" />
+        <div className="bg-card border border-slate-200 rounded-3xl p-12 text-center shadow-sm flex flex-col items-center justify-center gap-3">
+          <Loader2 className="w-8 h-8 text-[var(--brand-fg)] animate-spin" />
           <p className="text-slate-500 text-sm font-medium">กำลังโหลดข้อมูลพนักงานขาย...</p>
         </div>
       ) : error ? (
@@ -490,19 +490,19 @@ export function Salespersons() {
           <p className="text-sm text-red-600">{error}</p>
           <button 
             onClick={fetchSalespersons}
-            className="mt-3 px-4 py-2 bg-white border border-red-200 text-red-700 hover:bg-red-100/50 rounded-xl text-xs font-semibold transition-all active:scale-95"
+            className="mt-3 px-4 py-2 bg-card border border-red-200 text-red-700 hover:bg-red-100/50 rounded-xl text-xs font-semibold transition-all active:scale-95"
           >
             ลองใหม่อีกครั้ง
           </button>
         </div>
       ) : sortedSalespersons.length === 0 ? (
-        <div className="bg-white border border-slate-200 rounded-3xl p-12 text-center shadow-sm text-slate-500 flex flex-col items-center justify-center gap-2">
+        <div className="bg-card border border-slate-200 rounded-3xl p-12 text-center shadow-sm text-slate-500 flex flex-col items-center justify-center gap-2">
           <User className="w-10 h-10 text-slate-300" />
           <p className="font-bold">ไม่พบข้อมูลพนักงานขาย</p>
           <p className="text-xs">ลองค้นหาด้วยเงื่อนไขอื่น หรือพนักงานขายอาจยังไม่ได้ลงทะเบียนผ่าน LINE</p>
         </div>
       ) : (
-        <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm">
+        <div className="bg-card border border-slate-200 rounded-3xl overflow-hidden shadow-sm">
           <div className="overflow-x-auto">
             <table className="w-full border-collapse text-left">
               <thead>
@@ -633,7 +633,7 @@ export function Salespersons() {
                 <select
                   value={pageSize}
                   onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
-                  className="h-7 px-2 rounded-lg border border-slate-200 bg-white text-xs font-semibold outline-none focus:border-[#009032]"
+                  className="h-7 px-2 rounded-lg border border-slate-200 bg-card text-xs font-semibold outline-none focus:border-[var(--brand-fg)]"
                 >
                   {PAGE_SIZE_OPTIONS.map(n => (
                     <option key={n} value={n}>{n}</option>
@@ -646,7 +646,7 @@ export function Salespersons() {
               <button
                 onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
                 disabled={safePage <= 1}
-                className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-card text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 <ChevronLeft className="w-3.5 h-3.5" />
               </button>
@@ -659,8 +659,8 @@ export function Salespersons() {
                     key={p}
                     onClick={() => setCurrentPage(p)}
                     className={`w-7 h-7 flex items-center justify-center rounded-lg text-xs font-bold transition-colors ${p === safePage
-                      ? 'bg-[#009032] text-white'
-                      : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                      ? 'bg-[var(--brand)] text-white'
+                      : 'bg-card border border-slate-200 text-slate-600 hover:bg-slate-100'
                       }`}
                   >
                     {p}
@@ -671,7 +671,7 @@ export function Salespersons() {
               <button
                 onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
                 disabled={safePage >= totalPages}
-                className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-card text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 <ChevronRight className="w-3.5 h-3.5" />
               </button>
@@ -682,8 +682,8 @@ export function Salespersons() {
 
       {/* Edit Profile Modal — ชื่อ / เบอร์โทร / รหัสพนักงาน */}
       {editingSp && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl border border-slate-200 w-full max-w-md shadow-2xl flex flex-col">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-card rounded-2xl border border-slate-200 w-full max-w-md shadow-2xl flex flex-col">
 
             <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100">
               <div>
@@ -720,10 +720,10 @@ export function Salespersons() {
                       onBlur={() => setTimeout(() => setShowNameSuggest(false), 150)}
                       placeholder="แตะเพื่อเลือกจากรายชื่อ หรือพิมพ์ค้นหา..."
                       autoComplete="off"
-                      className="w-full h-9 px-3 bg-white border border-slate-200 focus:border-[#009032] rounded-xl text-sm text-slate-800 outline-none transition-all focus:ring-2 focus:ring-[#009032]/10"
+                      className="w-full h-9 px-3 bg-card border border-slate-200 focus:border-[var(--brand-fg)] rounded-xl text-sm text-slate-800 outline-none transition-all focus:ring-2 focus:ring-[var(--brand-fg)]/10"
                     />
                     {showNameSuggest && (
-                      <div className="absolute left-0 right-0 top-full mt-1 z-10 max-h-52 overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-lg">
+                      <div className="absolute left-0 right-0 top-full mt-1 z-10 max-h-52 overflow-y-auto bg-card border border-slate-200 rounded-xl shadow-lg">
                         {nameSuggestions.length === 0 ? (
                           <div className="px-3 py-2.5 text-xs text-slate-400 italic">
                             ไม่พบชื่อในรายการขาย — พิมพ์ชื่อและรหัสเองได้สำหรับพนักงานใหม่
@@ -755,7 +755,7 @@ export function Salespersons() {
                     onChange={(e) => setFormPhone(e.target.value)}
                     placeholder="เช่น 081-234-5678"
                     maxLength={100}
-                    className="w-full h-9 px-3 bg-white border border-slate-200 focus:border-[#009032] rounded-xl text-sm text-slate-800 outline-none transition-all focus:ring-2 focus:ring-[#009032]/10"
+                    className="w-full h-9 px-3 bg-card border border-slate-200 focus:border-[var(--brand-fg)] rounded-xl text-sm text-slate-800 outline-none transition-all focus:ring-2 focus:ring-[var(--brand-fg)]/10"
                   />
                 </div>
 
@@ -769,7 +769,7 @@ export function Salespersons() {
                     onChange={(e) => setFormSpId(e.target.value)}
                     placeholder="เช่น SP001"
                     maxLength={50}
-                    className="w-full h-9 px-3 bg-white border border-slate-200 focus:border-[#009032] rounded-xl text-sm font-mono text-slate-800 outline-none transition-all focus:ring-2 focus:ring-[#009032]/10"
+                    className="w-full h-9 px-3 bg-card border border-slate-200 focus:border-[var(--brand-fg)] rounded-xl text-sm font-mono text-slate-800 outline-none transition-all focus:ring-2 focus:ring-[var(--brand-fg)]/10"
                   />
                   <p className="text-[10px] text-slate-400 leading-relaxed">
                     รหัสนี้ใช้ผูกกับไฟล์ลายเซ็น และพนักงานต้องมีรหัสก่อนจึงจะบันทึกหน้าลงทะเบียนใน LINE ได้
@@ -787,7 +787,7 @@ export function Salespersons() {
                       onChange={(e) => setFormEmpQuotationId(e.target.value)}
                       placeholder="เช่น นฤเบศร์ ทองดี"
                       maxLength={255}
-                      className="w-full h-9 pl-3 pr-9 bg-white border border-slate-200 focus:border-[#009032] rounded-xl text-sm text-slate-800 outline-none transition-all focus:ring-2 focus:ring-[#009032]/10"
+                      className="w-full h-9 pl-3 pr-9 bg-card border border-slate-200 focus:border-[var(--brand-fg)] rounded-xl text-sm text-slate-800 outline-none transition-all focus:ring-2 focus:ring-[var(--brand-fg)]/10"
                     />
                     {formEmpQuotationId && (
                       <button
@@ -818,7 +818,7 @@ export function Salespersons() {
                 <button
                   type="submit"
                   disabled={isSaving}
-                  className="px-5 py-2 text-xs font-bold text-white bg-[#009032] hover:bg-[#007b2b] rounded-lg transition-all active:scale-95 shadow-sm flex items-center gap-1.5 disabled:opacity-60"
+                  className="px-5 py-2 text-xs font-bold text-white bg-[var(--brand)] hover:bg-[var(--brand-hover)] rounded-lg transition-all active:scale-95 shadow-sm flex items-center gap-1.5 disabled:opacity-60"
                 >
                   {isSaving && <Loader2 className="w-3 h-3 animate-spin" />}
                   บันทึกข้อมูล
@@ -831,8 +831,8 @@ export function Salespersons() {
 
       {/* Delete Confirmation */}
       {deletingSp && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl border border-slate-200 w-full max-w-md shadow-2xl">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-card rounded-2xl border border-slate-200 w-full max-w-md shadow-2xl">
             <div className="px-5 py-4 border-b border-slate-100 flex items-start gap-3">
               <div className="w-9 h-9 rounded-xl bg-red-50 border border-red-100 flex items-center justify-center flex-shrink-0">
                 <AlertTriangle className="w-4.5 h-4.5 text-red-600" />
@@ -912,7 +912,7 @@ function SignatureCell({ salesperson, hasSig, uploading, sigTimestamp, onUpload,
   if (uploading) {
     return (
       <div className="flex items-center justify-center py-4">
-        <Loader2 className="w-5 h-5 text-[#009032] animate-spin" />
+        <Loader2 className="w-5 h-5 text-[var(--brand-fg)] animate-spin" />
       </div>
     );
   }
@@ -936,7 +936,7 @@ function SignatureCell({ salesperson, hasSig, uploading, sigTimestamp, onUpload,
           />
           
           {/* Action Overlay */}
-          <div className="absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 flex items-center justify-center gap-2 transition-opacity duration-200">
+          <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center gap-2 transition-opacity duration-200">
             <button
               onClick={onUpload}
               title="อัปโหลดใหม่"
@@ -961,7 +961,7 @@ function SignatureCell({ salesperson, hasSig, uploading, sigTimestamp, onUpload,
           </div>
           <button
             onClick={onUpload}
-            className="flex items-center gap-1.5 px-3 py-1 bg-white hover:bg-slate-100 text-slate-700 hover:text-slate-950 border border-slate-200 hover:border-slate-300 rounded-xl text-xs font-semibold shadow-sm transition-all active:scale-95"
+            className="flex items-center gap-1.5 px-3 py-1 bg-card hover:bg-slate-100 text-slate-700 hover:text-slate-950 border border-slate-200 hover:border-slate-300 rounded-xl text-xs font-semibold shadow-sm transition-all active:scale-95"
           >
             <Upload className="w-3.5 h-3.5 text-slate-500" />
             อัปโหลด

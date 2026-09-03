@@ -11,7 +11,7 @@ import {
   ChevronRight,
 } from 'lucide-react';
 
-const BRAND = '#009032';
+const BRAND = 'var(--brand-fg)';
 
 interface ShippingFeeConfig {
   id: number;
@@ -174,12 +174,12 @@ export const ShippingFee: React.FC = () => {
   return (
     // ทั้งหน้าเป็นการ์ดใบเดียว: แถบคำอธิบาย → เนื้อฟอร์ม → แถบปุ่ม
     // h-full ให้การ์ดสูงเท่าคอลัมน์ เพราะหน้าตั้งค่าวางสองหน้านี้ซ้าย-ขวา
-    <div className="flex h-full max-w-3xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
+    <div className="flex h-full max-w-3xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-card">
       {/* อธิบายกฎให้แอดมินเข้าใจก่อนแก้ตัวเลข — ย่อสั้นเก็บใจความหลัก */}
       <div className="flex items-start gap-3 border-b border-slate-100 bg-slate-50/60 p-3.5">
         <div
           className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg"
-          style={{ backgroundColor: 'rgba(0, 144, 50, 0.10)' }}
+          style={{ backgroundColor: 'var(--brand-soft)' }}
         >
           <Truck className="h-4 w-4" style={{ color: BRAND }} />
         </div>
@@ -287,7 +287,7 @@ export const ShippingFee: React.FC = () => {
           onClick={handleSave}
           disabled={!isDirty || isSaving}
           className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-40"
-          style={{ backgroundColor: BRAND }}
+          style={{ backgroundColor: 'var(--brand)' }}
         >
           {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
           บันทึก
