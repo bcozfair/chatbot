@@ -47,8 +47,16 @@ async function main() {
   const dbSet = new Set(dbTables.map((r: any) => r.t));
   const regSet = new Set(TABLE_REGISTRY.map((d) => d.table));
 
-  // sync_api_keys เป็นตารางของระบบ sync เอง — ไม่ต้องส่งกุญแจของตัวเองออกไปให้ใคร
-  const INTENTIONALLY_OUT = new Set(['sync_api_keys']);
+  // ตารางที่ตั้งใจไม่ให้อยู่ในทะเบียน — ต้องมีเหตุผลกำกับทุกตัว
+  //   sync_api_keys  ตารางของระบบ sync เอง ไม่ส่งกุญแจของตัวเองออกไปให้ใคร
+  //   system_logs / audit_logs / log_worker_state / traffic_daily
+  //     กอง log ภายในตาม พ.ร.บ.คอมพิวเตอร์ ม.26 — มี IP ผู้ใช้ ชื่อผู้แก้ไข และค่าก่อน/หลังของ
+  //     การตั้งค่า การเปิดให้ระบบภายนอกดึงได้เท่ากับยกหลักฐานทั้งกองให้คนนอก
+  //     (ดู docs/plan-logging-audit-compliance.md)
+  const INTENTIONALLY_OUT = new Set([
+    'sync_api_keys',
+    'system_logs', 'log_worker_state', 'audit_logs', 'traffic_daily',
+  ]);
 
   const missing = [...dbSet].filter((t) => !regSet.has(t) && !INTENTIONALLY_OUT.has(t));
   ok(`ทุกตารางใน DB อยู่ในทะเบียน (${dbSet.size - INTENTIONALLY_OUT.size} ตาราง)`, missing.length === 0,
