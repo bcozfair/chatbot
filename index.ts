@@ -219,6 +219,9 @@ app.post('/callback', line.middleware(lineConfig), (req: any, res: any) => {
           recordWebhookProcessing({
             requestId: reqId, lineUserId: queueKey, outcome: 'dropped',
             waitedMs: waited, totalMs: Date.now() - receivedAt,
+            // ถูกทิ้งตั้งแต่ยังไม่เริ่ม ⇒ ไม่ได้เรียก LLM และไม่ได้ทำงานของเราเองเลยจริง ๆ
+            // ใส่ 0 ไม่ใช่ null เพราะนี่คือ "วัดแล้วได้ศูนย์" ไม่ใช่ "ไม่มีข้อมูล"
+            llmMs: 0, llmCalls: 0, ownMs: 0,
           });
           return;
         }
@@ -283,6 +286,9 @@ app.post('/callback', line.middleware(lineConfig), (req: any, res: any) => {
           // แถวที่บอกเวลาทำงานจริง — total นับจาก receivedAt จึงเป็นเวลาที่ผู้ใช้รอทั้งหมด
           recordWebhookProcessing({
             requestId: reqId, lineUserId: queueKey, outcome, waitedMs: waited, totalMs: total,
+            // ตัวเลขชุดเดียวกับบรรทัด [queue] ข้างบนเป๊ะ ๆ — บรรทัดนั้นหายทุกครั้งที่ recreate
+            // container ส่วนแถวนี้อยู่ยาวตาม retention ของ api_logs
+            llmMs: llm.ms, llmCalls: llm.calls, ownMs: processed - llm.ms,
           });
         }
       });
