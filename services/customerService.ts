@@ -189,12 +189,31 @@ const CUSTOMER_CACHE_TTL_MS = 10 * 60 * 1000;
 let customerCache: { rows: any[]; loadedAt: number } | null = null;
 let customerCacheLoading: Promise<any[]> | null = null;
 
+/**
+ * เพดานความเก่าที่ยอมคืนของค้างได้ เกินนี้กลับไปบล็อกโหลดใหม่ตามเดิม —
+ * กันเคสโหลดพังเงียบ ๆ แล้วเสิร์ฟข้อมูลเก่ายาวโดยไม่มีใครรู้
+ */
+const CUSTOMER_CACHE_MAX_STALE_MS = 60 * 60 * 1000;
+
 async function loadCustomerSearchCache(): Promise<any[]> {
   if (customerCache && Date.now() - customerCache.loadedAt < CUSTOMER_CACHE_TTL_MS) {
     return customerCache.rows;
   }
+  // TTL หมด = "ถึงเวลารีเฟรช" ไม่ใช่ "ข้อมูลผิด" — syncService เรียก clearCustomerSearchCache()
+  // (customerCache = null) ทุกครั้งที่ข้อมูลเปลี่ยนจริงอยู่แล้ว ด่านนี้จึงไม่มีทางข้ามข้อมูลใหม่
+  // → คืนของเดิมทันที แล้วโหลดใหม่เบื้องหลัง ไม่ให้คนที่บังเอิญมาชนจังหวะจ่ายค่าโหลด ~700ms
+  if (customerCache && Date.now() - customerCache.loadedAt < CUSTOMER_CACHE_MAX_STALE_MS) {
+    if (!customerCacheLoading) {
+      startCustomerCacheLoad().catch(err =>
+        console.error('[customerSearchCache] background refresh failed:', err));
+    }
+    return customerCache.rows;
+  }
   if (customerCacheLoading) return customerCacheLoading;
+  return startCustomerCacheLoad();
+}
 
+function startCustomerCacheLoad(): Promise<any[]> {
   customerCacheLoading = (async () => {
     const t0 = Date.now();
     // อ่านจาก customers_data_view (ไม่ใช่ customers ตรง ๆ) เพื่อให้ company search ครอบคลุม
@@ -214,10 +233,12 @@ async function loadCustomerSearchCache(): Promise<any[]> {
       return { ...r, norm_name, trigrams: trigramsOf(norm_name) };
     });
     customerCache = { rows: cached, loadedAt: Date.now() };
-    customerCacheLoading = null;
     console.log(`[customerSearchCache] loaded ${cached.length} companies in ${Date.now() - t0}ms`);
     return cached;
   })();
+  // เดิมเคลียร์ flag เฉพาะตอนโหลดสำเร็จ — ถ้า query พัง customerCacheLoading จะค้างเป็น promise
+  // ที่ reject ตลอดกาล แล้วทุก request หลังจากนั้นได้ error ตัวเดิมซ้ำไปเรื่อย ๆ ไม่มีวันหาย
+  customerCacheLoading.finally(() => { customerCacheLoading = null; }).catch(() => {});
   return customerCacheLoading;
 }
 
@@ -885,17 +906,25 @@ export async function findCustomerCandidates(customerQuery: string, salesperson:
 
   const dbCustomersMap = new Map<any, any>();
 
-  // 1. Query by cleaned lines (phrases match display_name — NO branch_code filter)
-  if (cleanedLines.length > 0) {
-    const phraseData = await searchCustomersByNamePatterns(cleanedLines, 30);
+  // 1+2. Query by cleaned lines (phrases) และ individual name terms (words) — NO branch_code filter
+  //      สอง query นี้อิสระกันสนิท อ่านอย่างเดียว ไม่แชร์สถานะ → ยิงพร้อมกันได้
+  //      ลำดับการรวมคงเดิมเป๊ะ: ผล phrase ทับได้ทุกตัว / ผล name ทับของ phrase ไม่ได้
+  const nameArray = nameTerms.size > 0 ? Array.from(nameTerms).filter(Boolean) : null;
+  const phrasePromise = cleanedLines.length > 0
+    ? searchCustomersByNamePatterns(cleanedLines, 30)
+    : null;
+  const namePromise = nameArray ? searchCustomersByNamePatterns(nameArray, 50) : null;
+  // ถ้า phrase โยน error ก่อนถึงคิว await ของ name จะกลายเป็น unhandled rejection — ปักไว้ก่อน
+  if (namePromise) namePromise.catch(() => {});
+
+  if (phrasePromise) {
+    const phraseData = await phrasePromise;
     console.log('[findCustomerCandidates] phraseData count:', phraseData.length);
     phraseData.forEach((c: any) => dbCustomersMap.set(c.id, c));
   }
 
-  // 2. Query by individual name terms (words match display_name — NO branch_code filter)
-  if (nameTerms.size > 0) {
-    const nameArray = Array.from(nameTerms).filter(Boolean);
-    const nameData = await searchCustomersByNamePatterns(nameArray, 50);
+  if (namePromise) {
+    const nameData = await namePromise;
     console.log('[findCustomerCandidates] nameData count:', nameData.length);
     nameData.forEach((c: any) => {
       if (!dbCustomersMap.has(c.id)) {
