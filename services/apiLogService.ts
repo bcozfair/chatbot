@@ -125,6 +125,15 @@ export function recordWebhookProcessing(info: {
   waitedMs: number;
   /** เวลาทั้งหมดนับจากตอนรับ webhook = เวลาที่ผู้ใช้รอจริง (รวมเวลารอคิว) */
   totalMs: number;
+  /**
+   * แผน G — เวลาที่งานนี้นั่งรอ LLM ตอบ / จำนวนครั้งที่เรียก / เวลาที่เป็นงานของเราเอง
+   *
+   * ทั้งสามค่าเป็น "เท่าที่นับได้ ณ ตอนจบงาน" — งานที่ถูก abort เพราะหมดงบเวลายังรันต่อ
+   * เบื้องหลังและบวกเวลา LLM ต่อได้หลังบันทึกไปแล้ว (index.ts เขียนเตือนไว้ตรงจุดเดียวกัน)
+   */
+  llmMs: number;
+  llmCalls: number;
+  ownMs: number;
 }): void {
   // ไม่มี requestId = ปิด log อยู่ (API_LOG_ENABLED=false) → ไม่ต้องบันทึกอะไร
   if (!info.requestId) return;
@@ -147,6 +156,11 @@ export function recordWebhookProcessing(info: {
     // duration_ms - queue_waited_ms = เวลาประมวลผลจริง
     // ค่านี้สูง = คิวตัน ต้องเพิ่มเครื่อง · ส่วนต่างสูง = โค้ด/LLM ช้า ต้อง optimize
     queueWaitedMs: info.waitedMs,
+    // แผน G — แยกส่วนต่างนั้นออกอีกชั้นว่าเป็นเวลารอ LLM หรือเวลางานของเราเอง
+    // own สูง = ไปไล่โค้ด/query · llm สูง = ไปลดจำนวนการเรียกหรือแก้ prompt
+    llmMs: info.llmMs,
+    llmCalls: info.llmCalls,
+    ownMs: info.ownMs,
   });
 }
 

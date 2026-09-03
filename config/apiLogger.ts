@@ -245,5 +245,10 @@ function collect(req: Request, res: Response): void {
       waiting: pool.waitingCount, total: pool.totalCount, idle: pool.idleCount, max: POOL_MAX,
     })),
     queueWaitedMs: null,                           // ใช้เฉพาะแถว TASK ของ webhook (เฟส 2)
+    // แผน G — 3 ค่านี้ใช้เฉพาะแถว TASK ของ webhook เช่นกัน · แถว HTTP ตรงนี้ตอบ 200 กลับ LINE
+    // ตั้งแต่ยังไม่เริ่มทำงาน จึงไม่มีเวลา LLM ให้นับ และ "0" จะโกหกว่าเคยวัดแล้วได้ศูนย์
+    llmMs: null,
+    llmCalls: null,
+    ownMs: null,
   });
 }

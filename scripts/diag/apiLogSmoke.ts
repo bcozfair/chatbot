@@ -201,6 +201,7 @@ const sampleRow = (): ApiLogInsertRow => ({
   route: '/api/x', path: '/api/x', statusCode: 200, durationMs: 1,
   respBytes: null, adminUserId: null, lineUserId: null, ip: '203.0.113.1',
   inflight: 1, dbWaiting: 0, queueWaitedMs: null,
+  llmMs: null, llmCalls: null, ownMs: null,
 });
 // เติมจากที่ค้างอยู่จริงหลัง benchmark ให้ทะลุเพดานพอดี 1 แถว (ไม่ผูกกับจำนวนรอบ benchmark)
 const MAX_BUFFER = 5_000;
@@ -375,21 +376,27 @@ if (WRITE_MODE) {
         { createdAt: old, requestId: 'ffffffffffffff01', method: 'POST',
           route: '/api/quotation/:id', path: '/api/quotation/abc-123', statusCode: 200,
           durationMs: 142, respBytes: 812, adminUserId: null, lineUserId: U,
-          ip: '203.0.113.45', inflight: 3, dbWaiting: 0, queueWaitedMs: null },
+          ip: '203.0.113.45', inflight: 3, dbWaiting: 0, queueWaitedMs: null,
+          llmMs: null, llmCalls: null, ownMs: null },
         // แถวที่ทุกช่อง nullable เป็น NULL — พิสูจน์ว่า UNNEST ไม่ทำ NULL หล่นตำแหน่ง
         { createdAt: old, requestId: 'ffffffffffffff02', method: 'GET',
           route: null, path: '/api/ไม่มีจริง', statusCode: 404,
           durationMs: 2, respBytes: null, adminUserId: null, lineUserId: null,
-          ip: null, inflight: null, dbWaiting: null, queueWaitedMs: null },
+          ip: null, inflight: null, dbWaiting: null, queueWaitedMs: null,
+          llmMs: null, llmCalls: null, ownMs: null },
         // ค่าไทย + อักขระพิเศษ + แถว TASK ของ webhook
         { createdAt: old, requestId: 'ffffffffffffff03', method: 'TASK',
           route: '/callback (async)', path: '/callback (async)', statusCode: 504,
           durationMs: 48000, respBytes: null, adminUserId: 7, lineUserId: U,
-          ip: IPV6_MAX, inflight: 12, dbWaiting: 2, queueWaitedMs: 31000 },
+          ip: IPV6_MAX, inflight: 12, dbWaiting: 2, queueWaitedMs: 31000,
+          // แผน G — ค่าต่างกันทั้งสามตัวโดยตั้งใจ ถ้า UNNEST สลับตำแหน่งจะจับได้ทันที
+          // 48000 = 31000 รอคิว + 17000 ทำงาน ⇒ own 17000 - llm 15500 = 1500 ตรงกับสูตรจริง
+          llmMs: 15500, llmCalls: 3, ownMs: 1500 },
         { createdAt: now, requestId: 'ffffffffffffff04', method: 'GET',
           route: '/api/products/search', path: '/api/products/search', statusCode: 200,
           durationMs: 33, respBytes: 4096, adminUserId: null, lineUserId: null,
-          ip: '2001:db8::1', inflight: 1, dbWaiting: 0, queueWaitedMs: null },
+          ip: '2001:db8::1', inflight: 1, dbWaiting: 0, queueWaitedMs: null,
+          llmMs: null, llmCalls: null, ownMs: null },
       ];
       await insertApiLogRows(client, rows);
 
@@ -414,6 +421,14 @@ if (WRITE_MODE) {
       ok('แถว 3: TASK + queue_waited_ms',
         c.method === 'TASK' && c.queue_waited_ms === 31000 &&
         c.duration_ms === 48000 && c.admin_user_id === 7 && c.db_waiting === 2);
+      // แผน G — 3 คอลัมน์ท้ายสุดของ UNNEST คือจุดที่เพิ่มทีหลัง จึงเป็นจุดที่สลับง่ายที่สุด
+      ok('แถว 3: llm_ms / llm_calls / own_ms ลงตรงคอลัมน์',
+        c.llm_ms === 15500 && c.llm_calls === 3 && c.own_ms === 1500,
+        JSON.stringify({ llm_ms: c.llm_ms, llm_calls: c.llm_calls, own_ms: c.own_ms }));
+      // แถว HTTP ต้องเป็น NULL ไม่ใช่ 0 — 0 จะโกหกว่า "วัดแล้วได้ศูนย์"
+      ok('แถว HTTP: llm/own เป็น NULL ไม่ใช่ 0',
+        a.llm_ms === null && a.llm_calls === null && a.own_ms === null &&
+        b.llm_ms === null && b.own_ms === null);
       // IPv6 ยาวสุดต้องลงครบ 45 ตัวอักษร ไม่ถูก varchar ตัดหาย = คอลัมน์กว้างพอจริง
       ok('แถว 3: IPv6 ยาวสุด 45 ตัวอักษรลงครบไม่ถูกตัด',
         c.ip === IPV6_MAX && c.ip.length === 45, `ได้ ${c.ip?.length} ตัวอักษร`);

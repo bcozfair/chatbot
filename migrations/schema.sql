@@ -101,6 +101,8 @@ ALTER SEQUENCE public.admin_users_id_seq OWNED BY public.admin_users.id;
 -- จงใจไม่เก็บ request body — ดูเหตุผลเต็มใน migrations/changes/2026-08-10_01_api_logs.sql
 -- route เก็บเฉพาะที่ Express บอกมาเป็น string ไม่บอกก็ NULL (จัดกลุ่มตอนอ่านแทน)
 -- inflight/db_waiting/queue_waited_ms = ตัวเลขสำหรับวิเคราะห์ทรัพยากร
+-- llm_ms/llm_calls/own_ms = แผน G แยกเวลารอ LLM ออกจากเวลางานของเราเอง (มีเฉพาะแถว /callback (async))
+--   ดูเหตุผลเต็มใน migrations/changes/2026-09-03_01_api_logs_llm_timing.sql
 CREATE TABLE public.api_logs (
     id bigint NOT NULL,
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
@@ -116,7 +118,10 @@ CREATE TABLE public.api_logs (
     inflight smallint,
     db_waiting smallint,
     queue_waited_ms integer,
-    ip character varying(45)
+    ip character varying(45),
+    llm_ms integer,
+    llm_calls smallint,
+    own_ms integer
 )
 WITH (autovacuum_vacuum_scale_factor='0.02', autovacuum_analyze_scale_factor='0.01');
 

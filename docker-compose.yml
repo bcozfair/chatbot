@@ -16,7 +16,13 @@ services:
     # การใส่ env TZ ทีหลังไม่เปลี่ยนค่าใน volume เดิม
     # หมายเหตุ: เงื่อนไข SQL ทุกจุดถูกเขียนให้ไม่ขึ้นกับ TimeZone ของ session อยู่แล้ว บรรทัดนี้เป็นกันเหนียว
     # + ทำให้ log/psql อ่านเป็นเวลาไทย ไม่ใช่ตัวที่ความถูกต้องไปพึ่งพา
-    command: ["postgres", "-c", "timezone=Asia/Bangkok", "-c", "log_timezone=Asia/Bangkok"]
+    # shared_preload_libraries ต้องสั่งตอน start เท่านั้น (ALTER SYSTEM ก็ต้อง restart อยู่ดี)
+    # pg_stat_statements = แผน G ฝั่ง DB — ตอบว่า "query ไหนกินเวลารวมมากที่สุด" ซึ่ง api_logs
+    # ตอบไม่ได้ (มันเห็นแค่ระดับ request ไม่เห็นว่าใน request นั้นยิง query อะไรไปบ้าง)
+    # ต้นทุน: shared memory ~1-2 MB + overhead ต่อ query ระดับ µs · ต้อง CREATE EXTENSION ด้วย
+    # (migrations/changes/2026-09-03_02_pg_stat_statements.sql)
+    command: ["postgres", "-c", "timezone=Asia/Bangkok", "-c", "log_timezone=Asia/Bangkok",
+              "-c", "shared_preload_libraries=pg_stat_statements"]
     environment:
       POSTGRES_DB: ${PG_DATABASE}
       POSTGRES_USER: ${PG_USER}

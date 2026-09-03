@@ -86,6 +86,7 @@ docker compose exec db psql -U "$PG_USER" -d "$PG_DATABASE" -c "SELECT count(*) 
 ```bash
 docker compose up -d --build         # ครั้งแรก build นาน (โหลด Chromium + ฟอนต์) รอสักครู่
 docker compose logs -f app           # เห็น "listening on 3011" = สำเร็จ (กด Ctrl+C ออกจาก log ได้ แอปยังรันอยู่)
+docker image prune -f --filter "until=24h"   # ลบ image เก่าที่ไม่มีใครใช้ (ของอายุน้อยกว่า 24 ชม. ไม่โดน)
 ```
 
 ### 2.5 เช็คว่าแอปตอบ (บน server)
@@ -232,8 +233,14 @@ SELECT to_regclass('public.customers_data_view')  AS matview,
        EXISTS(SELECT 1 FROM information_schema.columns
               WHERE table_name='sale_orders' AND column_name='order_status')                  AS so_status_cols,
        EXISTS(SELECT 1 FROM information_schema.columns
-              WHERE table_name='quotations' AND column_name='odoo_imported_at')               AS q_odoo_link;"
+              WHERE table_name='quotations' AND column_name='odoo_imported_at')               AS q_odoo_link,
+       EXISTS(SELECT 1 FROM information_schema.columns
+              WHERE table_name='api_logs' AND column_name='llm_ms')                           AS api_logs_llm,
+       EXISTS(SELECT 1 FROM pg_extension WHERE extname='pg_stat_statements')                  AS pg_stat_stmts;"
 ```
+> `pg_stat_stmts` = false ทั้งที่รัน `2026-09-03_02` ไปแล้ว แปลว่ากล่อง db ยังไม่ได้ start ด้วย
+> `-c shared_preload_libraries=pg_stat_statements` — ต้อง `docker compose up -d db` (recreate) ก่อน
+> แล้วค่อยรัน migration นั้น ไม่ใช่รัน migration ซ้ำ
 > คอลัมน์ `clean_text` ต้องใช้ **`to_regprocedure`** ไม่ใช่ `to_regproc` — `to_regproc` รับได้แค่ชื่อฟังก์ชันเปล่า
 > ใส่ `(text)` ต่อท้ายจะคืน null ทุกครั้งแม้ฟังก์ชันมีอยู่จริง = สัญญาณเตือนหลอกว่า migration ขาด
 รันเฉพาะไฟล์ที่ผลข้างบนบอกว่ายังไม่มี เรียงตามชื่อไฟล์ (วันที่):
@@ -603,7 +610,10 @@ docker compose up -d --build          # สร้างกล่องใหม�
 docker compose ps                     # db ต้อง healthy, app ต้อง running
 docker compose logs -f app            # เห็น listening on 3011 = สำเร็จ
 curl -I http://127.0.0.1:${APP_PORT:-3011}/
+docker image prune -f --filter "until=24h"   # ⚠️ ทำทุกครั้งหลัง build — ไม่งั้น image เก่าสะสมจนดิสก์ตัน
 ```
+- **`docker image prune` ต่อท้ายทุก build ห้ามข้าม** — แต่ละ build ทิ้ง image เก่าไว้ 1 ตัว วันละ ~20 ตัว
+  ประมาณ 2 เดือนดิสก์เต็ม · `--filter "until=24h"` กันไม่ให้ลบ image ที่เพิ่ง build (เผื่อต้อง rollback)
 - ข้อมูลใน database **ไม่หาย** (อยู่ใน volume `pgdata`) และรูปลายเซ็นก็ไม่หาย (volume `sig_*`)
 - แก้เฉพาะหน้า admin (frontend) ก็ต้อง `--build` เหมือนกัน
 - ถ้า `docker-compose.yml` เปลี่ยนในช่วงที่ค้าง **กล่อง db จะถูก recreate ด้วย ไม่ใช่แค่ app** → เช็คขั้น 3 ให้ผ่านก่อนเสมอ

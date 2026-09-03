@@ -66,6 +66,7 @@ const sameName = (a: string, b: string) =>
 const IMPORT_LINE = "import { createChatCompletion } from '../config/clients.js';";
 const CLEAR_FN = [
   'export function clearCustomerSearchCache(): void {',
+  '  customerCacheGen++;',
   '  customerCache = null;',
   '  customerCacheLoading = null;',
   '}',
@@ -322,8 +323,24 @@ async function checkCache(m: any): Promise<boolean> {
   const after = m.__cacheState();
   const freshHash = rowsHash(await m.__loadCache());
 
-  m.clearCustomerSearchCache();                    // = สิ่งที่ syncService ทำหลัง sync
-  t = Date.now(); await m.__loadCache(); const afterSync = Date.now() - t;
+  // ── sync เสร็จแล้วสั่งโหลดใหม่ (แทนล้างทิ้ง) — คนที่ค้นหาระหว่างนั้นต้องไม่ถูกบล็อก ──
+  const reloading = m.reloadCustomerSearchCache();   // = สิ่งที่ syncService ทำหลัง rebuild เสร็จ
+  t = Date.now(); const servedDuringReload = await m.__loadCache(); const duringReload = Date.now() - t;
+  await reloading; await settle();
+  const afterReload = m.__cacheState();
+
+  // ── โหลดที่ค้างอยู่จาก snapshot ก่อน rebuild ต้องไม่ทับข้อมูลใหม่ ──
+  // จำลอง: TTL หมด → มีคนค้นหา → เริ่มโหลดเบื้องหลัง → sync ล้าง cache กลางคัน
+  // ถ้าไม่มีตัวนับรุ่น ผลของโหลดที่ค้างจะไปนั่งใน cache ต่อ = เสิร์ฟข้อมูลก่อน rebuild ยาวจน TTL หมด
+  m.__expireCustomerCache();
+  await m.__loadCache();
+  m.clearCustomerSearchCache();
+  await new Promise(r => setTimeout(r, 2500));
+  const staleWon = m.__cacheState().has;
+
+  // ── ทางถอยเมื่อโหลดใหม่หลัง sync ไม่สำเร็จ: clear ต้องยังบังคับโหลดใหม่แบบบล็อก ──
+  m.clearCustomerSearchCache();
+  t = Date.now(); await m.__loadCache(); const afterClear = Date.now() - t;
 
   m.__expireCustomerCache(2 * 60 * 60 * 1000);     // เก่า 2 ชม. > เพดาน 1 ชม.
   t = Date.now(); await m.__loadCache(); const tooStale = Date.now() - t;
@@ -335,7 +352,12 @@ async function checkCache(m: any): Promise<boolean> {
     line('TTL หมด ต้องเริ่มโหลดเบื้องหลัง', during.loading === true && !after.loading && after.ageMs < 30000,
       `กำลังโหลด=${during.loading} → เสร็จแล้วอายุ ${Math.round(after.ageMs / 1000)}s แถว ${after.rows}`),
     line('ของที่คืนตอนค้าง ต้องตรงกับของใหม่', staleHash === freshHash, `${staleHash} · ${freshHash}`),
-    line('หลัง sync ต้องบล็อกโหลดใหม่', afterSync > 200, `${afterSync} ms`),
+    line('sync โหลดใหม่ ต้องไม่บล็อกคนค้นหา', duringReload < 50, `${duringReload} ms · ประหยัดได้ ~${cold} ms`),
+    line('ระหว่าง sync โหลดใหม่ ต้องมีของให้ใช้', servedDuringReload.length > 0, `${servedDuringReload.length} แถว`),
+    line('โหลดเสร็จแล้ว cache ต้องเป็นชุดใหม่', afterReload.rows > 0 && afterReload.ageMs < 30000,
+      `${afterReload.rows} แถว อายุ ${Math.round(afterReload.ageMs / 1000)}s`),
+    line('โหลดที่ตกรุ่น ต้องไม่ทับของใหม่', !staleWon, staleWon ? 'ทับแล้ว' : 'cache ว่างตามที่ควร'),
+    line('ทางถอย clear ต้องบล็อกโหลดใหม่', afterClear > 200, `${afterClear} ms`),
     line('เก่าเกินเพดาน 1 ชม. ต้องไม่ถูกคืน', tooStale > 200, `${tooStale} ms`),
   ];
   const pass = r.every(Boolean);
