@@ -22,3 +22,13 @@ dist/
 # Database dumps — มี PII ลูกค้าและ password hash ห้าม commit
 backup/
 *.dump
+
+# สำเนาทดสอบที่ scripts/diag/customerSearchEval.ts สร้างตอนรันแล้วลบทิ้ง
+services/__customerServiceEval.gen.ts
+
+# ชุดข้อมูลที่ scripts/diag/customerSearchEval.ts สร้างเอง — มีคำค้นจริงจากแชท
+# (ชื่อบริษัท/ชื่อผู้ติดต่อลูกค้า) เข้าข่าย PII เหมือน backup/ ด้านบน จึงไม่ commit
+# ถ้าไฟล์หาย รันใหม่ได้: npm run diag:customer-search -- --refresh-corpus --save
+data/eval/customer_search_corpus.json
+data/eval/customer_search_baseline.json
+data/eval/customer_search_llm_cache.json

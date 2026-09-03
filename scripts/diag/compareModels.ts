@@ -18,6 +18,9 @@ const MODELS = process.argv.slice(2).filter(Boolean);
 const MODEL_LIST = MODELS.length ? MODELS : ['deepseek-v4-flash', 'deepseek-chat'];
 const REPEATS = Number(process.env.REPEATS || 2);
 const CONCURRENCY = Number(process.env.CONCURRENCY || 4);
+// temperature ต้องตรงกับ production (createChatCompletion ใช้ 0) ไม่งั้นตัวเลข correctness
+// จะเพี้ยนเพราะ default ของ DeepSeek คือ 1.0 = สุ่มตามความน่าจะเป็น
+const TEMPERATURE = Number(process.env.TEMPERATURE ?? 0);
 
 const GREEN = '\x1b[32m', RED = '\x1b[31m', DIM = '\x1b[2m', BOLD = '\x1b[1m', YEL = '\x1b[33m', CYA = '\x1b[36m', RESET = '\x1b[0m';
 
@@ -48,6 +51,7 @@ async function oneCall(spec: string, c: (typeof CASES)[number]): Promise<CallRes
       messages: [{ role: 'user', content: buildExtractionPrompt(c.message) }],
       response_format: { type: 'json_object' },
       max_tokens: 8192,
+      temperature: TEMPERATURE,
       ...extra,
     } as any);
     const raw = res.choices[0]?.message?.content || '';
@@ -90,7 +94,7 @@ async function main() {
     for (let r = 0; r < REPEATS; r++)
       for (const c of CASES) jobs.push({ model, c });
 
-  console.log(`${BOLD}Model Comparison${RESET} — models=[${YEL}${MODEL_LIST.join(', ')}${RESET}] × ${CASES.length} เคส × ${REPEATS} รอบ = ${jobs.length} calls (concurrency ${CONCURRENCY})`);
+  console.log(`${BOLD}Model Comparison${RESET} — models=[${YEL}${MODEL_LIST.join(', ')}${RESET}] × ${CASES.length} เคส × ${REPEATS} รอบ = ${jobs.length} calls (concurrency ${CONCURRENCY}, temperature ${TEMPERATURE})`);
   console.log(`${DIM}กำลังรัน... อาจใช้เวลาสักครู่${RESET}\n`);
 
   const t0 = Date.now();
@@ -153,7 +157,6 @@ async function main() {
   }
 
   console.log('');
-  process.exit(0);
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+main().catch((e) => { console.error(e); process.exitCode = 1; });

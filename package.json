@@ -42,6 +42,7 @@
     "diag:company-name": "tsx scripts/diag/companyNameConsistencySmoke.ts",
     "diag:contact-scope": "tsx scripts/diag/contactScopeSmoke.ts",
     "diag:sync-api": "tsx scripts/diag/syncApiSmoke.ts",
+    "diag:customer-search": "tsx scripts/diag/customerSearchEval.ts",
     "backfill:contacts": "tsx scripts/backfillContactsFromSaleOrders.ts",
     "backfill:delivery-terms": "tsx scripts/backfillDeliveryTerms.ts",
     "backfill:print-snapshot": "tsx scripts/backfillPrintSnapshot.ts",
