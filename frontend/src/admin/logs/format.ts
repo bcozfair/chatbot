@@ -145,7 +145,14 @@ export function entityLabel(t: string | null): string {
 
 const OP_LABELS: Record<string, string> = {
   insert: 'เพิ่ม', update: 'แก้ไข', delete: 'ลบ', view: 'เข้าดู', export: 'ส่งออก',
+  // คำสั่งเดียวที่กระทบเกินเพดาน — trigger ยุบเหลือแถวสรุปแถวเดียว (ดู audit_stmt ใน migration)
+  bulk_insert: 'เพิ่มยกชุด', bulk_update: 'แก้ไขยกชุด', bulk_delete: 'ลบยกชุด',
 };
+
+/** แถวสรุปของการกดยกชุด — หน้าจอต้องแสดงต่างจากการแก้รายตัว ห้ามให้ดูเหมือนกัน */
+export function isBulk(action: string): boolean {
+  return action.includes('.bulk_');
+}
 
 /** 'promotion.update' → 'แก้ไข โปรโมชันส่วนลด' — ผู้ใช้ไม่ควรต้องอ่านชื่อตารางในระบบ */
 export function actionLabel(action: string): string {

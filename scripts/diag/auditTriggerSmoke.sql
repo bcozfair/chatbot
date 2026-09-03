@@ -1,5 +1,5 @@
 -- ─────────────────────────────────────────────────────────────────────────────
---  ชุดตรวจ trigger บันทึกการแก้ไข (audit_row) — รันซ้ำได้ทุกครั้งที่แก้ 2026-09-03_02_audit_logs.sql
+--  ชุดตรวจ trigger บันทึกการแก้ไข (audit_stmt) — รันซ้ำได้ทุกครั้งที่แก้ 2026-09-03_02_audit_logs.sql
 --
 --  ⚠️ รันบน DB ชั่วคราวเท่านั้น ห้ามรันกับ chatbot_primus — สคริปต์นี้ INSERT/DELETE ข้อมูลจริง
 --     และแก้ constraint ของ audit_logs ชั่วคราวเพื่อจงใจทำให้ trigger ล้ม
@@ -155,21 +155,103 @@ DELETE FROM public.promotions WHERE code LIKE 'SMOKE-%';
 DO $t$
 DECLARE v_bad text;
 BEGIN
-  SELECT string_agg(c.relname, ', ') INTO v_bad
+  SELECT string_agg(DISTINCT c.relname, ', ') INTO v_bad
     FROM pg_trigger tg
     JOIN pg_class c ON c.oid = tg.tgrelid
-   WHERE tg.tgname = 'trg_audit'
+   WHERE tg.tgname LIKE 'trg_audit%'
      AND c.relname IN ('quotations','quotation_counters','messages','products','customers',
                        'sale_orders','api_logs','system_logs','audit_logs');
-  PERFORM pg_temp.check('9 ตารางต้องห้าม (ใบเสนอราคา/แชท/sync/log) ไม่มี trg_audit',
+  PERFORM pg_temp.check('9 ตารางต้องห้าม (ใบเสนอราคา/แชท/sync/log) ไม่มี trigger บันทึกการแก้ไข',
     v_bad IS NULL, COALESCE('พบที่: ' || v_bad, 'สะอาด'));
 
-  PERFORM pg_temp.check('9b ตารางตั้งค่าติด trg_audit ครบ 11 ตัว',
-    (SELECT count(*) FROM pg_trigger tg JOIN pg_class c ON c.oid = tg.tgrelid
-      WHERE tg.tgname = 'trg_audit') = 11,
-    format('%s ตัว', (SELECT count(*) FROM pg_trigger WHERE tgname = 'trg_audit')));
+  -- statement-level + transition table รวมหลาย event ในคำสั่งเดียวไม่ได้
+  -- ⇒ ตารางละ 3 ตัว (ins/upd/del) · 11 ตาราง = 33 ตัว · ขาดตัวใดตัวหนึ่ง = มีช่องที่ไม่ถูกบันทึก
+  PERFORM pg_temp.check('9b ตารางตั้งค่าติดครบตารางละ 3 ตัว (ins/upd/del) รวม 11 ตาราง',
+    (SELECT count(*) FROM (
+       SELECT tg.tgrelid FROM pg_trigger tg
+        WHERE tg.tgname IN ('trg_audit_ins','trg_audit_upd','trg_audit_del')
+        GROUP BY tg.tgrelid HAVING count(*) = 3) s) = 11,
+    format('%s ตาราง / %s trigger',
+      (SELECT count(*) FROM (SELECT tgrelid FROM pg_trigger
+         WHERE tgname IN ('trg_audit_ins','trg_audit_upd','trg_audit_del')
+         GROUP BY tgrelid HAVING count(*) = 3) s2),
+      (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'trg_audit%')));
+
+  PERFORM pg_temp.check('9c ไม่เหลือ trigger แบบรายแถวของรุ่นก่อน (trg_audit) ค้างอยู่',
+    (SELECT count(*) FROM pg_trigger WHERE tgname = 'trg_audit') = 0
+    AND to_regprocedure('public.audit_row()') IS NULL,
+    'ถอดออกครบ');
 END;
 $t$;
+
+-- ── 10. เส้นทาง "ยกชุด" ─────────────────────────────────────────────────────
+--  เหตุผลที่ต้องมีข้อนี้: วัดจริงแล้วการกด "ยกทั้งสายการผลิต" 35,141 รายการ ถ้าเขียนรายแถว
+--  จะได้ audit 35,141 แถวจากการกดครั้งเดียว ซึ่งกลบรายการแก้ไขจริงจนหน้าจออ่านไม่ออก
+DELETE FROM public.promotions WHERE code LIKE 'BULK-%';
+TRUNCATE public.audit_logs RESTART IDENTITY;
+
+DO $t$
+DECLARE
+  v_row public.audit_logs%ROWTYPE;
+  v_n   integer;
+BEGIN
+  -- 10a คำสั่งเล็ก (ต่ำกว่าเพดาน 50) ⇒ ต้องได้รายละเอียดรายแถวเหมือนเดิมทุกประการ
+  INSERT INTO public.promotions (code, name, discount_type, discount_value, is_active)
+  SELECT 'BULK-' || g, 'ทดสอบยกชุด', 'percent', 5, true FROM generate_series(1, 10) g;
+
+  SELECT count(*) INTO v_n FROM public.audit_logs;
+  PERFORM pg_temp.check('10a คำสั่งเดียวเพิ่ม 10 แถว (ต่ำกว่าเพดาน) ⇒ เขียน audit รายแถวครบ 10',
+    v_n = 10, format('%s แถว', v_n));
+
+  SELECT * INTO v_row FROM public.audit_logs ORDER BY id DESC LIMIT 1;
+  PERFORM pg_temp.check('10b แถวรายตัวยังเก็บทั้งแถวไว้ใน after เหมือนเดิม',
+    v_row.action = 'promotion.insert' AND v_row."after" ->> 'code' LIKE 'BULK-%'
+    AND v_row.entity_id IS NOT NULL,
+    format('action=%s code=%s', v_row.action, v_row."after" ->> 'code'));
+
+  -- 10b UPDATE ยกชุดเกินเพดาน ⇒ ต้องยุบเหลือแถวสรุปแถวเดียว
+  TRUNCATE public.audit_logs RESTART IDENTITY;
+  DELETE FROM public.promotions WHERE code LIKE 'BULK-%';
+  INSERT INTO public.promotions (code, name, discount_type, discount_value, is_active)
+  SELECT 'BULK-' || g, 'ทดสอบยกชุด', 'percent', 5, true FROM generate_series(1, 120) g;
+  TRUNCATE public.audit_logs RESTART IDENTITY;
+
+  UPDATE public.promotions SET discount_value = 7 WHERE code LIKE 'BULK-%';
+
+  SELECT count(*) INTO v_n FROM public.audit_logs;
+  PERFORM pg_temp.check('10c คำสั่งเดียวแก้ 120 แถว (เกินเพดาน) ⇒ เขียน audit แถวเดียว',
+    v_n = 1, format('%s แถว', v_n));
+
+  SELECT * INTO v_row FROM public.audit_logs ORDER BY id DESC LIMIT 1;
+  PERFORM pg_temp.check('10d แถวสรุปบอกจำนวนจริง และแยกออกจากการแก้รายตัวได้จาก action',
+    v_row.action = 'promotion.bulk_update' AND (v_row."after" ->> 'rows')::int = 120,
+    format('action=%s rows=%s', v_row.action, v_row."after" ->> 'rows'));
+  PERFORM pg_temp.check('10e แถวสรุปบอกช่องที่เปลี่ยน และไม่ยัดค่าเดิมทั้งก้อนมาให้',
+    v_row.changed_cols @> ARRAY['discount_value'] AND v_row."before" IS NULL,
+    array_to_string(v_row.changed_cols, ','));
+  PERFORM pg_temp.check('10f แถวสรุปเก็บตัวอย่างรายการที่กระทบไว้ให้ตามรอยต่อได้',
+    jsonb_array_length(v_row."after" -> 'sample') = 20,
+    format('%s รายการ', jsonb_array_length(v_row."after" -> 'sample')));
+
+  -- 10g กดซ้ำด้วยค่าเดิมยกชุด ⇒ ต้องไม่เขียนอะไรเลย (เคสที่พบบ่อยที่สุดของการกดยกสาย)
+  TRUNCATE public.audit_logs RESTART IDENTITY;
+  UPDATE public.promotions SET discount_value = 7, updated_at = now() WHERE code LIKE 'BULK-%';
+  SELECT count(*) INTO v_n FROM public.audit_logs;
+  PERFORM pg_temp.check('10g กดยกชุดซ้ำด้วยค่าเดิม ⇒ ไม่เขียน log สักแถว',
+    v_n = 0, format('%s แถว', v_n));
+
+  -- 10h DELETE ยกชุด
+  TRUNCATE public.audit_logs RESTART IDENTITY;
+  DELETE FROM public.promotions WHERE code LIKE 'BULK-%';
+  SELECT * INTO v_row FROM public.audit_logs ORDER BY id DESC LIMIT 1;
+  SELECT count(*) INTO v_n FROM public.audit_logs;
+  PERFORM pg_temp.check('10h ลบยกชุด 120 แถว ⇒ สรุปแถวเดียว action=promotion.bulk_delete',
+    v_n = 1 AND v_row.action = 'promotion.bulk_delete' AND (v_row."after" ->> 'rows')::int = 120,
+    format('%s แถว action=%s rows=%s', v_n, v_row.action, v_row."after" ->> 'rows'));
+END;
+$t$;
+
+DELETE FROM public.promotions WHERE code LIKE 'BULK-%';
 
 SELECT seq, result, name, detail FROM t_result ORDER BY seq;
 

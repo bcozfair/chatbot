@@ -80,104 +80,235 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_pending
   ON public.audit_logs (occurred_at) WHERE actor_type = 'pending';
 
 -- ─────────────────────────────────────────────────────────────────────────────
+--  กติกาที่ทุกจุดใช้ร่วมกัน — แยกเป็นฟังก์ชันเพื่อให้ "แก้ที่เดียวแล้วมีผลทั้งระบบ"
+--  (ถ้าวันหน้าต้องเพิ่มช่องที่ต้องปิดบัง หรือเปลี่ยนวิธีรู้ว่าใครเป็นคนแก้ ให้แก้แค่ 3 ฟังก์ชันนี้)
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- ช่องที่ห้ามหลุดลง log ไม่ว่าตารางไหน — ตัดทิ้งก่อนเขียนเสมอ
+CREATE OR REPLACE FUNCTION public.audit_redact_cols() RETURNS text[]
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS
+$$ SELECT ARRAY['password_hash', 'password', 'token', 'secret', 'api_key'] $$;
+
+-- UPDATE ที่เปลี่ยนแค่ช่องเหล่านี้ = การกดบันทึกที่ไม่ได้แก้อะไรจริง ⇒ ไม่เขียน log
+CREATE OR REPLACE FUNCTION public.audit_noise_cols() RETURNS text[]
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS
+$$ SELECT ARRAY['updated_at', 'created_at'] $$;
+
+-- ใครเป็นคนแก้ — 2 ทาง
+--   1. แอปบอกมาตรง ๆ ด้วย SET LOCAL app.actor = '<id>|<ชื่อ>' (ขั้น B ของแผน · ทยอยเติมทีละ endpoint)
+--   2. ไม่มี ⇒ ทิ้งไว้เป็น pending ให้ logworker ไปเทียบเวลากับ api_logs เอา (ขั้น A · ใช้ได้ตั้งแต่วันแรก)
+-- current_setting(..., true) = missing_ok ⇒ คืน NULL แทนที่จะ error เมื่อยังไม่มีใครตั้งค่า
+CREATE OR REPLACE FUNCTION public.audit_actor_ctx() RETURNS jsonb
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS
+$fn$
+DECLARE
+  v_raw text := NULLIF(current_setting('app.actor', true), '');
+BEGIN
+  RETURN jsonb_build_object(
+    'request_id', NULLIF(current_setting('app.request_id', true), ''),
+    'ip',         NULLIF(current_setting('app.client_ip',  true), ''),
+    'actor_type', CASE WHEN v_raw IS NULL THEN 'pending' ELSE 'admin'  END,
+    'actor_src',  CASE WHEN v_raw IS NULL THEN NULL      ELSE 'direct' END,
+    'actor_id',   CASE WHEN v_raw IS NULL THEN NULL      ELSE split_part(v_raw, '|', 1) END,
+    'actor_name', CASE WHEN v_raw IS NULL THEN NULL      ELSE NULLIF(split_part(v_raw, '|', 2), '') END
+  );
+END;
+$fn$;
+
+-- ─────────────────────────────────────────────────────────────────────────────
 --  trigger กลางตัวเดียว ใช้ซ้ำทุกตารางผ่าน TG_ARGV
 --    TG_ARGV[0] = entity_type            เช่น 'promotion'
 --    TG_ARGV[1] = คอลัมน์ที่ใช้เป็นชื่อให้คนอ่าน (เว้นว่างได้)
 --    TG_ARGV[2] = คอลัมน์ primary key    (ไม่ใส่ = 'id')
+--
+--  ══ ทำไมเป็น FOR EACH STATEMENT ไม่ใช่ FOR EACH ROW ══
+--  ของเดิมเป็น row-level แล้ววัดจริงบนข้อมูลจริงพบว่า POST /api/admin/stock-rules แบบ
+--  "ยกทั้งสายการผลิต" (สายใหญ่สุด 35,141 รายการ) ทำให้:
+--     เวลา 672 ms → 4,106 ms (ช้าลง 6 เท่า)  และเขียน audit 35,141 แถวจากการกดปุ่มครั้งเดียว
+--  ซึ่งจะกลบรายการแก้ไขจริงในหน้าจอจนอ่านไม่ออก — ตารางที่ควรเป็น "หลักฐาน" กลายเป็นกองขยะ
+--
+--  statement-level + transition table แก้ทั้งสองข้อพร้อมกัน:
+--     คำสั่งเล็ก (≤ BULK_THRESHOLD แถว) → เขียนรายตัวเหมือนเดิมเป๊ะ ได้ค่าเดิม→ค่าใหม่ครบ
+--     คำสั่งใหญ่                        → เขียนสรุปแถวเดียว บอกจำนวน ช่องที่เปลี่ยน และตัวอย่างรายการ
+--  ⇒ การแก้จากหน้าจอ (ทีละตัว) ได้รายละเอียดเท่าเดิม · การกดยกชุดไม่ทำให้ตารางบวมและไม่ช้า
+--
+--  ⚠️ ข้อแลกเปลี่ยนที่ยอมรับแล้ว: ของเดิมถ้า audit พังจะหายทีละ 1 แถว ตอนนี้จะหายทั้งคำสั่ง
+--     แต่ "งานของผู้ใช้ต้องผ่านเสมอ" ยังเหมือนเดิม เพราะ EXCEPTION WHEN OTHERS ยังอยู่ที่เดิม
+--
+--  ⚠️ transition table ประกาศรวมหลาย event ในคำสั่งเดียวไม่ได้ (ข้อจำกัดของ PostgreSQL)
+--     ⇒ ต้องแยกเป็น trg_audit_ins / trg_audit_upd / trg_audit_del ตารางละ 3 ตัว
 -- ─────────────────────────────────────────────────────────────────────────────
-CREATE OR REPLACE FUNCTION public.audit_row() RETURNS trigger
+CREATE OR REPLACE FUNCTION public.audit_stmt() RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $fn$
 DECLARE
-  -- ช่องที่ห้ามหลุดลง log ไม่ว่าตารางไหน — ตัดทิ้งก่อนเขียนเสมอ
-  REDACT       CONSTANT text[] := ARRAY['password_hash', 'password', 'token', 'secret', 'api_key'];
-  -- UPDATE ที่เปลี่ยนแค่ช่องเหล่านี้ = การกดบันทึกที่ไม่ได้แก้อะไรจริง ⇒ ไม่เขียน log
-  NOISE_ONLY   CONSTANT text[] := ARRAY['updated_at', 'created_at'];
+  -- เกินเท่านี้ = "การกดยกชุด" ไม่ใช่ "การแก้ทีละรายการ" ⇒ เก็บเป็นสรุป
+  -- 50 มาจาก: การเลือกด้วยมือในหน้าจอแทบไม่เกินไม่กี่สิบ ส่วนการยกทั้งสายเป็นหลักพันขึ้นไป
+  BULK_THRESHOLD CONSTANT int := 50;
+  -- เก็บตัวอย่างรายการที่กระทบไว้เท่านี้ในแถวสรุป — พอให้ตามรอยต่อได้ว่าเป็นชุดไหน
+  SAMPLE_SIZE    CONSTANT int := 20;
 
-  v_entity     text := TG_ARGV[0];
-  v_label_col  text := NULLIF(TG_ARGV[1], '');
-  v_pk_col     text := COALESCE(NULLIF(TG_ARGV[2], ''), 'id');
+  v_entity    text := TG_ARGV[0];
+  v_label_col text := NULLIF(TG_ARGV[1], '');
+  v_pk_col    text := COALESCE(NULLIF(TG_ARGV[2], ''), 'id');
 
-  v_old        jsonb;
-  v_new        jsonb;
-  v_before     jsonb;
-  v_after      jsonb;
-  v_changed    text[];
-  v_row        jsonb;
-  v_actor_raw  text;
-  v_actor_id   text;
-  v_actor_name text;
-  v_actor_type text;
-  v_actor_src  text;
-  v_request_id text;
-  v_ip         text;
+  v_redact text[] := public.audit_redact_cols();
+  v_noise  text[] := public.audit_noise_cols();
+  v_ctx    jsonb  := public.audit_actor_ctx();
+
+  v_count  int;      -- จำนวนแถวที่เปลี่ยน "จริง"
+  v_cols   text[];   -- ช่องทั้งหมดที่เปลี่ยนในคำสั่งนี้ (รวมทุกแถว)
+  v_detail jsonb;    -- รายละเอียดรายแถว — เก็บแค่ BULK_THRESHOLD แถวแรกเท่านั้น
+  v_sample jsonb;    -- ตัวอย่าง pk สำหรับแถวสรุป
+  d        jsonb;
 BEGIN
-  v_old := CASE WHEN TG_OP = 'INSERT' THEN NULL ELSE to_jsonb(OLD) - REDACT END;
-  v_new := CASE WHEN TG_OP = 'DELETE' THEN NULL ELSE to_jsonb(NEW) - REDACT END;
-
   IF TG_OP = 'UPDATE' THEN
-    -- ช่องที่ค่าต่างจริง ๆ (IS DISTINCT FROM ⇒ NULL↔ค่า ก็นับว่าเปลี่ยน)
-    SELECT array_agg(k ORDER BY k) INTO v_changed
-      FROM (
-        SELECT key AS k FROM jsonb_each(v_old) o WHERE v_new -> o.key IS DISTINCT FROM o.value
-        UNION
-        SELECT key AS k FROM jsonb_each(v_new) n WHERE v_old -> n.key IS DISTINCT FROM n.value
-      ) s;
+    WITH o AS MATERIALIZED (SELECT (to_jsonb(t) - v_redact) AS j FROM audit_old t),
+         n AS MATERIALIZED (SELECT (to_jsonb(t) - v_redact) AS j FROM audit_new t),
+         pair AS (
+           SELECT o.j AS oj, n.j AS nj
+             FROM o JOIN n ON o.j ->> v_pk_col = n.j ->> v_pk_col
+         ),
+         chg AS (
+           -- ตัวกรองราคาถูก: เทียบทั้งก้อนครั้งเดียวต่อแถว หลังถอดช่องที่ไม่นับว่าเป็นการแก้ไข
+           -- (ของเดิมแตกเป็น key/value ทุกแถวก่อนค่อยตัดสิน ซึ่งแพงกว่ามากตอนกดยกชุด)
+           SELECT oj, nj, row_number() OVER () AS rn
+             FROM pair
+            WHERE (oj - v_noise) IS DISTINCT FROM (nj - v_noise)
+         )
+    SELECT
+      (SELECT count(*)::int FROM chg),
+      -- ช่องที่เปลี่ยน: ดูทางเดียวพอ — to_jsonb ของแถวในตารางเดียวกันมีคีย์ครบเท่ากันเสมอ
+      -- จึงไม่มีทางที่ "ช่องหายไป" ต้องไล่ทาง old → new อีกรอบ
+      (SELECT array_agg(DISTINCT e.key ORDER BY e.key)
+         FROM chg c, LATERAL jsonb_each(c.nj) e
+        WHERE c.oj -> e.key IS DISTINCT FROM e.value),
+      -- รายละเอียดรายแถว — คิดเฉพาะแถวที่จะเขียนจริงเท่านั้น
+      (SELECT jsonb_agg(jsonb_build_object(
+                'pk',    c.nj ->> v_pk_col,
+                'label', CASE WHEN v_label_col IS NULL THEN NULL ELSE c.nj ->> v_label_col END,
+                'ch',    (SELECT jsonb_agg(e.key ORDER BY e.key)
+                            FROM jsonb_each(c.nj) e WHERE c.oj -> e.key IS DISTINCT FROM e.value),
+                'b',     (SELECT jsonb_object_agg(e.key, c.oj -> e.key)
+                            FROM jsonb_each(c.nj) e WHERE c.oj -> e.key IS DISTINCT FROM e.value),
+                'a',     (SELECT jsonb_object_agg(e.key, e.value)
+                            FROM jsonb_each(c.nj) e WHERE c.oj -> e.key IS DISTINCT FROM e.value)
+              ) ORDER BY c.rn)
+         FROM chg c WHERE c.rn <= BULK_THRESHOLD),
+      (SELECT jsonb_agg(c.nj ->> v_pk_col ORDER BY c.rn) FROM chg c WHERE c.rn <= SAMPLE_SIZE)
+    INTO v_count, v_cols, v_detail, v_sample;
 
-    -- ไม่เปลี่ยนอะไรเลย หรือเปลี่ยนแต่ timestamp ⇒ ไม่มีอะไรให้บันทึก
-    IF v_changed IS NULL OR v_changed <@ NOISE_ONLY THEN
+  ELSE
+    -- INSERT / DELETE — ทั้งแถวคือเนื้อหา ไม่ต้องเทียบอะไร
+    -- นับก่อนแล้วค่อยตัดสินใจ ⇒ คำสั่งใหญ่ไม่ต้องแปลงทุกแถวเป็น jsonb ทิ้งเปล่า ๆ
+    IF TG_OP = 'INSERT' THEN
+      SELECT count(*)::int INTO v_count FROM audit_new;
+    ELSE
+      SELECT count(*)::int INTO v_count FROM audit_old;
+    END IF;
+
+    IF COALESCE(v_count, 0) = 0 THEN
       RETURN NULL;
     END IF;
 
-    -- เก็บเฉพาะช่องที่เปลี่ยน — นั่นคือคำถามที่ตารางนี้ตอบ และทำให้แถวเล็กพอเก็บ 2 ปีได้สบาย
-    SELECT jsonb_object_agg(k, v_old -> k) INTO v_before FROM unnest(v_changed) k;
-    SELECT jsonb_object_agg(k, v_new -> k) INTO v_after  FROM unnest(v_changed) k;
-  ELSE
-    v_before := v_old;
-    v_after  := v_new;
-    SELECT array_agg(key ORDER BY key) INTO v_changed FROM jsonb_each(COALESCE(v_new, v_old));
+    IF v_count <= BULK_THRESHOLD THEN
+      IF TG_OP = 'INSERT' THEN
+        SELECT jsonb_agg(jsonb_build_object(
+                 'pk', j ->> v_pk_col,
+                 'label', CASE WHEN v_label_col IS NULL THEN NULL ELSE j ->> v_label_col END,
+                 'ch', (SELECT jsonb_agg(e.key ORDER BY e.key) FROM jsonb_each(j) e),
+                 'b', NULL, 'a', j)),
+               (SELECT array_agg(e.key ORDER BY e.key)
+                  FROM jsonb_each((SELECT to_jsonb(t) - v_redact FROM audit_new t LIMIT 1)) e)
+          INTO v_detail, v_cols
+          FROM (SELECT (to_jsonb(t) - v_redact) AS j FROM audit_new t) s;
+      ELSE
+        SELECT jsonb_agg(jsonb_build_object(
+                 'pk', j ->> v_pk_col,
+                 'label', CASE WHEN v_label_col IS NULL THEN NULL ELSE j ->> v_label_col END,
+                 'ch', (SELECT jsonb_agg(e.key ORDER BY e.key) FROM jsonb_each(j) e),
+                 'b', j, 'a', NULL)),
+               (SELECT array_agg(e.key ORDER BY e.key)
+                  FROM jsonb_each((SELECT to_jsonb(t) - v_redact FROM audit_old t LIMIT 1)) e)
+          INTO v_detail, v_cols
+          FROM (SELECT (to_jsonb(t) - v_redact) AS j FROM audit_old t) s;
+      END IF;
+    ELSE
+      -- ยกชุด: ต้องการแค่ชุดคอลัมน์กับตัวอย่าง ⇒ แตะแค่ไม่กี่แถว ไม่ใช่ทั้งคำสั่ง
+      IF TG_OP = 'INSERT' THEN
+        SELECT array_agg(e.key ORDER BY e.key) INTO v_cols
+          FROM jsonb_each((SELECT to_jsonb(t) - v_redact FROM audit_new t LIMIT 1)) e;
+        SELECT jsonb_agg(j ->> v_pk_col) INTO v_sample
+          FROM (SELECT to_jsonb(t) AS j FROM audit_new t LIMIT SAMPLE_SIZE) s;
+      ELSE
+        SELECT array_agg(e.key ORDER BY e.key) INTO v_cols
+          FROM jsonb_each((SELECT to_jsonb(t) - v_redact FROM audit_old t LIMIT 1)) e;
+        SELECT jsonb_agg(j ->> v_pk_col) INTO v_sample
+          FROM (SELECT to_jsonb(t) AS j FROM audit_old t LIMIT SAMPLE_SIZE) s;
+      END IF;
+    END IF;
   END IF;
 
-  v_row := COALESCE(v_new, v_old);
-
-  -- ใครเป็นคนแก้ — 2 ทาง
-  --   1. แอปบอกมาตรง ๆ ด้วย SET LOCAL app.actor = '<id>|<ชื่อ>' (ขั้น B ของแผน · ทยอยเติมทีละ endpoint)
-  --   2. ไม่มี ⇒ ทิ้งไว้เป็น pending ให้ logworker ไปเทียบเวลากับ api_logs เอา (ขั้น A · ใช้ได้ตั้งแต่วันแรก)
-  -- current_setting(..., true) = missing_ok ⇒ คืน NULL แทนที่จะ error เมื่อยังไม่มีใครตั้งค่า
-  v_actor_raw  := NULLIF(current_setting('app.actor', true), '');
-  v_request_id := NULLIF(current_setting('app.request_id', true), '');
-  v_ip         := NULLIF(current_setting('app.client_ip', true), '');
-
-  IF v_actor_raw IS NOT NULL THEN
-    v_actor_id   := split_part(v_actor_raw, '|', 1);
-    v_actor_name := NULLIF(split_part(v_actor_raw, '|', 2), '');
-    v_actor_type := 'admin';
-    v_actor_src  := 'direct';
-  ELSE
-    v_actor_type := 'pending';
+  -- ไม่มีอะไรเปลี่ยนจริง (คำสั่งไม่โดนแถวไหน หรือ UPDATE ที่แตะแค่ timestamp) ⇒ ไม่เขียน log
+  IF COALESCE(v_count, 0) = 0 THEN
+    RETURN NULL;
   END IF;
 
-  INSERT INTO public.audit_logs (
-    request_id, actor_type, actor_id, actor_name, actor_source,
-    action, entity_type, entity_id, entity_label, changed_cols, "before", "after", ip
-  ) VALUES (
-    left(v_request_id, 16), v_actor_type, left(v_actor_id, 60), left(v_actor_name, 120), v_actor_src,
-    v_entity || '.' || lower(TG_OP),
-    v_entity,
-    left(v_row ->> v_pk_col, 80),
-    CASE WHEN v_label_col IS NULL THEN NULL ELSE left(v_row ->> v_label_col, 200) END,
-    v_changed, v_before, v_after,
-    left(v_ip, 45)
-  );
+  IF v_count <= BULK_THRESHOLD THEN
+    -- เส้นทางปกติ — รายละเอียดครบเท่าเดิมทุกช่อง
+    FOR d IN SELECT * FROM jsonb_array_elements(v_detail) LOOP
+      INSERT INTO public.audit_logs (
+        request_id, actor_type, actor_id, actor_name, actor_source,
+        action, entity_type, entity_id, entity_label, changed_cols, "before", "after", ip
+      ) VALUES (
+        left(v_ctx ->> 'request_id', 16),
+        v_ctx ->> 'actor_type',
+        left(v_ctx ->> 'actor_id', 60),
+        left(v_ctx ->> 'actor_name', 120),
+        v_ctx ->> 'actor_src',
+        v_entity || '.' || lower(TG_OP),
+        v_entity,
+        left(d ->> 'pk', 80),
+        left(d ->> 'label', 200),
+        ARRAY(SELECT jsonb_array_elements_text(d -> 'ch')),
+        NULLIF(d -> 'b', 'null'::jsonb),
+        NULLIF(d -> 'a', 'null'::jsonb),
+        left(v_ctx ->> 'ip', 45)
+      );
+    END LOOP;
+  ELSE
+    -- เส้นทางยกชุด — สรุปแถวเดียวต่อ 1 คำสั่ง
+    INSERT INTO public.audit_logs (
+      request_id, actor_type, actor_id, actor_name, actor_source,
+      action, entity_type, entity_id, entity_label, changed_cols, "before", "after", ip, note
+    ) VALUES (
+      left(v_ctx ->> 'request_id', 16),
+      v_ctx ->> 'actor_type',
+      left(v_ctx ->> 'actor_id', 60),
+      left(v_ctx ->> 'actor_name', 120),
+      v_ctx ->> 'actor_src',
+      v_entity || '.bulk_' || lower(TG_OP),
+      v_entity,
+      NULL,
+      to_char(v_count, 'FM999,999,999') || ' รายการ',
+      v_cols,
+      NULL,
+      jsonb_build_object('rows', v_count, 'sample', v_sample),
+      left(v_ctx ->> 'ip', 45),
+      format('คำสั่งเดียวกระทบ %s รายการ (เกินเพดาน %s) — เก็บเป็นสรุปแถวเดียวแทนรายตัว '
+             'เพื่อไม่ให้บันทึกการแก้ไขรายการอื่นจมหาย · "after" เก็บจำนวนจริงกับตัวอย่าง %s รายการแรกไว้',
+             v_count, BULK_THRESHOLD, SAMPLE_SIZE)
+    );
+  END IF;
 
   RETURN NULL;   -- AFTER trigger — ค่าที่คืนถูกละเลยอยู่แล้ว
 
 EXCEPTION WHEN OTHERS THEN
   -- ⚠️ บรรทัดนี้คือหัวใจของความปลอดภัยทั้งไฟล์ ห้ามลบ
   -- trigger อยู่ใน transaction เดียวกับคำสั่งของผู้ใช้ ถ้าปล่อยให้ error หลุดออกไป
-  -- การกดบันทึกของแอดมินจะ rollback ตาม · ยอมให้ audit หาย 1 แถวดีกว่าทำให้คนทำงานไม่ได้
+  -- การกดบันทึกของแอดมินจะ rollback ตาม · ยอมให้ audit หายดีกว่าทำให้คนทำงานไม่ได้
   RAISE WARNING '[audit] % บน % ล้มเหลว: % (%)', TG_OP, TG_TABLE_NAME, SQLERRM, SQLSTATE;
   RETURN NULL;
 END;
@@ -185,6 +316,7 @@ $fn$;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 --  ติด trigger — 11 ตารางตั้งค่าเท่านั้น (แก้กันวันละไม่กี่ครั้ง)
+--  ตารางละ 3 ตัว (ins/upd/del) เพราะ transition table รวม event ไม่ได้
 --  ทุกตัว DROP ก่อน CREATE ⇒ รันไฟล์นี้ซ้ำได้ และแก้ argument ทีหลังได้ด้วยการรันซ้ำ
 -- ─────────────────────────────────────────────────────────────────────────────
 DO $mk$
@@ -212,14 +344,34 @@ BEGIN
       CONTINUE;
     END IF;
 
-    EXECUTE format('DROP TRIGGER IF EXISTS trg_audit ON public.%I', t.tbl);
+    -- trg_audit = ตัว row-level ของรุ่นก่อน ถอดทิ้งด้วยถ้าเคยรันไฟล์รุ่นเก่ามาแล้ว
+    EXECUTE format('DROP TRIGGER IF EXISTS trg_audit     ON public.%I', t.tbl);
+    EXECUTE format('DROP TRIGGER IF EXISTS trg_audit_ins ON public.%I', t.tbl);
+    EXECUTE format('DROP TRIGGER IF EXISTS trg_audit_upd ON public.%I', t.tbl);
+    EXECUTE format('DROP TRIGGER IF EXISTS trg_audit_del ON public.%I', t.tbl);
+
     EXECUTE format(
-      'CREATE TRIGGER trg_audit AFTER INSERT OR UPDATE OR DELETE ON public.%I
-         FOR EACH ROW EXECUTE FUNCTION public.audit_row(%L, %L, %L)',
+      'CREATE TRIGGER trg_audit_ins AFTER INSERT ON public.%I
+         REFERENCING NEW TABLE AS audit_new
+         FOR EACH STATEMENT EXECUTE FUNCTION public.audit_stmt(%L, %L, %L)',
+      t.tbl, t.entity, t.label_col, t.pk_col);
+    EXECUTE format(
+      'CREATE TRIGGER trg_audit_upd AFTER UPDATE ON public.%I
+         REFERENCING OLD TABLE AS audit_old NEW TABLE AS audit_new
+         FOR EACH STATEMENT EXECUTE FUNCTION public.audit_stmt(%L, %L, %L)',
+      t.tbl, t.entity, t.label_col, t.pk_col);
+    EXECUTE format(
+      'CREATE TRIGGER trg_audit_del AFTER DELETE ON public.%I
+         REFERENCING OLD TABLE AS audit_old
+         FOR EACH STATEMENT EXECUTE FUNCTION public.audit_stmt(%L, %L, %L)',
       t.tbl, t.entity, t.label_col, t.pk_col);
   END LOOP;
 END;
 $mk$;
+
+-- ฟังก์ชัน row-level ของรุ่นก่อนไม่มีใครใช้แล้ว — ไม่ใส่ CASCADE โดยเจตนา
+-- ถ้ายังมี trigger ตัวไหนอ้างอยู่ ให้ล้มตรงนี้ดังกว่าเงียบ ๆ แล้วเหลือของค้าง
+DROP FUNCTION IF EXISTS public.audit_row();
 
 -- ─────────────────────────────────────────────────────────────────────────────
 --  ความถูกต้องแท้จริง (integrity) — ตารางนี้ต้องแก้ย้อนหลังไม่ได้ ตาม พ.ร.บ.คอมพิวเตอร์ ม.26

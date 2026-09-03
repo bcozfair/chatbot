@@ -140,16 +140,30 @@ async function dbChecks(): Promise<void> {
   }
 
   const { rows: bad } = await pool.query<{ relname: string }>(
-    `SELECT c.relname FROM pg_trigger tg JOIN pg_class c ON c.oid = tg.tgrelid
-      WHERE tg.tgname = 'trg_audit'
+    `SELECT DISTINCT c.relname FROM pg_trigger tg JOIN pg_class c ON c.oid = tg.tgrelid
+      WHERE tg.tgname LIKE 'trg_audit%'
         AND c.relname IN ('quotations','quotation_counters','messages','products','customers',
                           'sale_orders','api_logs','system_logs','audit_logs')`);
-  ok('🚫 ตารางต้องห้าม (ใบเสนอราคา/แชท/sync/log) ไม่มี trg_audit',
+  ok('🚫 ตารางต้องห้าม (ใบเสนอราคา/แชท/sync/log) ไม่มี trigger บันทึกการแก้ไข',
     bad.length === 0, bad.map(r => r.relname).join(', ') || 'สะอาด');
 
-  const { rows: cnt } = await pool.query<{ n: number }>(
-    `SELECT count(*)::int AS n FROM pg_trigger WHERE tgname = 'trg_audit'`);
-  ok('ตารางตั้งค่าติด trg_audit ครบ 11 ตัว', cnt[0].n === 11, `${cnt[0].n} ตัว`);
+  // statement-level + transition table รวมหลาย event ในคำสั่งเดียวไม่ได้ ⇒ ตารางละ 3 ตัว
+  // ขาดตัวใดตัวหนึ่งไป = มีช่องทางแก้ข้อมูลที่ไม่ถูกบันทึก ซึ่งมองไม่เห็นจากหน้าจอ
+  const { rows: cnt } = await pool.query<{ tables: number; triggers: number }>(
+    `SELECT (SELECT count(*)::int FROM (
+               SELECT tgrelid FROM pg_trigger
+                WHERE tgname IN ('trg_audit_ins','trg_audit_upd','trg_audit_del')
+                GROUP BY tgrelid HAVING count(*) = 3) s) AS tables,
+            (SELECT count(*)::int FROM pg_trigger WHERE tgname LIKE 'trg_audit%') AS triggers`);
+  ok('ตารางตั้งค่าติดครบตารางละ 3 ตัว (ins/upd/del) รวม 11 ตาราง',
+    cnt[0].tables === 11 && cnt[0].triggers === 33,
+    `${cnt[0].tables} ตาราง / ${cnt[0].triggers} trigger`);
+
+  const { rows: old } = await pool.query<{ n: number }>(
+    `SELECT (SELECT count(*)::int FROM pg_trigger WHERE tgname = 'trg_audit')
+          + (SELECT CASE WHEN to_regprocedure('public.audit_row()') IS NULL THEN 0 ELSE 1 END) AS n`);
+  ok('ไม่เหลือ trigger รายแถวของรุ่นก่อน (trg_audit / audit_row) ค้างอยู่',
+    old[0].n === 0, old[0].n === 0 ? 'ถอดออกครบ' : `เหลือ ${old[0].n} ตัว`);
 
   const { rows: leak } = await pool.query<{ n: number }>(
     `SELECT count(*)::int AS n FROM system_logs

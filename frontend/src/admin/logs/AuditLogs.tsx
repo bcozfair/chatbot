@@ -4,12 +4,12 @@ import { PageHeader } from '../PageHeader';
 import { DateInput } from '../DateInput';
 import {
   History, Download, Loader2, AlertCircle, Search, ChevronLeft, ChevronRight,
-  ChevronDown, ChevronRight as ChevronRightSmall, ArrowRight, Link2,
+  ChevronDown, ChevronRight as ChevronRightSmall, ArrowRight, Link2, Layers,
 } from 'lucide-react';
 import { useHashState } from './useHashState';
 import {
   errMsg, formatDateTime, relativeTime, formatNumber, actorStyle, entityLabel,
-  actionLabel, displayValue, downloadCsv, inputCls, PAGE_SIZE_OPTIONS,
+  actionLabel, displayValue, downloadCsv, inputCls, PAGE_SIZE_OPTIONS, isBulk,
 } from './format';
 import { RequestTimeline } from './RequestTimeline';
 
@@ -61,8 +61,54 @@ function shiftDay(day: string, d: number): string {
   return x.toISOString().slice(0, 10);
 }
 
+/**
+ * แถวสรุปของการกดยกชุด — คำสั่งเดียวที่กระทบเกินเพดาน trigger จะไม่เก็บรายตัว
+ * ต้องบอกให้ชัดว่า "ไม่ได้เก็บค่าเดิม→ค่าใหม่ของแต่ละรายการ" ไม่ใช่ปล่อยให้เข้าใจว่าไม่มีอะไรเปลี่ยน
+ */
+const BulkSummary: React.FC<{ row: AuditRow }> = ({ row }) => {
+  const after = row.after as { rows?: number; sample?: string[] } | null;
+  const total = after?.rows ?? 0;
+  const sample = after?.sample ?? [];
+  return (
+    <div className="space-y-3 text-xs">
+      <div className="flex items-start gap-2 text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+        <Layers className="w-4 h-4 shrink-0 mt-0.5" />
+        <span>
+          คำสั่งเดียวกระทบ <strong className="tabular-nums">{formatNumber(total)}</strong> รายการ
+          จึงเก็บเป็นสรุปแถวเดียว — ไม่ได้เก็บค่าเดิม → ค่าใหม่ของแต่ละรายการไว้
+        </span>
+      </div>
+      {(row.changed_cols?.length ?? 0) > 0 && (
+        <div>
+          <div className="text-slate-400 mb-1">ช่องที่เปลี่ยน</div>
+          <div className="flex flex-wrap gap-1.5">
+            {row.changed_cols!.map(c => (
+              <span key={c} className="font-mono bg-slate-100 text-slate-600 rounded px-1.5 py-0.5">{c}</span>
+            ))}
+          </div>
+        </div>
+      )}
+      {sample.length > 0 && (
+        <div>
+          <div className="text-slate-400 mb-1">
+            ตัวอย่างรายการที่กระทบ ({sample.length} จาก {formatNumber(total)})
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {sample.map((s, i) => (
+              <span key={`${s}-${i}`} className="font-mono bg-slate-100 text-slate-600 rounded px-1.5 py-0.5 break-all">{s}</span>
+            ))}
+          </div>
+        </div>
+      )}
+      {row.note && <div className="text-slate-400 leading-relaxed">{row.note}</div>}
+    </div>
+  );
+};
+
 /** ตารางเทียบค่าเดิม → ค่าใหม่ ทีละช่อง */
 const DiffTable: React.FC<{ row: AuditRow }> = ({ row }) => {
+  if (isBulk(row.action)) return <BulkSummary row={row} />;
+
   const cols = row.changed_cols ?? [];
   if (cols.length === 0) {
     return <div className="text-xs text-slate-400">ไม่มีรายละเอียดของช่องที่เปลี่ยน</div>;
@@ -348,6 +394,12 @@ export const AuditLogs: React.FC = () => {
                         {r.changed_cols && r.changed_cols.length > 0 && r.before && r.after && (
                           <span className="text-xs text-slate-400">
                             ({r.changed_cols.length} ช่อง)
+                          </span>
+                        )}
+                        {isBulk(r.action) && (
+                          <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded
+                                           border border-amber-200 bg-amber-50 text-amber-700">
+                            <Layers className="w-3 h-3" />ยกชุด
                           </span>
                         )}
                       </div>
