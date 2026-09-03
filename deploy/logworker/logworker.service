@@ -1,0 +1,74 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  logworker — ตัวเก็บ system log / เติมชื่อผู้แก้ไข / สรุป traffic รายวัน
+#
+#  ⚠️ รันบน host ไม่ใช่ในคอนเทนเนอร์ โดยเจตนา
+#     ถ้าอยู่ในคอนเทนเนอร์ต้อง mount /var/run/docker.sock เข้าไป ซึ่งเท่ากับให้สิทธิ์
+#     เทียบเท่า root ของทั้งเครื่องกับโปรเซสนั้น — แลกไม่คุ้มกับการเก็บ log
+#
+#  ติดตั้ง (ครั้งเดียวต่อ server):
+#    cd /home/app_sales/salechatbot/chatbot/deploy/logworker
+#    npm ci                                     # ~13 MB (แค่ pg + dotenv + tsx ไม่ใช่ทั้งแอป)
+#    ln -sfn ../../deploy/logworker/node_modules ../../scripts/logworker/node_modules
+#    sudo cp logworker.service /etc/systemd/system/
+#    sudo systemctl daemon-reload
+#    sudo systemctl enable --now logworker
+#
+#  ดูสถานะ:  systemctl status logworker
+#  ดู log:   journalctl -u logworker -f
+#  หยุด:     sudo systemctl stop logworker     ← ระบบหลักต้องทำงานปกติทุกอย่างหลังคำสั่งนี้
+#
+#  ⚠️ แก้ User / WorkingDirectory / ExecStart ให้ตรงกับ path จริงของเครื่องก่อนติดตั้ง
+# ─────────────────────────────────────────────────────────────────────────────
+[Unit]
+Description=logworker — เก็บ system log, เติมชื่อผู้แก้ไข, สรุป traffic รายวัน
+Documentation=file:///home/app_sales/salechatbot/chatbot/docs/plan-logging-audit-compliance.md
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# ต้องเป็นผู้ใช้ที่อยู่ในกลุ่ม docker (เรียก `docker logs` ได้โดยไม่ต้อง sudo)
+User=app_sales
+Group=app_sales
+
+# WorkingDirectory ชี้ที่ deploy/logworker เพราะ `--import tsx` ถูกค้นหาจาก CWD
+WorkingDirectory=/home/app_sales/salechatbot/chatbot/deploy/logworker
+ExecStart=/usr/bin/node --import tsx /home/app_sales/salechatbot/chatbot/scripts/logworker/index.ts
+
+# worker ต่อ DB ผ่านพอร์ตที่ publish ออก host (127.0.0.1:5432 จาก docker-compose.override.yml)
+# ไม่ใช่ผ่าน network ภายในของ docker ที่ชื่อ "db" ซึ่ง host ไม่รู้จัก
+Environment=LOGWORKER_PG_HOST=127.0.0.1
+Environment=LOGWORKER_PG_PORT=5432
+Environment=TZ=Asia/Bangkok
+# ค่าที่เหลือ (PG_USER / PG_PASSWORD / PG_DATABASE / SYSTEM_LOG_*) อ่านจาก .env ของโปรเจกต์
+
+# พังแล้วต่อเอง แต่ไม่วนถี่จนกลบสาเหตุใน journal
+Restart=always
+RestartSec=15s
+StartLimitBurst=5
+StartLimitIntervalSec=300
+
+# ปิดตัวให้เรียบร้อย: worker จับ SIGTERM แล้วเขียนของที่ค้างใน buffer ลง DB ก่อนออก
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# จำกัดสิทธิ์เท่าที่จำเป็น — worker แค่อ่าน docker logs กับเขียน DB ไม่ต้องแตะอะไรอีก
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+# ต้องอ่าน .env และ source ในโฟลเดอร์โปรเจกต์ได้ (ProtectHome=read-only ให้อ่านอย่างเดียวอยู่แล้ว)
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+# กันหน่วยความจำรั่วลากทั้งเครื่อง — ปกติใช้ไม่ถึง 100 MB
+MemoryMax=512M
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=logworker
+
+[Install]
+WantedBy=multi-user.target

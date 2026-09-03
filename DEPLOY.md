@@ -312,8 +312,12 @@ ODOO_EXPORT_TAX_QT="Output VAT 7%(Exc)"
 ### ขั้น 4.6 — ตั้งค่า API log (ครั้งเดียว ตอนขึ้นตาราง `api_logs`)
 ```
 API_LOG_ENABLED=false        # ⚠️ ขึ้นครั้งแรกให้ตั้ง false ก่อน
-API_LOG_RETENTION_DAYS=30
+API_LOG_RETENTION_DAYS=120
 ```
+> ⚠️ **ห้ามตั้งต่ำกว่า 90** — พ.ร.บ.คอมพิวเตอร์ ม.26 บังคับให้เก็บข้อมูลจราจรไม่น้อยกว่า 90 วัน
+> ตั้ง 120 เพื่อกันเผื่อ (ตัวลบทำงานทุกชั่วโมงตามเวลาจริง ถ้าตั้ง 90 พอดีแล้ววันไหนมีคนมาขอข้อมูลช้า
+> วันที่ 90 จะถูกลบไปแล้ว) · ต้นทุนของส่วนเผื่อ 30 วันนี้คือ ~6 MB
+> ค่าตั้งต้นในโค้ดยังเป็น 30 (ต่ำกว่ากฎหมาย) ⇒ **ต้องตั้งคีย์นี้เสมอ ห้ามปล่อยว่าง**
 - **ขึ้นครั้งแรกให้ปิดไว้ก่อน** แล้วทำขั้น 5-6 ให้ผ่าน = พิสูจน์ว่าโค้ดใหม่ขึ้นแล้วระบบเหมือนเดิมทุกอย่าง
   จากนั้นค่อยแก้ `.env` เป็น `true` แล้ว **ไม่ต้อง build ใหม่** แค่สร้างคอนเทนเนอร์ใหม่:
   ```bash
@@ -324,7 +328,8 @@ API_LOG_RETENTION_DAYS=30
   เช็คได้ด้วย `docker compose exec app sh -c 'echo $API_LOG_ENABLED'`
   แยกตัวแปรสองอย่าง (โค้ดใหม่ / การเก็บ log) คนละครั้ง ถ้ามีอะไรผิดจะรู้ทันทีว่าเกิดจากอะไร
   ถ้าเปิดแล้วมีปัญหา กลับเป็น `false` + `up -d --force-recreate app` = ระบบกลับไปเหมือนเดิมภายใน 10 วินาที
-- ไม่ตั้งทั้งสองคีย์ก็รันได้ โค้ดมีค่าตั้งต้น (เปิด, 30 วัน)
+- ไม่ตั้ง `API_LOG_ENABLED` ก็รันได้ (ค่าตั้งต้นคือเปิด) แต่ `API_LOG_RETENTION_DAYS` ต้องตั้งเสมอ
+  เพราะค่าตั้งต้นในโค้ด (30 วัน) ต่ำกว่าที่กฎหมายบังคับ
 - **เช็คขนาดตารางหลังเปิดใช้จริง ~14 วัน** แล้วคูณ ~2 เพื่อประมาณค่าที่ 30 วัน:
   ```bash
   docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" -c "
@@ -340,7 +345,7 @@ API_LOG_RETENTION_DAYS=30
   docker compose exec -T db pg_dump -U "$PG_USER" -d "$PG_DATABASE" -Fc \
     --exclude-table-data=public.api_logs > dump-ไม่มี-api-logs.dump
   ```
-  ตัวช่วยที่มีอยู่แล้วคือ retention 30 วันซึ่งลบให้อัตโนมัติทุกชั่วโมง — ข้อมูลไม่ค้างยาว
+  ตัวช่วยที่มีอยู่แล้วคือ retention ซึ่งลบให้อัตโนมัติทุกชั่วโมง — ข้อมูลไม่ค้างเกินที่ตั้งไว้
 
 ### ขั้น 4.7 — จูน PostgreSQL ให้ตรงสเปกเครื่อง (ครั้งเดียวต่อ server)
 
@@ -471,6 +476,126 @@ docker compose exec app npm run diag:sync-api                  # ต้องเ
 - คอลัมน์ที่ตัดไม่ให้ออกไปเด็ดขาด: `admin_users.password_hash` และ `messages.reply_token`
 - สคริปต์ฝั่งเครื่องปลายทางอยู่ที่ [`integrations/nuc-sync-client/`](integrations/nuc-sync-client/) พร้อม README
 - **คู่มือใช้งาน API ฉบับเต็ม** (endpoint, พารามิเตอร์, วิธีดึงที่ถูกต้อง, รหัสข้อผิดพลาด): [`docs/SYNC_API.md`](docs/SYNC_API.md)
+
+### ขั้น 4.10 — ระบบเก็บ log และรายงาน ตาม พ.ร.บ.คอมพิวเตอร์ (ครั้งเดียวต่อ DB)
+
+ขึ้นพร้อมกับแผน [`docs/plan-logging-audit-compliance.md`](docs/plan-logging-audit-compliance.md)
+สร้างของใหม่ล้วน ไม่ ALTER ตารางเดิม ไม่แตะ matview → รันตอนระบบเปิดอยู่ได้ จบในไม่กี่วินาที
+
+```bash
+docker compose exec app npx tsx scripts/runMigration.ts migrations/changes/2026-09-03_01_system_logs.sql
+docker compose exec app npx tsx scripts/runMigration.ts migrations/changes/2026-09-03_02_audit_logs.sql
+docker compose exec app npx tsx scripts/runMigration.ts migrations/changes/2026-09-03_03_traffic_daily.sql
+```
+
+จากนั้นติดตั้ง logworker บน host ตาม [`deploy/logworker/README.md`](deploy/logworker/README.md)
+
+**ตรวจหลังขึ้น:**
+```bash
+docker compose exec app npm run diag:log-worker
+```
+
+> ⚠️ ไฟล์ที่ 2 ติด trigger `trg_audit` กับ **ตารางตั้งค่า 11 ตัวเท่านั้น**
+> ห้ามเติมตารางในเส้นทางออกใบเสนอราคา (`quotations`, `quotation_counters`, `messages`)
+> หรือตารางที่ sync เขียนรัว (`products`, `customers`, `sale_orders`, `customers_data_view`) เด็ดขาด
+> รายชื่อและเหตุผลอยู่ในหัวไฟล์ migration และมีเคสตรวจใน `npm run diag:log-worker`
+
+**ถอนออกถ้ามีปัญหา** (ระบบกลับไปเหมือนเดิมทันที ไม่ต้อง build ใหม่):
+```bash
+sudo systemctl stop logworker                       # หยุดตัวเก็บ — แอปไม่รู้สึกอะไร
+docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" -c "
+  DO \$\$ DECLARE t record; BEGIN
+    FOR t IN SELECT c.relname FROM pg_trigger g JOIN pg_class c ON c.oid=g.tgrelid
+              WHERE g.tgname='trg_audit'
+    LOOP EXECUTE format('DROP TRIGGER trg_audit ON public.%I', t.relname); END LOOP;
+  END \$\$;"                                        # ถอด trigger ทั้งหมด
+```
+ตารางทั้ง 4 ทิ้งไว้ได้ ไม่มีใครเขียนต่อ · ส่วนหน้าจอถอนด้วยการลบ 2 บรรทัดใน `index.ts`
+(`import { logsRouter }` และ `app.use('/api/admin/logs', ...)`)
+
+---
+
+## เอกสารการเก็บข้อมูลจราจรทางคอมพิวเตอร์ (พ.ร.บ.คอมพิวเตอร์ ม.26)
+
+> หัวข้อนี้คือ "หลักฐานการปฏิบัติตามกฎหมาย" ไม่ใช่คู่มือติดตั้ง
+> ให้ปรับชื่อ/ตำแหน่งให้ตรงกับความจริงขององค์กรก่อนใช้อ้างอิงจริง
+
+### 1. ผู้มีหน้าที่ประสานงาน
+
+| บทบาท | ผู้รับผิดชอบ | หน้าที่ |
+| --- | --- | --- |
+| ผู้ประสานงานกับพนักงานเจ้าหน้าที่ | *(ระบุชื่อ-ตำแหน่ง-เบอร์ติดต่อ)* | รับหมายเรียก ตรวจสอบความถูกต้องของคำขอ ส่งมอบข้อมูล |
+| ผู้ดูแลระบบ (ปฏิบัติการ) | *(ระบุชื่อ)* | ดึงข้อมูลตามคำขอ ดูแล retention และการสำรอง |
+| สำรอง | *(ระบุชื่อ)* | ทำหน้าที่แทนเมื่อผู้ประสานงานหลักไม่อยู่ |
+
+### 2. ชั้นความลับและสิทธิ์เข้าถึงของแต่ละตาราง
+
+| ตาราง | ชั้นความลับ | มีข้อมูลส่วนบุคคล | ใครเข้าถึงได้ | เก็บนานแค่ไหน |
+| --- | --- | --- | --- | --- |
+| `api_logs` | ลับ | ✅ `ip`, `line_user_id` | role `admin` เท่านั้น | 120 วัน |
+| `audit_logs` | ลับ | ✅ ชื่อผู้ใช้, `ip` | role `admin` เท่านั้น | 2 ปี |
+| `system_logs` | ลับ | ⚠️ อาจมีเศษ PII ในข้อความ | role `admin` เท่านั้น | 90 วัน (warn+) · 14 วัน (info) |
+| `traffic_daily` | ภายใน | ❌ ตัวเลขสรุปล้วน | role `admin` เท่านั้น | ไม่ลบ |
+
+การบังคับสิทธิ์อยู่ที่ `index.ts` บรรทัดเดียว:
+`app.use('/api/admin/logs', adminAuthMiddleware, requireRole('admin'), logsRouter)`
+และหน้าเดิม `/api/admin/api-logs` ก็ใช้ `requireRole('admin')` เหมือนกัน — **ไม่มี role ใหม่ในระบบ**
+
+**ทุกครั้งที่มีคนเปิดดูหรือส่งออก log จะถูกบันทึกลง `audit_logs` เอง** (`log.view` / `log.export`)
+ดูได้จากหน้า "บันทึกการแก้ไข" โดยติ๊กช่อง "แสดงการเข้าดู log ด้วย"
+
+### 3. ความถูกต้องแท้จริงของข้อมูล (ข้อมูลแก้ไขโดยง่ายไม่ได้)
+
+| มาตรการ | รายละเอียด |
+| --- | --- |
+| ไม่มีเส้นทางแก้ไขในแอป | ไม่มีโค้ดที่ `UPDATE`/`DELETE` บน `audit_logs` เลยสักบรรทัด (มีแต่ `INSERT` จาก trigger และ `log.view`/`log.export`) |
+| `REVOKE UPDATE, DELETE, TRUNCATE` | ประกาศไว้ใน migration · **ไม่มีผลกับ superuser** ซึ่งแอปใช้อยู่ตอนนี้ ⇒ เป็นการกันพลาด ไม่ใช่กำแพง (กำแพงจริงต้องรอเฟส 6: ให้แอปใช้ DB role จำกัดสิทธิ์) |
+| ลายนิ้วมือรายวัน | `traffic_daily.audit_digest` = `sha256` ของแถว audit ทั้งวัน ต่อโซ่กับ digest ของเมื่อวาน · แถวของวันที่ปิดไปแล้วห้ามคำนวณทับ (บังคับไว้ใน SQL) |
+| สำเนาออกนอกเครื่อง | ⚠️ **digest มีค่าก็ต่อเมื่อสำเนาออกไปเก็บนอกเครื่องพร้อม backup** — เก็บไว้ใน DB เครื่องเดียวกับของที่มันเฝ้าอยู่ ไม่ได้พิสูจน์อะไรเลย |
+
+ตรวจโซ่ย้อนหลังได้ด้วย:
+```bash
+docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" -c "
+SELECT day, audit_changes, audit_digest IS NOT NULL AS has_digest,
+       audit_prev_digest = lag(audit_digest) OVER (ORDER BY day) AS chain_ok
+  FROM traffic_daily ORDER BY day DESC LIMIT 30;"
+```
+
+### 4. นาฬิกาตรงตามเวลาสากล
+
+บันทึกผลตรวจล่าสุด (`timedatectl` บน host, 2026-09-03):
+
+```
+System clock synchronized: yes
+NTP service: active
+```
+
+ให้ตรวจซ้ำและบันทึกผลใหม่ทุกครั้งที่ย้ายเครื่องหรือติดตั้ง server ใหม่
+
+### 5. ข้อจำกัดที่ต้องบันทึกไว้ตามความจริง
+
+| ข้อจำกัด | ผลกระทบ | ทำไมแก้ไม่ได้ด้วยวิธีอื่น |
+| --- | --- | --- |
+| ลิงก์ `/download-pdf/...` เป็นลิงก์สาธารณะ | ระบุตัว "คนที่กดลิงก์" ไม่ได้ ระบุได้แค่ "เอกสารนี้เป็นของเซลล์คนไหน" | เซลล์ forward ลิงก์ให้ลูกค้าปลายทางต่อ ซึ่งเป็นเจตนาของฟีเจอร์ · ถ้าบังคับ login ก่อนเปิด ลูกค้าจะเปิดใบเสนอราคาไม่ได้ |
+| บรรทัด `console.*` เดิมส่วนใหญ่ไม่มี `request_id` | โยง `system_logs` กับ `api_logs` ได้เฉพาะบางบรรทัด | ต้องทยอยเปลี่ยนเป็นบรรทัด JSON ทีละโมดูล (เฟส 6) — worker แกะได้อยู่แล้ว ไม่ต้องแก้ทีเดียวทั้งระบบ |
+| ชื่อผู้แก้ไขบางแถวเป็น "จับคู่จากเวลา" | ไม่ใช่ความแน่นอน 100% | trigger ในฝั่ง DB ไม่รู้จัก JWT · ทางที่แม่น 100% คือเติม `SET LOCAL app.actor` ทีละ endpoint (เฟส 6) · หน้าจอแสดงป้ายบอกที่มาทุกแถวอยู่แล้ว |
+| ไม่เก็บ request/response body | ตอบไม่ได้ว่า "ส่งค่าอะไรเข้ามา" | เป็นการตัดสินใจเดิมของ `api_logs` เพื่อไม่ให้ตารางมี PII และไม่กิน CPU ทุก request |
+
+### 6. วิธีส่งมอบเมื่อมีหมายเรียก
+
+1. ตรวจความถูกต้องของคำขอ (หน่วยงาน อำนาจตามกฎหมาย ช่วงเวลาที่ขอ ขอบเขตข้อมูล) — **บันทึกไว้เป็นเอกสาร**
+2. เข้า Admin Portal → **บันทึกและรายงาน** → เลือกหน้าที่ตรงกับคำขอ ตั้งช่วงวันและตัวกรอง
+3. กด **ส่งออก CSV** (การกดนี้ถูกบันทึกลง `audit_logs` เป็น `log.export` โดยอัตโนมัติ)
+4. ถ้าต้องการข้อมูลดิบทั้งตาราง:
+   ```bash
+   docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" -c "\copy (
+     SELECT * FROM api_logs WHERE created_at >= '2026-08-01' AND created_at < '2026-09-01'
+   ) TO STDOUT WITH CSV HEADER" > api-logs-2026-08.csv
+   ```
+5. แนบค่า `audit_digest` ของช่วงวันที่ส่งมอบไปด้วย เป็นหลักฐานว่าข้อมูลไม่ถูกแก้ระหว่างทาง
+6. บันทึกการส่งมอบ (วันที่ ผู้รับ ขอบเขต) เก็บไว้คู่กับสำเนาคำขอ
+
+---
 
 ### ขั้น 5 — rebuild + up
 ```bash

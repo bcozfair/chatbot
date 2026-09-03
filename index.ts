@@ -95,6 +95,7 @@ import { isCustomerInfoIncomplete } from './utils/flexTemplates.js';
 import { thaiDateParts } from './utils/thaiTime.js';
 import { parseDeliveryTypeOverride } from './utils/deliveryTerms.js';
 import { apiLogMiddleware, getRequestId } from './config/apiLogger.js';
+import { logsRouter } from './routes/logs.js';
 import {
   initApiLogWriter,
   stopApiLogWriter,
@@ -152,6 +153,11 @@ app.use(express.static(path.join(process.cwd(), 'public')));
 
 // Serve data folder dynamically for signature image previews
 app.use('/data', express.static(path.join(process.cwd(), 'data')));
+
+// ── บันทึกและรายงาน (traffic / audit / system log) — ดู routes/logs.ts ────────────────────
+// สิทธิ์บังคับที่บรรทัดนี้บรรทัดเดียว: เปิดให้ role 'admin' เท่านั้น เท่ากับหน้า "บันทึกการเรียก API" เดิม
+// ถอนทั้งแผน log ออก = ลบ 2 บรรทัดนี้ (import ด้านบน + บรรทัดล่าง) แล้วระบบกลับไปเหมือนเดิมทันที
+app.use('/api/admin/logs', adminAuthMiddleware, requireRole('admin'), logsRouter);
 
 // Serve admin portal dashboard
 app.get('/admin', (req: any, res: any) => {

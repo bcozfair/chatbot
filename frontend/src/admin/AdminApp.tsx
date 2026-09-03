@@ -18,6 +18,9 @@ import { ProductMoqRules } from './ProductMoqRules';
 import { ShippingFee } from './ShippingFee';
 import { SyncPanel } from './SyncPanel';
 import { ApiLogs } from './ApiLogs';
+import { Traffic } from './logs/Traffic';
+import { AuditLogs } from './logs/AuditLogs';
+import { SystemLogs } from './logs/SystemLogs';
 import {
   LogOut,
   User as UserIcon,
@@ -37,10 +40,14 @@ import {
   Users as UsersIcon,
   KeyRound,
   Ban,
-  Activity,
+  ClipboardList,
 } from 'lucide-react';
 
-type MainTab = 'dashboard' | 'quotations' | 'salespersons' | 'promotions' | 'users' | 'blacklist' | 'apilogs' | 'settings';
+type MainTab =
+  | 'dashboard' | 'quotations' | 'salespersons' | 'promotions' | 'users' | 'blacklist'
+  // กลุ่ม "บันทึกและรายงาน" — 4 หน้าที่อยู่ใต้หัวข้อพับได้อันเดียวกัน
+  | 'traffic' | 'apilogs' | 'auditlogs' | 'systemlogs'
+  | 'settings';
 type SubTab = 'quotation' | 'optional' | 'stock' | 'moq' | 'shipping';
 
 interface AdminStats {
@@ -66,8 +73,23 @@ const NAV_ITEMS: { key: MainTab; label: string; icon: typeof LayoutDashboard; ro
   { key: 'salespersons', label: 'จัดการข้อมูลพนักงาน', icon: UserCheck, roles: ['admin'] },
   { key: 'users', label: 'จัดการผู้ใช้งานระบบ', icon: UsersIcon, roles: ['admin'] },
   { key: 'blacklist', label: 'บัญชีห้ามเสนอราคา', icon: Ban, roles: ['admin', 'user'] },
-  { key: 'apilogs', label: 'บันทึกการเรียก API', icon: Activity, roles: ['admin'] },
 ];
+
+/**
+ * กลุ่ม "บันทึกและรายงาน" — 4 หน้าที่ตอบคนละคำถามแต่ใช้ request_id ตัวเดียวกันโยงถึงกันได้
+ *
+ * "บันทึกการเรียก API" คือหน้าเดิมที่ย้ายเข้ามาอยู่ในกลุ่ม ไม่ได้ถูกแก้แม้แต่บรรทัดเดียว
+ * (ApiLogs.tsx ใช้งานได้ดีอยู่แล้ว — การขยับเพื่อความสวยของโค้ดคือความเสี่ยงเปล่า)
+ */
+const LOGS_SUBITEMS: { key: MainTab; label: string }[] = [
+  { key: 'traffic', label: 'รายงานการใช้งาน' },
+  { key: 'apilogs', label: 'บันทึกการเรียก API' },
+  { key: 'auditlogs', label: 'บันทึกการแก้ไข' },
+  { key: 'systemlogs', label: 'บันทึกระบบ' },
+];
+
+/** แท็บที่อยู่ใต้กลุ่ม "บันทึกและรายงาน" — ใช้ตัดสินว่าหัวข้อกลุ่มควรขึ้นสถานะ active ไหม */
+const LOG_TABS = new Set<MainTab>(LOGS_SUBITEMS.map((i) => i.key));
 
 const SETTINGS_SUBITEMS: { key: SubTab; label: string }[] = [
   { key: 'quotation', label: 'เงื่อนไขหลัก' },
@@ -84,7 +106,10 @@ const PAGE_TITLES: Record<MainTab, string> = {
   salespersons: 'จัดการข้อมูลพนักงาน',
   users: 'จัดการผู้ใช้งานระบบ',
   blacklist: 'บัญชีห้ามเสนอราคา',
+  traffic: 'รายงานการใช้งาน',
   apilogs: 'บันทึกการเรียก API',
+  auditlogs: 'บันทึกการแก้ไข',
+  systemlogs: 'บันทึกระบบ',
   settings: 'ตั้งค่าเงื่อนไข & กฎ',
 };
 
@@ -95,6 +120,8 @@ function AdminContent() {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [settingsExpanded, setSettingsExpanded] = useState(true);
+  // ตั้งต้นปิด — คนส่วนใหญ่เข้ามาทำงานประจำวัน ไม่ได้มาดู log ทุกครั้ง
+  const [logsExpanded, setLogsExpanded] = useState(false);
   // ตอน sidebar ย่อ: กดไอคอนตั้งค่า → เปิด flyout เลือก sub-tab (nav มี overflow-y-auto จึงต้องลอยแบบ fixed)
   const [settingsFlyoutTop, setSettingsFlyoutTop] = useState<number | null>(null);
   const settingsBtnRef = useRef<HTMLButtonElement>(null);
@@ -111,7 +138,8 @@ function AdminContent() {
   // คำนวณตอน render แทนการ setState ใน effect: ไม่มี re-render รอบพิเศษ และครอบเคสถูกลดสิทธิ์
   // ระหว่างเปิดหน้าค้างไว้ด้วย (adminAuthMiddleware อ่าน role สดจาก DB ทุก request)
   const effectiveTab: MainTab =
-    visibleNavItems.some((item) => item.key === activeTab) || (activeTab === 'settings' && isAdmin)
+    visibleNavItems.some((item) => item.key === activeTab) ||
+    ((activeTab === 'settings' || LOG_TABS.has(activeTab)) && isAdmin)
       ? activeTab
       : (visibleNavItems[0]?.key ?? 'blacklist');
 
@@ -181,6 +209,7 @@ function AdminContent() {
     setMobileOpen(false);
     closeSettingsFlyout();
     if (tab === 'settings') setSettingsExpanded(true);
+    if (LOG_TABS.has(tab)) setLogsExpanded(true);
   };
 
   const goToSubTab = (tab: SubTab) => {
@@ -274,6 +303,51 @@ function AdminContent() {
 
         {isAdmin && (
           <>
+        <div className="h-px bg-slate-100 my-2.5 mx-1.5" />
+
+        {/* บันทึกและรายงาน — กลุ่มพับได้ แบบเดียวกับกลุ่มตั้งค่า */}
+        <button
+          onClick={() => (collapsed ? goTo('traffic') : setLogsExpanded((v) => !v))}
+          title={collapsed ? 'บันทึกและรายงาน' : undefined}
+          aria-expanded={collapsed ? undefined : logsExpanded}
+          className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${
+            collapsed ? 'justify-center' : ''
+          } ${LOG_TABS.has(effectiveTab) ? '' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'}`}
+          style={LOG_TABS.has(effectiveTab) ? { backgroundColor: BRAND_SOFT_STRONG, color: BRAND } : undefined}
+        >
+          <ClipboardList className="w-[18px] h-[18px] shrink-0" />
+          {!collapsed && (
+            <>
+              <span className="whitespace-nowrap flex-1 text-left">บันทึกและรายงาน</span>
+              <ChevronDown
+                className={`w-3.5 h-3.5 shrink-0 transition-transform ${logsExpanded ? '' : '-rotate-90'}`}
+              />
+            </>
+          )}
+        </button>
+
+        {!collapsed && logsExpanded && (
+          <div className="pl-4 mt-0.5 space-y-0.5">
+            {LOGS_SUBITEMS.map(({ key, label }) => {
+              const active = effectiveTab === key;
+              return (
+                <button
+                  key={key}
+                  onClick={() => goTo(key)}
+                  className={`w-full text-left pl-6 pr-3 py-2 rounded-lg text-xs font-medium transition-all border-l-2 ${
+                    active
+                      ? 'border-current'
+                      : 'border-transparent text-slate-400 hover:text-slate-700 hover:bg-slate-50'
+                  }`}
+                  style={active ? { color: BRAND, borderColor: BRAND, backgroundColor: BRAND_SOFT } : undefined}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         <div className="h-px bg-slate-100 my-2.5 mx-1.5" />
 
         {/* Settings group */}
@@ -457,6 +531,18 @@ function AdminContent() {
           ) : effectiveTab === 'apilogs' ? (
             <div className="animate-fade-in">
               <ApiLogs />
+            </div>
+          ) : effectiveTab === 'traffic' ? (
+            <div className="animate-fade-in">
+              <Traffic />
+            </div>
+          ) : effectiveTab === 'auditlogs' ? (
+            <div className="animate-fade-in">
+              <AuditLogs />
+            </div>
+          ) : effectiveTab === 'systemlogs' ? (
+            <div className="animate-fade-in">
+              <SystemLogs />
             </div>
           ) : effectiveTab === 'dashboard' ? (
             <div className="grid grid-cols-1 gap-6">
