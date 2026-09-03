@@ -188,6 +188,11 @@ function trigramSimilarity(aSet: Set<string>, bSet: Set<string>): number {
 const CUSTOMER_CACHE_TTL_MS = 10 * 60 * 1000;
 let customerCache: { rows: any[]; loadedAt: number } | null = null;
 let customerCacheLoading: Promise<any[]> | null = null;
+/**
+ * ตัวนับรุ่นของ cache — เพิ่มทุกครั้งที่ "ข้อมูลเปลี่ยนแล้ว" (ล้าง/สั่งโหลดใหม่)
+ * โหลดที่ยังวิ่งค้างอยู่จาก snapshot ก่อนหน้าจะรู้ตัวว่าตกรุ่น แล้วไม่เอาผลไปทับของใหม่
+ */
+let customerCacheGen = 0;
 
 /**
  * เพดานความเก่าที่ยอมคืนของค้างได้ เกินนี้กลับไปบล็อกโหลดใหม่ตามเดิม —
@@ -214,6 +219,7 @@ async function loadCustomerSearchCache(): Promise<any[]> {
 }
 
 function startCustomerCacheLoad(): Promise<any[]> {
+  const gen = customerCacheGen;
   customerCacheLoading = (async () => {
     const t0 = Date.now();
     // อ่านจาก customers_data_view (ไม่ใช่ customers ตรง ๆ) เพื่อให้ company search ครอบคลุม
@@ -232,7 +238,11 @@ function startCustomerCacheLoad(): Promise<any[]> {
       const norm_name = normalizeCompanyNameTS(r.display_name);
       return { ...r, norm_name, trigrams: trigramsOf(norm_name) };
     });
-    customerCache = { rows: cached, loadedAt: Date.now() };
+    // ตกรุ่น = ระหว่างที่ query นี้วิ่งอยู่ มีคนสั่งล้าง/โหลดใหม่ แปลว่า snapshot ที่เพิ่งอ่านมา
+    // เก่ากว่าที่ระบบรู้แล้ว ห้ามเอาไปทับ ไม่งั้น cache จะค้างข้อมูลก่อน rebuild ยาวจน TTL หมด
+    if (gen === customerCacheGen) {
+      customerCache = { rows: cached, loadedAt: Date.now() };
+    }
     console.log(`[customerSearchCache] loaded ${cached.length} companies in ${Date.now() - t0}ms`);
     return cached;
   })();
@@ -242,10 +252,26 @@ function startCustomerCacheLoad(): Promise<any[]> {
   return customerCacheLoading;
 }
 
-/** ล้าง cache (ใช้ในเทส/หลัง sync ข้อมูล) */
+/** ล้าง cache (ใช้ในเทส/เป็นทางถอยเมื่อโหลดใหม่หลัง sync ไม่สำเร็จ) */
 export function clearCustomerSearchCache(): void {
+  customerCacheGen++;
   customerCache = null;
   customerCacheLoading = null;
+}
+
+/**
+ * โหลด cache ใหม่ทันทีโดยไม่ทิ้งของเดิม — syncService เรียกหลัง rebuild customers_data_view เสร็จ
+ *
+ * ทำไมไม่ล้างทิ้งเหมือนเดิม: sync วิ่งทุก 10 นาทีและ rebuild ทุกรอบ พอล้างเป็น null
+ * เซลส์คนแรกที่ค้นหาหลัง sync ต้องจ่ายค่าโหลด 52k แถว ~700ms เต็ม ๆ กลางทางแชท
+ * (วัดบน prod 2026-09-03: 2 ใน 8 การค้นหาแรกหลัง deploy เจอเคสนี้)
+ * ย้ายมาโหลดตรงนี้แทน = จ่ายตอน sync เพิ่งเสร็จซึ่งไม่มีใครรอ และระหว่างโหลดคนที่ค้นหา
+ * ยังได้ของรอบก่อนไปใช้ทันที ไม่มีใครถูกบล็อก (วัดจริง 562ms → 0ms)
+ */
+export function reloadCustomerSearchCache(): Promise<any[]> {
+  customerCacheGen++;          // ตัดผลของโหลดที่ค้างอยู่จาก snapshot ก่อน rebuild
+  customerCacheLoading = null; // อย่าไปใช้ผลร่วมกับโหลดรุ่นเก่า
+  return startCustomerCacheLoad();
 }
 
 /** จำนวนแถวจากการค้นด้วยชื่อที่ส่งต่อเข้า pipeline ปกติ */

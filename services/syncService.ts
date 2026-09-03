@@ -2,7 +2,7 @@ import { pool } from '../config/db.js';
 import { GatewayUnreachableError } from '../scripts/sync/gatewayClient.js';
 import { refreshCustomerDataView } from '../scripts/sync/refreshCustomerDirectory.js';
 import { clockNow, fmtDur, serr, slog, swarn, vlog } from '../scripts/sync/syncLog.js';
-import { clearCustomerSearchCache } from './customerService.js';
+import { clearCustomerSearchCache, reloadCustomerSearchCache } from './customerService.js';
 import { reconcileQuotationOdooLinks } from './quotationOdooLink.js';
 import { thaiDateParts } from '../utils/thaiTime.js';
 
@@ -175,14 +175,25 @@ async function reconcileOrphanContacts(): Promise<number | null> {
  * → rebuild ท้าย sync = ข้อมูลสดเสมอในทางปฏิบัติ) แล้วล้าง in-memory search cache
  *
  * logic จริงอยู่ใน refreshCustomerDataView() (แชร์กับ CLI sync scripts); ที่นี่ห่อเพิ่ม
- * clearCustomerSearchCache() ซึ่งเป็นเรื่องเฉพาะโปรเซสแอปที่รันอยู่
+ * การรีเฟรช search cache ซึ่งเป็นเรื่องเฉพาะโปรเซสแอปที่รันอยู่
  *
- * ถ้ารอบนั้นถูกข้าม (ข้อมูลต้นทางไม่ขยับ) ก็ไม่ต้องล้าง cache — ข้อมูลใน cache ยังตรงอยู่
+ * ถ้ารอบนั้นถูกข้าม (ข้อมูลต้นทางไม่ขยับ) ก็ไม่ต้องแตะ cache — ข้อมูลใน cache ยังตรงอยู่
  * และการล้างทิ้งเปล่า ๆ ทำให้ค้นหาครั้งถัดไปต้องโหลด 52k แถวใหม่ฟรี ๆ
  */
 async function refreshCustomerDirectory() {
   const result = await refreshCustomerDataView();
-  if (!result.skipped) clearCustomerSearchCache();
+  if (result.skipped) return;
+  // โหลด cache ใหม่แทนการล้างทิ้ง — จ่ายค่าโหลด ~700ms ตรงนี้ตอน sync เพิ่งเสร็จและไม่มีใครรอ
+  // แทนที่จะไปโผล่ในคำค้นของเซลส์คนแรกหลัง sync (วัดบน prod: 2 ใน 8 ครั้งแรกเจอเคสนี้)
+  // ระหว่างโหลด คนที่ค้นหายังได้ข้อมูลรอบก่อนไปใช้ทันที ไม่มีใครถูกบล็อก
+  try {
+    await reloadCustomerSearchCache();
+  } catch (err) {
+    // โหลดใหม่ไม่สำเร็จ = ถอยไปล้างทิ้งตามเดิม ยอมให้ค้นครั้งถัดไปช้า
+    // ดีกว่าปล่อยให้ cache ค้างข้อมูลก่อน rebuild ไว้โดยไม่มีกำหนด
+    console.error('[sync] โหลด customer search cache ใหม่ไม่สำเร็จ — ล้างทิ้งแทน:', err);
+    clearCustomerSearchCache();
+  }
 }
 
 /** เพิ่ม 4 คอลัมน์ผลรอบล่าสุด — เรียกตอน boot เพื่อให้ deploy แล้วใช้ได้เลยไม่ต้องรันมือ */
