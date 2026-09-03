@@ -10,7 +10,9 @@
    คอมโพเนนต์ยังเขียน bg-card / text-slate-900 / border-slate-200
    เหมือนเดิม แต่ได้สีมืดอัตโนมัติทุกหน้า ไม่ต้องแก้ทีละไฟล์
 
-   จะปรับโทน: แก้แค่ block :root ข้างล่าง ไม่ต้องแตะ .tsx เลย
+   มี 2 ธีม: :root = มืด (ค่าเริ่มต้น) · :root[data-theme="light"] = สว่าง
+   สลับด้วยการเซ็ต data-theme บน <html> (ปุ่มอยู่ที่ ThemeToggle.tsx)
+   จะปรับโทน: แก้แค่ 2 block นี้ ไม่ต้องแตะ .tsx เลย
    ───────────────────────────────────────────────────────────── */
 :root {
   /* พื้นผิว ไล่จากมืดสุด (พื้นหน้าจอ) ขึ้นมาหาสว่าง (การ์ด → แถบ → chip) */
@@ -20,6 +22,9 @@
   --c-surface-3: #1b241f;
   --c-line: #243029;
   --c-line-strong: #33423a;
+  --c-scroll-track: #0f1512;
+  --c-scroll-thumb: #2c3a33;
+  --c-scroll-thumb-hover: #405349;
 
   /* ตัวอักษร ไล่จากจางไปเข้ม (map เข้า slate-400 … slate-950) */
   --c-text-faint: #7d9088;
@@ -122,6 +127,104 @@
   --color-yellow-800: #f2d24e;
 }
 
+/* ─── ธีมสว่าง — ทับตัวแปรชุดเดียวกับข้างบน ─────────────────────
+   สีสถานะต้องทับ --color-* ตรง ๆ เพราะใน @theme เป็นค่าคงที่ของธีมมืด
+   (rule นี้อยู่นอก @layer จึงชนะ @theme เสมอ)
+   ───────────────────────────────────────────────────────────── */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --c-bg: #f8fafc;
+  --c-surface: #ffffff;
+  --c-surface-2: #f8fafc;
+  --c-surface-3: #f1f5f9;
+  --c-line: #e2e8f0;
+  --c-line-strong: #cbd5e1;
+  --c-scroll-track: #f1f5f9;
+  --c-scroll-thumb: #cbd5e1;
+  --c-scroll-thumb-hover: #94a3b8;
+
+  --c-text-faint: #94a3b8;
+  --c-text-muted: #64748b;
+  --c-text-soft: #475569;
+  --c-text: #334155;
+  --c-text-strong: #1e293b;
+  --c-text-max: #0f172a;
+
+  /* พื้นสว่างแล้ว เขียวเข้มอ่านออกทั้งสองบทบาท ใช้ค่าเดียวกันได้ */
+  --brand: #009032;
+  --brand-hover: #007b2b;
+  --brand-fg: #009032;
+  --brand-soft: rgba(0, 144, 50, 0.10);
+  --brand-soft-strong: rgba(0, 144, 50, 0.16);
+  --brand-border: rgba(0, 144, 50, 0.24);
+  --brand-border-strong: rgba(0, 144, 50, 0.45);
+
+  --color-slate-950: #020617;
+
+  --color-red-50: #fef2f2;
+  --color-red-100: #fee2e2;
+  --color-red-200: #fecaca;
+  --color-red-300: #fca5a5;
+  --color-red-500: #ef4444;
+  --color-red-600: #dc2626;
+  --color-red-700: #b91c1c;
+  --color-red-800: #991b1b;
+
+  --color-emerald-50: #ecfdf5;
+  --color-emerald-100: #d1fae5;
+  --color-emerald-200: #a7f3d0;
+  --color-emerald-500: #10b981;
+  --color-emerald-600: #059669;
+  --color-emerald-700: #047857;
+  --color-emerald-800: #065f46;
+  --color-emerald-950: #022c22;
+
+  --color-amber-50: #fffbeb;
+  --color-amber-100: #fef3c7;
+  --color-amber-200: #fde68a;
+  --color-amber-300: #fcd34d;
+  --color-amber-400: #fbbf24;
+  --color-amber-500: #f59e0b;
+  --color-amber-600: #d97706;
+  --color-amber-700: #b45309;
+  --color-amber-800: #92400e;
+  --color-amber-900: #78350f;
+
+  --color-sky-50: #f0f9ff;
+  --color-sky-100: #e0f2fe;
+  --color-sky-200: #bae6fd;
+  --color-sky-500: #0ea5e9;
+  --color-sky-600: #0284c7;
+  --color-sky-700: #0369a1;
+  --color-sky-800: #075985;
+  --color-sky-900: #0c4a6e;
+
+  --color-blue-50: #eff6ff;
+  --color-blue-100: #dbeafe;
+  --color-blue-200: #bfdbfe;
+  --color-blue-400: #60a5fa;
+  --color-blue-600: #2563eb;
+  --color-blue-700: #1d4ed8;
+
+  --color-orange-50: #fff7ed;
+  --color-orange-200: #fed7aa;
+  --color-orange-500: #f97316;
+  --color-orange-700: #c2410c;
+
+  --color-purple-50: #faf5ff;
+  --color-purple-100: #f3e8ff;
+  --color-purple-600: #9333ea;
+
+  --color-violet-50: #f5f3ff;
+  --color-violet-200: #ddd6fe;
+  --color-violet-700: #6d28d9;
+
+  --color-yellow-50: #fefce8;
+  --color-yellow-200: #fef08a;
+  --color-yellow-800: #854d0e;
+}
+
 :root {
   font-family: 'Outfit', 'Sarabun', sans-serif;
   /* บอกเบราว์เซอร์ว่าเป็นธีมมืด — input/date picker/dropdown/autofill ของ native จะมืดตาม */
@@ -144,12 +247,12 @@ body {
   height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: var(--c-surface);
+  background: var(--c-scroll-track);
 }
 ::-webkit-scrollbar-thumb {
-  background: #2c3a33;
+  background: var(--c-scroll-thumb);
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #405349;
+  background: var(--c-scroll-thumb-hover);
 }

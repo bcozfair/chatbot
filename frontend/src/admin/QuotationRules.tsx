@@ -1000,7 +1000,7 @@ export function QuotationRules() {
                     <button
                       type="button"
                       onClick={() => setFormData(p => ({ ...p, quote_company: '' }))}
-                      className={`px-2.5 h-8 transition-colors ${formData.quote_company === '' ? 'bg-slate-300 text-slate-900' : 'text-slate-500 hover:bg-slate-50'}`}
+                      className={`px-2.5 h-8 transition-colors ${formData.quote_company === '' ? 'bg-slate-700 text-slate-50' : 'text-slate-500 hover:bg-slate-50'}`}
                     >
                       อัตโนมัติ
                     </button>

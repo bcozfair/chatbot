@@ -10,6 +10,7 @@ import { Promotions } from './Promotions';
 import { Salespersons } from './Salespersons';
 import { Quotations } from './Quotations';
 import { PageHeaderProvider, PageHeaderOutlet } from './PageHeader';
+import { ThemeToggle } from './ThemeToggle';
 import { QuotationRules } from './QuotationRules';
 import { OptionalLinks } from './OptionalLinks';
 import { StockRules } from './StockRules';
@@ -354,6 +355,7 @@ function AdminContent() {
           >
             <KeyRound className="w-4 h-4" />
           </button>
+          <ThemeToggle />
           <button
             id="admin-logout-btn"
             onClick={() => logout()}

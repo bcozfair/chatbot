@@ -445,7 +445,7 @@ export function ApiLogs() {
                           }}
                         />
                         <div className="hidden group-hover:block absolute bottom-full left-1/2 -translate-x-1/2 mb-1 z-10
-                                        bg-slate-200 text-slate-900 border border-slate-300 text-[11px] rounded-lg px-2.5 py-1.5 whitespace-nowrap">
+                                        bg-slate-800 text-slate-50 text-[11px] rounded-lg px-2.5 py-1.5 whitespace-nowrap">
                           {h.hour} น.<br />
                           {h.count.toLocaleString()} request · p95 {formatMs(h.p95)}<br />
                           พร้อมกันสูงสุด {h.max_inflight ?? '-'} · error {h.errors}
