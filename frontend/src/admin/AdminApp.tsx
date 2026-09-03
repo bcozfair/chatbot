@@ -243,6 +243,10 @@ function AdminContent() {
             <p className="text-[10px] text-slate-400 font-medium whitespace-nowrap">Quotation Portal</p>
           </div>
         )}
+        {/* mr-2 กันชนกับปุ่มย่อ sidebar ที่ลอยคร่อมขอบขวาอยู่ระดับเดียวกัน */}
+        {!collapsed && (
+          <ThemeToggle className="ml-auto mr-2 flex items-center justify-center w-8 h-8 rounded-lg text-slate-400 hover:text-[var(--brand-fg)] hover:bg-[var(--brand)]/10 transition-all active:scale-[0.95] shrink-0" />
+        )}
         <button
           onClick={() => setMobileOpen(false)}
           className="lg:hidden ml-auto flex items-center justify-center w-8 h-8 rounded-lg text-slate-400 hover:bg-slate-50 shrink-0"
@@ -355,7 +359,7 @@ function AdminContent() {
           >
             <KeyRound className="w-4 h-4" />
           </button>
-          <ThemeToggle />
+          {collapsed && <ThemeToggle />}
           <button
             id="admin-logout-btn"
             onClick={() => logout()}
