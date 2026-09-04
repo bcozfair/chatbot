@@ -4,6 +4,8 @@
 > v3 = ใช้วิธีมาตรฐานของวงการทั้งหมด (v1 มาตรฐานแต่เสี่ยงเกิน · v2 ปลอดภัยแต่หลุดมาตรฐาน)
 > สำรวจจากโค้ดจริงและ DB จริง 2026-09-02/03
 >
+> **merge เข้า `main` แล้ว 2026-09-04** (commit `c2a496e`) — ตรวจซ้ำหลัง merge ผ่านครบ ดู [§9](#9-สถานะหลัง-merge-เข้า-main-2026-09-04)
+>
 > **เหลือ 2 ขั้นตอนที่ต้องทำบน production:** รัน migration 3 ไฟล์ + ติดตั้ง logworker
 > วิธีทำอยู่ใน `DEPLOY.md` ขั้น 4.10 และ `deploy/logworker/README.md`
 > ทุกอย่างทดสอบบน DB ชั่วคราวแล้ว — ดูผลใน [§7 ผลการทดสอบ](#7-ผลการทดสอบ)
@@ -644,3 +646,44 @@ backfill 24 วัน (2026-08-10 … 2026-09-02) ใช้เวลา 42 ms
 | `diag:log-worker` | ✅ ผ่าน (ยกเว้นข้อ "งานค้างเกิน 15 นาที" ซึ่งถูกต้อง — worker ไม่ได้รันค้างไว้) |
 | `tsc --noEmit` backend + frontend · `eslint --max-warnings=0` · `vite build` | ✅ สะอาดทั้งหมด |
 
+---
+
+## 9. สถานะหลัง merge เข้า main (2026-09-04)
+
+งานเฟส 1-5 ถูก merge เข้า `main` แล้วที่ commit `c2a496e`
+
+### สิ่งที่ต้องแก้ตอน merge
+
+| เรื่อง | รายละเอียด |
+| --- | --- |
+| เลขไฟล์ migration ชนกัน | แผน G บน `main` ใช้เลข `2026-09-03_01/_02` ไปก่อน ⇒ กอง log ขยับเป็น `_03_system_logs` · `_04_audit_logs` · `_05_traffic_daily` และไล่แก้ชื่อที่อ้างถึงครบทุกจุด (`DEPLOY.md`, `deploy/logworker/README.md`, หัวไฟล์ migration, `auditTriggerSmoke.sql`, ข้อความเตือนตอน logworker สตาร์ท) |
+| `77ec504` ย้อนไฟล์แผนนี้กลับเป็นฉบับร่าง | commit ของแผน product block rules เขียนทับไฟล์นี้ด้วยฉบับ "รอการตัดสินใจ ยังไม่ลงมือ" ลบผลทดสอบ §7/§8 ทิ้ง 219 บรรทัด ⇒ merge เก็บฉบับที่อัปเดตไว้ (ที่ main เพิ่มมามีแต่หัวข้อฉบับร่างเดิม ไม่มีเนื้อหาใหม่ที่เสียไป) |
+| `.claude/worktrees/logging-audit` หลุดเข้า git | `77ec504` commit โฟลเดอร์ worktree เป็น gitlink `160000` ชี้ commit ของ branch อื่น — ใครก็ตามที่ checkout `main` จะได้ submodule ปลอม ⇒ ถอน gitlink ออก + เพิ่ม `.claude/worktrees/` ใน `.gitignore` กันเกิดซ้ำ |
+
+### ผลตรวจหลัง merge
+
+`main` ที่ merge เข้ามา**ไม่มีโค้ดใหม่เลย** (`77ec504` แตะแต่ไฟล์เอกสารกับ gitlink) ⇒
+โค้ดที่รันตรวจใน §8.8 กับที่อยู่บน `main` ตอนนี้ต่างกันแค่ข้อความ 1 บรรทัดใน `scripts/logworker/index.ts`
+(ชื่อไฟล์ migration ในข้อความเตือน) กับ comment หัวไฟล์ SQL
+
+| ชุดตรวจ | ผล |
+| --- | --- |
+| `tsc --noEmit` backend (ในคอนเทนเนอร์ · TypeScript 6.0.3) | ✅ ไม่มี error |
+| `tsc -b && vite build` frontend | ✅ สำเร็จ (625 kB → gzip 139 kB) |
+| `eslint . --max-warnings=0` frontend | ✅ ไม่มี warning |
+| `auditTriggerSmoke.sql` (26 เคส) บน `chatbot_logreal` | ✅ ผ่านทั้งหมด |
+| `diag:log-worker` บน `chatbot_logreal` | ✅ ผ่าน ยกเว้น 2 ข้อที่ต้อง FAIL ตอน worker ไม่ได้รัน¹ |
+
+¹ "ไม่มีงานที่ค้างเกิน 15 นาที" และ "ไม่มีแถว audit ที่ค้างเป็น pending เกิน 15 นาที" —
+ทั้งคู่เป็นผลของการที่ logworker ยังไม่ได้ติดตั้ง ไม่ใช่ของพัง จะหายเองเมื่อทำขั้นตอน deploy
+
+### ยังไม่ได้ทำ (เหมือนเดิม)
+
+* **ยังไม่รัน migration บน `chatbot_primus`** — ยืนยันแล้วว่า prod ยังไม่มีตาราง log ทั้ง 4 และมี trigger บันทึกการแก้ไข 0 ตัว
+* **ยังไม่ติดตั้ง logworker เป็น systemd service** — ยืนยันแล้วว่าไม่มี unit บนเครื่อง
+* เฟส 6 ทั้งหมด
+
+### DB ชั่วคราวที่ยังค้างอยู่
+
+`chatbot_logreal` (622 MB) และ `chatbot_logtest` (9 MB) ยังอยู่บนเครื่อง — เก็บไว้ใช้ทดสอบซ้ำได้
+ดิสก์ตอนนี้ 61% (เหลือ 28 G) จึงยังไม่เร่งลบ · ลบเมื่อไม่ต้องการแล้วด้วย `DROP DATABASE`
