@@ -24,6 +24,12 @@ Description=logworker — เก็บ system log, เติมชื่อผ�
 Documentation=file:///home/app_sales/salechatbot/chatbot/docs/plan-logging-audit-compliance.md
 After=network-online.target docker.service
 Wants=network-online.target
+# ⚠️ StartLimit* ต้องอยู่ใน [Unit] เท่านั้น — ถ้าไปอยู่ใน [Service] systemd จะขึ้น
+#    "Unknown key name ... ignoring" แล้วตกกลับไปใช้ค่า default 10 วินาที ซึ่งสั้นกว่า
+#    RestartSec=15s ⇒ เพดานจำนวนครั้งไม่มีวันถูกแตะ = crash loop ไม่รู้จบ
+#    ตรวจว่ามีผลจริง: systemctl show logworker -p StartLimitIntervalUSec (ต้องได้ 5min)
+StartLimitBurst=5
+StartLimitIntervalSec=300
 
 [Service]
 Type=simple
@@ -49,8 +55,6 @@ Environment=TZ=Asia/Bangkok
 # พังแล้วต่อเอง แต่ไม่วนถี่จนกลบสาเหตุใน journal
 Restart=always
 RestartSec=15s
-StartLimitBurst=5
-StartLimitIntervalSec=300
 
 # ปิดตัวให้เรียบร้อย: worker จับ SIGTERM แล้วเขียนของที่ค้างใน buffer ลง DB ก่อนออก
 KillSignal=SIGTERM
