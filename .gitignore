@@ -32,3 +32,8 @@ services/__customerServiceEval.gen.ts
 data/eval/customer_search_corpus.json
 data/eval/customer_search_baseline.json
 data/eval/customer_search_llm_cache.json
+
+# worktree ของแต่ละ session — เป็น git repo ซ้อนอยู่ข้างใน ถ้าเผลอ add จะกลายเป็น
+# gitlink (submodule ปลอม) ที่ชี้ commit ของ branch อื่น แล้ว checkout ที่อื่นจะพัง
+# (เกิดขึ้นจริงใน 77ec504 — ต้องถอนออกตอน merge)
+.claude/worktrees/
