@@ -236,6 +236,8 @@ SELECT to_regclass('public.customers_data_view')  AS matview,
               WHERE table_name='quotations' AND column_name='odoo_imported_at')               AS q_odoo_link,
        EXISTS(SELECT 1 FROM information_schema.columns
               WHERE table_name='api_logs' AND column_name='llm_ms')                           AS api_logs_llm,
+       EXISTS(SELECT 1 FROM information_schema.columns
+              WHERE table_name='api_logs' AND column_name='llm_cached_tokens')                AS api_logs_llm_tok,
        EXISTS(SELECT 1 FROM pg_extension WHERE extname='pg_stat_statements')                  AS pg_stat_stmts;"
 ```
 > `pg_stat_stmts` = false ทั้งที่รัน `2026-09-03_02` ไปแล้ว แปลว่ากล่อง db ยังไม่ได้ start ด้วย

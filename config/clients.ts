@@ -48,12 +48,21 @@ export async function createChatCompletion(params: Record<string, any>): Promise
   const timing = llmTimingStore.getStore();
   const t0 = timing ? Date.now() : 0;
   try {
-    return await openai.chat.completions.create({
+    const res: any = await openai.chat.completions.create({
       model: LLM_MODEL,
       thinking: { type: 'disabled' },
       temperature: 0,
       ...params,
     } as any);
+    // G#2 — นับ token เฉพาะครั้งที่สำเร็จ ครั้งที่พังไม่มี usage ให้อ่านอยู่แล้ว
+    // อ่าน prompt_cache_hit_tokens ก่อน (ฟิลด์ของ DeepSeek) แล้วค่อยตกไป
+    // prompt_tokens_details.cached_tokens ซึ่งเป็นชื่อฝั่ง OpenAI — เผื่อวันที่สลับ baseURL กลับ
+    if (timing && res?.usage) {
+      timing.promptTokens += res.usage.prompt_tokens ?? 0;
+      timing.cachedTokens += res.usage.prompt_cache_hit_tokens
+        ?? res.usage.prompt_tokens_details?.cached_tokens ?? 0;
+    }
+    return res;
   } catch (err) {
     if (timing) timing.errors++;
     throw err;
@@ -83,12 +92,23 @@ export interface LlmTiming {
   ms: number;
   calls: number;
   errors: number;
+  /**
+   * G#2 — prompt token รวมทุก call และส่วนที่ DeepSeek คืนมาจากแคช
+   *
+   * แคชเป็นของฝั่ง DeepSeek เอง เข้าเมื่อ prefix ตรงกันเป๊ะและยาวพอ (วัดจริง 2026-09-04:
+   * prompt 2,129 token · call แรก hit 0 · call ที่สอง prefix เดิม hit 2,048 = 96.2%)
+   * ⇒ cached/prompt ต่ำแปลว่า prompt ของเราเปลี่ยนหัวทุกครั้ง มีของที่ควรย้ายไปท้าย prompt
+   *
+   * นับเฉพาะครั้งที่สำเร็จ ต่างจาก ms/calls ที่นับครั้งที่พังด้วย — ครั้งที่พังไม่มี usage
+   */
+  promptTokens: number;
+  cachedTokens: number;
 }
 
 const llmTimingStore = new AsyncLocalStorage<LlmTiming>();
 
 export function newLlmTiming(): LlmTiming {
-  return { ms: 0, calls: 0, errors: 0 };
+  return { ms: 0, calls: 0, errors: 0, promptTokens: 0, cachedTokens: 0 };
 }
 
 /**

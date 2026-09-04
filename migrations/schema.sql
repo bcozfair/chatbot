@@ -103,6 +103,8 @@ ALTER SEQUENCE public.admin_users_id_seq OWNED BY public.admin_users.id;
 -- inflight/db_waiting/queue_waited_ms = ตัวเลขสำหรับวิเคราะห์ทรัพยากร
 -- llm_ms/llm_calls/own_ms = แผน G แยกเวลารอ LLM ออกจากเวลางานของเราเอง (มีเฉพาะแถว /callback (async))
 --   ดูเหตุผลเต็มใน migrations/changes/2026-09-03_01_api_logs_llm_timing.sql
+-- llm_prompt_tokens/llm_cached_tokens = แผน G#2 อัตราที่ prompt เข้าแคชของ DeepSeek
+--   ดูเหตุผลเต็มใน migrations/changes/2026-09-04_01_api_logs_llm_tokens.sql
 CREATE TABLE public.api_logs (
     id bigint NOT NULL,
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
@@ -121,7 +123,9 @@ CREATE TABLE public.api_logs (
     ip character varying(45),
     llm_ms integer,
     llm_calls smallint,
-    own_ms integer
+    own_ms integer,
+    llm_prompt_tokens integer,
+    llm_cached_tokens integer
 )
 WITH (autovacuum_vacuum_scale_factor='0.02', autovacuum_analyze_scale_factor='0.01');
 

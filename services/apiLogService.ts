@@ -134,6 +134,8 @@ export function recordWebhookProcessing(info: {
   llmMs: number;
   llmCalls: number;
   ownMs: number;
+  llmPromptTokens: number;
+  llmCachedTokens: number;
 }): void {
   // ไม่มี requestId = ปิด log อยู่ (API_LOG_ENABLED=false) → ไม่ต้องบันทึกอะไร
   if (!info.requestId) return;
@@ -161,6 +163,8 @@ export function recordWebhookProcessing(info: {
     llmMs: info.llmMs,
     llmCalls: info.llmCalls,
     ownMs: info.ownMs,
+    llmPromptTokens: info.llmPromptTokens,
+    llmCachedTokens: info.llmCachedTokens,
   });
 }
 

@@ -250,5 +250,7 @@ function collect(req: Request, res: Response): void {
     llmMs: null,
     llmCalls: null,
     ownMs: null,
+    llmPromptTokens: null,
+    llmCachedTokens: null,
   });
 }

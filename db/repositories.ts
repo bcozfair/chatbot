@@ -792,6 +792,9 @@ export interface ApiLogInsertRow {
   llmMs: number | null;
   llmCalls: number | null;
   ownMs: number | null;
+  /** G#2 — token ที่ส่งเข้า LLM รวมทุก call / ส่วนที่เข้าแคชของ DeepSeek · null = ไม่ใช่งาน webhook */
+  llmPromptTokens: number | null;
+  llmCachedTokens: number | null;
 }
 
 /**
@@ -806,12 +809,12 @@ export async function insertApiLogRows(db: DbExecutor, rows: ApiLogInsertRow[]):
     `INSERT INTO api_logs
        (created_at, request_id, method, route, path, status_code, duration_ms,
         resp_bytes, admin_user_id, line_user_id, ip, inflight, db_waiting, queue_waited_ms,
-        llm_ms, llm_calls, own_ms)
+        llm_ms, llm_calls, own_ms, llm_prompt_tokens, llm_cached_tokens)
      SELECT * FROM UNNEST(
        $1::timestamptz[], $2::varchar[], $3::varchar[], $4::varchar[], $5::varchar[],
        $6::smallint[], $7::int[], $8::int[], $9::int[], $10::varchar[], $11::varchar[],
        $12::smallint[], $13::smallint[], $14::int[],
-       $15::int[], $16::smallint[], $17::int[])`,
+       $15::int[], $16::smallint[], $17::int[], $18::int[], $19::int[])`,
     [
       rows.map(r => r.createdAt.toISOString()),
       rows.map(r => r.requestId),
@@ -830,6 +833,8 @@ export async function insertApiLogRows(db: DbExecutor, rows: ApiLogInsertRow[]):
       rows.map(r => r.llmMs),
       rows.map(r => r.llmCalls),
       rows.map(r => r.ownMs),
+      rows.map(r => r.llmPromptTokens),
+      rows.map(r => r.llmCachedTokens),
     ]);
 }
 

@@ -227,7 +227,7 @@ app.post('/callback', line.middleware(lineConfig), (req: any, res: any) => {
             waitedMs: waited, totalMs: Date.now() - receivedAt,
             // ถูกทิ้งตั้งแต่ยังไม่เริ่ม ⇒ ไม่ได้เรียก LLM และไม่ได้ทำงานของเราเองเลยจริง ๆ
             // ใส่ 0 ไม่ใช่ null เพราะนี่คือ "วัดแล้วได้ศูนย์" ไม่ใช่ "ไม่มีข้อมูล"
-            llmMs: 0, llmCalls: 0, ownMs: 0,
+            llmMs: 0, llmCalls: 0, ownMs: 0, llmPromptTokens: 0, llmCachedTokens: 0,
           });
           return;
         }
@@ -286,6 +286,8 @@ app.post('/callback', line.middleware(lineConfig), (req: any, res: any) => {
             `[queue] reqId=${reqId ?? '-'} ${who} waited=${waited}ms processed=${processed}ms` +
             ` llm=${llm.ms}ms/${llm.calls}call${llm.errors > 0 ? `/${llm.errors}err` : ''}` +
             ` own=${processed - llm.ms}ms total=${total}ms` +
+            // cache ของ DeepSeek — พิมพ์เฉพาะตอนมีการเรียกจริง ไม่งั้นบรรทัดรกด้วย 0/0 ของ event ที่ไม่เรียก LLM
+            `${llm.promptTokens > 0 ? ` tok=${llm.promptTokens}/cached=${llm.cachedTokens}` : ''}` +
             `${total > BUDGET_MS ? ' ⚠️เกินงบ' : ''}` +
             ` [replied=${m.replied} timedOut=${m.timedOut} dropped=${m.droppedBeforeStart} failed=${m.failed}]`
           );
@@ -295,6 +297,7 @@ app.post('/callback', line.middleware(lineConfig), (req: any, res: any) => {
             // ตัวเลขชุดเดียวกับบรรทัด [queue] ข้างบนเป๊ะ ๆ — บรรทัดนั้นหายทุกครั้งที่ recreate
             // container ส่วนแถวนี้อยู่ยาวตาม retention ของ api_logs
             llmMs: llm.ms, llmCalls: llm.calls, ownMs: processed - llm.ms,
+            llmPromptTokens: llm.promptTokens, llmCachedTokens: llm.cachedTokens,
           });
         }
       });
