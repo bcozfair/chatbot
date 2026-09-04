@@ -448,9 +448,9 @@ app.use('/api/admin/logs', adminAuthMiddleware, requireRole('admin'), logsRouter
 
 | ไฟล์ | อะไร |
 | --- | --- |
-| `migrations/changes/2026-09-03_01_system_logs.sql` | ใหม่ — `system_logs` + `log_worker_state` |
-| `migrations/changes/2026-09-03_02_audit_logs.sql` | ใหม่ — `audit_logs` + ฟังก์ชัน `audit_row()` + trigger 11 ตาราง |
-| `migrations/changes/2026-09-03_03_traffic_daily.sql` | ใหม่ — `traffic_daily` |
+| `migrations/changes/2026-09-03_03_system_logs.sql` | ใหม่ — `system_logs` + `log_worker_state` |
+| `migrations/changes/2026-09-03_04_audit_logs.sql` | ใหม่ — `audit_logs` + ฟังก์ชัน `audit_row()` + trigger 11 ตาราง |
+| `migrations/changes/2026-09-03_05_traffic_daily.sql` | ใหม่ — `traffic_daily` |
 | `scripts/logworker/` (8 ไฟล์) | ใหม่ — โปรเซสเบื้องหลังบน host |
 | `deploy/logworker/` | ใหม่ — systemd unit + dependency ขั้นต่ำ + คู่มือ |
 | `db/logRepositories.ts` · `routes/logs.ts` | ใหม่ — API อ่าน (ไม่แตะ `db/repositories.ts` เดิม) |

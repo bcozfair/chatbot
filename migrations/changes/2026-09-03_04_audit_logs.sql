@@ -24,7 +24,7 @@
 --     "audit หาย 1 แถว + มี WARNING ใน log" ซึ่งยอมรับได้ ส่วนงานของผู้ใช้ผ่านตามปกติเสมอ
 --     มีเคสทดสอบข้อนี้อยู่ใน scripts/diag/auditTriggerSmoke.ts
 --
---  รัน: npx tsx scripts/runMigration.ts migrations/changes/2026-09-03_02_audit_logs.sql
+--  รัน: npx tsx scripts/runMigration.ts migrations/changes/2026-09-03_04_audit_logs.sql
 --  idempotent — รันซ้ำได้ผลเท่าเดิม (DROP TRIGGER IF EXISTS ก่อน CREATE ทุกตัว)
 -- ─────────────────────────────────────────────────────────────────────────────
 

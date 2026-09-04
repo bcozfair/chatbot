@@ -14,7 +14,7 @@
 --    - ไม่ mount docker socket เข้าคอนเทนเนอร์ — เท่ากับให้สิทธิ์ root กับแอป
 --    - ไม่ partition — เกณฑ์ที่ควรย้ายคือเกิน ~5M แถว หรือ 3 GB (ไกลมากที่ระดับ warn)
 --
---  รัน: npx tsx scripts/runMigration.ts migrations/changes/2026-09-03_01_system_logs.sql
+--  รัน: npx tsx scripts/runMigration.ts migrations/changes/2026-09-03_03_system_logs.sql
 --  ไฟล์นี้สร้างของใหม่ล้วน ไม่ ALTER ตารางเดิม ไม่แตะ matview → รันตอนระบบเปิดอยู่ได้ จบในไม่กี่ ms
 --  idempotent — รันซ้ำได้ผลเท่าเดิม
 -- ─────────────────────────────────────────────────────────────────────────────

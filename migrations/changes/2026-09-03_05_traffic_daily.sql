@@ -11,7 +11,7 @@
 --     (sum ของ sum หารด้วย sum ของ count) ส่วน p95 ของช่วงยาวหน้าจอต้องติดป้ายให้ชัดว่าเป็น
 --     "p95 สูงสุดรายวันในช่วงนี้" ไม่ใช่ p95 จริงของทั้งช่วง — ตัวเลขต้องไม่โกหก
 --
---  รัน: npx tsx scripts/runMigration.ts migrations/changes/2026-09-03_03_traffic_daily.sql
+--  รัน: npx tsx scripts/runMigration.ts migrations/changes/2026-09-03_05_traffic_daily.sql
 --  idempotent — รันซ้ำได้ผลเท่าเดิม
 -- ─────────────────────────────────────────────────────────────────────────────
 

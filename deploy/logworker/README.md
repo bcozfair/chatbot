@@ -35,9 +35,9 @@ Node หา package จาก "ที่อยู่ของไฟล์ที�
 ```bash
 # 0) ต้องรัน migration ทั้ง 3 ไฟล์ก่อน ไม่งั้น worker จะปฏิเสธการสตาร์ทพร้อมบอกว่าขาดตารางอะไร
 cd /home/app_sales/salechatbot/chatbot
-docker compose exec app npx tsx scripts/runMigration.ts migrations/changes/2026-09-03_01_system_logs.sql
-docker compose exec app npx tsx scripts/runMigration.ts migrations/changes/2026-09-03_02_audit_logs.sql
-docker compose exec app npx tsx scripts/runMigration.ts migrations/changes/2026-09-03_03_traffic_daily.sql
+docker compose exec app npx tsx scripts/runMigration.ts migrations/changes/2026-09-03_03_system_logs.sql
+docker compose exec app npx tsx scripts/runMigration.ts migrations/changes/2026-09-03_04_audit_logs.sql
+docker compose exec app npx tsx scripts/runMigration.ts migrations/changes/2026-09-03_05_traffic_daily.sql
 
 # 1) dependency ขั้นต่ำ + symlink
 cd deploy/logworker

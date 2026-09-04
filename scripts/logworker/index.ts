@@ -141,7 +141,7 @@ async function main(): Promise<void> {
       WHERE to_regclass('public.' || t) IS NULL`);
   if (rows.length > 0) {
     logErr(`ยังไม่ได้รัน migration: ขาดตาราง ${rows.map(r => r.missing).join(', ')}`);
-    logErr('รัน: npx tsx scripts/runMigration.ts migrations/changes/2026-09-03_0{1,2,3}_*.sql');
+    logErr('รัน: npx tsx scripts/runMigration.ts migrations/changes/2026-09-03_0{3,4,5}_*.sql');
     await pool.end();
     process.exit(1);
   }

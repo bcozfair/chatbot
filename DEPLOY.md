@@ -490,9 +490,9 @@ docker compose exec app npm run diag:sync-api                  # ต้องเ
 สร้างของใหม่ล้วน ไม่ ALTER ตารางเดิม ไม่แตะ matview → รันตอนระบบเปิดอยู่ได้ จบในไม่กี่วินาที
 
 ```bash
-docker compose exec app npx tsx scripts/runMigration.ts migrations/changes/2026-09-03_01_system_logs.sql
-docker compose exec app npx tsx scripts/runMigration.ts migrations/changes/2026-09-03_02_audit_logs.sql
-docker compose exec app npx tsx scripts/runMigration.ts migrations/changes/2026-09-03_03_traffic_daily.sql
+docker compose exec app npx tsx scripts/runMigration.ts migrations/changes/2026-09-03_03_system_logs.sql
+docker compose exec app npx tsx scripts/runMigration.ts migrations/changes/2026-09-03_04_audit_logs.sql
+docker compose exec app npx tsx scripts/runMigration.ts migrations/changes/2026-09-03_05_traffic_daily.sql
 ```
 
 จากนั้นติดตั้ง logworker บน host ตาม [`deploy/logworker/README.md`](deploy/logworker/README.md)
