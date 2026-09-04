@@ -63,7 +63,7 @@ systemctl status logworker
 
 | อะไร | ตรวจด้วย | หมายเหตุ |
 | --- | --- | --- |
-| Node 20+ บน host | `node -v` | ยืนยันแล้วว่ามี v22 |
+| Node 20+ บน host | `node -v` | ยืนยันแล้วว่ามี v22 (nvm) · **`/usr/bin/node` ของเครื่องนี้เป็น v18 ซึ่งไม่รู้จัก `--import`** ⇒ `ExecStart` ใน unit file ชี้ตรงไปที่ path ของ nvm · อัปเกรด node ด้วย nvm เมื่อไหร่ต้องแก้บรรทัดนั้นตาม |
 | เรียก `docker logs` ได้โดยไม่ต้อง sudo | `docker logs --tail 1 primus-chatbot-app-1` | ผู้ใช้ต้องอยู่ในกลุ่ม `docker` |
 | ต่อ DB จาก host ได้ | `nc -z 127.0.0.1 5432` | ต้องมี `docker-compose.override.yml` ที่ publish พอร์ต 5432 ออก host |
 
@@ -106,5 +106,6 @@ services:
 | `ยังไม่ได้รัน migration: ขาดตาราง ...` | ข้ามขั้นตอนที่ 0 |
 | `ECONNREFUSED 127.0.0.1:5432` | เครื่องนี้ไม่ได้ publish พอร์ต DB ออก host |
 | `permission denied ... docker.sock` | ผู้ใช้ใน unit file ไม่ได้อยู่ในกลุ่ม `docker` |
+| `bad option: --import` | `ExecStart` ชี้ไป node ที่เก่ากว่า 20.6 (เช่น `/usr/bin/node` ที่เป็น v18) |
 | `มี logworker อีกตัวทำงานอยู่แล้ว` | มีตัวที่รันด้วยมือค้างอยู่ — advisory lock กันซ้อนให้แล้ว ปิดตัวที่รันมือทิ้ง |
 | ตาราง `system_logs` ไม่โตเลย | ปกติ ถ้าระบบไม่มี warn/error — ลองตั้ง `SYSTEM_LOG_DB_LEVEL=info` ชั่วคราวเพื่อพิสูจน์ |

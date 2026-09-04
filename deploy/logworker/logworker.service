@@ -34,7 +34,10 @@ Group=app_sales
 
 # WorkingDirectory ชี้ที่ deploy/logworker เพราะ `--import tsx` ถูกค้นหาจาก CWD
 WorkingDirectory=/home/app_sales/salechatbot/chatbot/deploy/logworker
-ExecStart=/usr/bin/node --import tsx /home/app_sales/salechatbot/chatbot/scripts/logworker/index.ts
+# ⚠️ ต้องเป็น node 20+ เพราะ --import เพิ่งมีใน 20.6 · /usr/bin/node ของเครื่องนี้เป็น v18
+#    จึงชี้ตรงไปที่ node ของ nvm — ถ้าอัปเกรด node ด้วย nvm เมื่อไหร่ ต้องแก้บรรทัดนี้ตาม
+#    (ตรวจด้วย: systemctl status logworker แล้วดูว่าขึ้น bad option: --import หรือไม่)
+ExecStart=/home/app_sales/.nvm/versions/node/v22.23.2/bin/node --import tsx /home/app_sales/salechatbot/chatbot/scripts/logworker/index.ts
 
 # worker ต่อ DB ผ่านพอร์ตที่ publish ออก host (127.0.0.1:5432 จาก docker-compose.override.yml)
 # ไม่ใช่ผ่าน network ภายในของ docker ที่ชื่อ "db" ซึ่ง host ไม่รู้จัก
