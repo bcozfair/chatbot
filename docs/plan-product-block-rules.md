@@ -40,7 +40,7 @@
 | เฟส | ทำอะไร | เปลี่ยนพฤติกรรมไหม |
 | --- | --- | --- |
 | 1 | ขยาย rule engine เป็น 5 ระดับ | ❌ ไม่ (พิสูจน์ด้วย diag) |
-| 2 | สร้างตาราง + ก๊อปข้อมูล `is_locked` เดิมเข้ามา (ยังไม่ใช้) | ❌ ไม่ |
+| 2 | สร้างตาราง + ก๊อปข้อมูล `is_locked` เดิมเข้ามา (ยังไม่ใช้) | ❌ ไม่ — **เขียนไฟล์แล้ว รอสั่งรัน** |
 | 3 | สลับ 3 จุดที่บล็อกจริงให้อ่านตารางใหม่ + API แอดมิน | ✅ เริ่มใช้ตารางใหม่ |
 | 3.5 | ปิดช่องโหว่ฝั่งแสดงผล 6 จุด + ข้อความใช้ template เดียวกับ MOQ | ✅ ข้อความที่เซลล์เห็นเปลี่ยน |
 | 4 | หน้าแอดมิน "กฎบล็อกสินค้า" | ✅ ตั้งค่าได้ 5 ระดับ |
@@ -219,133 +219,33 @@ npm run diag:pdf-render
 
 ---
 
-## 3. เฟส 2 — ตารางใหม่ + ย้ายข้อมูล
+## 3. เฟส 2 — ตารางใหม่ + ย้ายข้อมูล  ✅ **เขียนไฟล์แล้ว**
 
-`migrations/changes/2026-09-XX_01_product_block_rules.sql`
+ไฟล์จริง: [`migrations/changes/2026-09-07_02_product_block_rules.sql`](../migrations/changes/2026-09-07_02_product_block_rules.sql)
+(ไม่คัดลอก SQL มาไว้ที่นี่ — ของสองที่จะเพี้ยนกันเมื่อไหร่ก็ได้ ให้อ่านจากไฟล์เดียว)
 
-```sql
-BEGIN;
+สรุปสิ่งที่อยู่ในไฟล์:
 
-CREATE TABLE public.product_block_rules (
-    id                 serial PRIMARY KEY,
-    production         text,
-    brand              text,
-    series             text,
-    model              text,
-    internal_reference text,
-    warn_msg           text NOT NULL,                         -- บังคับกรอก เหมือน sale_line_warn_msg ของ MOQ
-    is_active          boolean NOT NULL DEFAULT true,
-    created_at         timestamptz NOT NULL DEFAULT now(),
-    updated_at         timestamptz NOT NULL DEFAULT now(),
-    -- กันแถวว่างทั้งแถว ซึ่งจะบล็อกสินค้าทั้งคลัง
-    --
-    -- ⚠️ ต้องใช้ NULLIF(btrim(...),'') ไม่ใช่ IS NOT NULL เฉย ๆ
-    -- engine ฝั่ง TS ตัดสิน wildcard ด้วย truthy (`if (rule.production)`) แปลว่า '' = wildcard เท่ากับ NULL
-    -- ถ้า CHECK ดูแค่ IS NOT NULL แถวที่ทุกช่องเป็น '' จะผ่าน constraint
-    -- แล้วกลายเป็นกฎ wildcard ที่บล็อกสินค้าทุกตัวในระบบ
-    CONSTRAINT product_block_rules_scope_not_empty CHECK (
-        NULLIF(btrim(production), '')         IS NOT NULL
-     OR NULLIF(btrim(brand), '')              IS NOT NULL
-     OR NULLIF(btrim(series), '')             IS NOT NULL
-     OR NULLIF(btrim(model), '')              IS NOT NULL
-     OR NULLIF(btrim(internal_reference), '') IS NOT NULL
-    ),
-    -- NOT NULL อย่างเดียวไม่พอ — '' หรือ '   ' ผ่าน NOT NULL ได้ แล้วเซลล์จะเห็นข้อความว่างเปล่า
-    CONSTRAINT product_block_rules_warn_msg_not_blank CHECK (btrim(warn_msg) <> '')
-);
+| ส่วน | ทำอะไร | ทำไม |
+| --- | --- | --- |
+| `CREATE TABLE product_block_rules` | 5 คอลัมน์ scope + `warn_msg NOT NULL` + `is_active` | โครงเดียวกับ `product_moq_rules` |
+| `CHECK scope_not_empty` | ใช้ `NULLIF(btrim(x),'')` ไม่ใช่ `IS NOT NULL` | engine ตัดสิน wildcard ด้วย truthy ⇒ `''` = wildcard ถ้า CHECK ดูแค่ NULL แถวว่างจะบล็อกทั้งคลัง |
+| `CHECK warn_msg_not_blank` | `btrim(warn_msg) <> ''` | `NOT NULL` อย่างเดียวปล่อย `'   '` ผ่าน แล้วเซลล์เห็นข้อความว่าง |
+| `UNIQUE INDEX scope_uniq` | index บน `lower(btrim(coalesce(...)))` ทั้ง 5 ช่อง | engine เทียบแบบ trim+lower ⇒ `'ACME'` กับ `'acme '` คือกฎเดียวกัน ถ้า index ไม่ lower จะสร้างกฎซ้ำได้แล้วผลไปขึ้นกับ `id` |
+| `DO $$` ก่อนย้าย | หยุดถ้ามี `is_locked` ที่ scope ว่างทั้งแถว | แถวนั้น = บล็อกทั้งคลัง ต้องให้คนตัดสิน ไม่ใช่ย้ายตามเงียบ ๆ |
+| `INSERT` ที่ 1 | ย้าย 4 กฎ `is_locked` พร้อม `warn_msg` จาก `VALUES` | `quotation_rules` ไม่มีคอลัมน์เก็บข้อความเลย ต้องเขียนที่นี่ |
+| `INSERT` ที่ 2 | ย้าย 4 กฎระดับ ref จาก MOQ ปลอม | ดู §3.2 — ยกข้อความที่แอดมินเขียนเองมาตรง ๆ |
+| `DO $$` ปิดท้าย | 3 ด่าน: ทุก `is_locked` ต้องมีคู่ · ref ต้องได้ครบ 4 · ห้ามมี MOQ ≥ 9999 นอกรายการ | กันแถวหล่นเงียบ ๆ และกันคนเพิ่ม workaround ใหม่หลังวันที่เขียนแผนนี้ |
 
--- กฎซ้ำ scope เดียวกันไม่มีประโยชน์ และทำให้ผลลัพธ์ขึ้นกับ id
--- lower(btrim(...)) เพราะ engine เทียบแบบ trim + lowercase — 'ACME' กับ 'acme ' คือกฎเดียวกัน
--- ถ้าใช้ COALESCE เฉย ๆ จะสร้างกฎซ้ำที่ระบบมองว่าเหมือนกันได้ แล้วผลลัพธ์ไปขึ้นกับ id
-CREATE UNIQUE INDEX product_block_rules_scope_uniq
-    ON public.product_block_rules (
-        lower(btrim(COALESCE(production, ''))),
-        lower(btrim(COALESCE(brand, ''))),
-        lower(btrim(COALESCE(series, ''))),
-        lower(btrim(COALESCE(model, ''))),
-        lower(btrim(COALESCE(internal_reference, '')))
-    );
+**สองจุดที่ต่างจากร่างเดิมในแผน:**
 
--- ถ้ามีแถว is_locked ที่ scope ว่างทั้งหมด = บล็อกทั้งคลัง ต้องหยุดให้คนมาดู ไม่ใช่ข้ามเงียบ ๆ
-DO $$
-DECLARE n int;
-BEGIN
-  SELECT count(*) INTO n FROM public.quotation_rules
-   WHERE is_locked = true
-     AND NULLIF(btrim(production), '') IS NULL
-     AND NULLIF(btrim(brand), '')      IS NULL
-     AND NULLIF(btrim(series), '')     IS NULL;
-  IF n > 0 THEN
-    RAISE EXCEPTION 'พบกฎ is_locked ที่ scope ว่างทั้งแถว % แถว — ต้องตัดสินใจก่อนย้าย', n;
-  END IF;
-END $$;
-
--- ── ย้ายกฎบล็อกเดิม 4 แถว พร้อมข้อความ (ตอนนี้ยังไม่มีใครอ่านตารางนี้) ──
--- warn_msg ต่อ scope อยู่ใน VALUES ให้เห็นชัดตอน review — ไม่ใช่ค่า default ลอย ๆ
--- NULLIF(btrim(..)) ตอน SELECT ด้วย เพื่อไม่ให้ '' หรือ '  ' หลุดเข้าตารางใหม่
-INSERT INTO public.product_block_rules (production, brand, series, warn_msg)
-SELECT NULLIF(btrim(r.production), ''),
-       NULLIF(btrim(r.brand), ''),
-       NULLIF(btrim(r.series), ''),
-       w.warn_msg
-  FROM public.quotation_rules r
-  JOIN (VALUES
-    ('production 2(pm)', '', '',
-     'สินค้ากลุ่มผลิต Production 2 ไม่เปิดให้เสนอราคาผ่านระบบ กรุณาติดต่อแอดมินเพื่อขอราคาเป็นรายกรณี'),
-    ('production 3(pm)', '', 'ecm',
-     'สินค้าซีรีส์ ECM ไม่เปิดให้เสนอราคาผ่านระบบ กรุณาติดต่อแอดมินเพื่อขอราคาเป็นรายกรณี'),
-    ('buy to sell', '', '',
-     'สินค้ากลุ่ม Buy to Sell ต้องเช็คราคาและระยะเวลาสั่งซื้อกับแอดมินก่อนทุกครั้ง'),
-    ('buy to sell(tht)', '', '',
-     'สินค้ากลุ่ม Buy to Sell (THT) ต้องเช็คราคาและระยะเวลาสั่งซื้อกับแอดมินก่อนทุกครั้ง')
-  ) AS w(production, brand, series, warn_msg)
-    ON lower(btrim(coalesce(r.production, ''))) = w.production
-   AND lower(btrim(coalesce(r.brand, '')))      = w.brand
-   AND lower(btrim(coalesce(r.series, '')))     = w.series
- WHERE r.is_locked = true;
-
--- ── กฎระดับ ref ที่แอดมินทำ workaround ไว้ในตาราง MOQ ──
--- 4 แถวนี้ตั้ง min_order_qty 9999/99999 เพื่อ "บล็อก" เพราะบล็อกได้แค่ระดับ series
--- ข้อความที่แอดมินเขียนเองอยู่แล้ว ยกมาใช้เป็น warn_msg ตรง ๆ (ดู §3.2)
--- ⚠️ แถวใน product_moq_rules ยัง active อยู่ในเฟสนี้ — ปิดตอนเฟส 3 เท่านั้น (ดู §4.4)
-INSERT INTO public.product_block_rules (internal_reference, warn_msg)
-SELECT m.internal_reference, btrim(m.sale_line_warn_msg)
-  FROM public.product_moq_rules m
- WHERE m.internal_reference IN
-       ('FAFC4FP1080001', 'FAFC4FP1080003', 'FAFC4FP1080009', 'FAFC4FP1080016')
-   AND btrim(m.sale_line_warn_msg) <> '';
-
--- ── ด่านสุดท้าย: ต้องย้ายครบ ไม่มีแถวไหนหล่น ──
-DO $$
-DECLARE n_locked int; n_moved int; n_refs int; n_extra int;
-BEGIN
-  SELECT count(*) INTO n_locked FROM public.quotation_rules WHERE is_locked = true;
-  SELECT count(*) INTO n_moved  FROM public.product_block_rules
-   WHERE internal_reference IS NULL;
-  IF n_locked <> n_moved THEN
-    RAISE EXCEPTION 'กฎ is_locked มี % แถว แต่ย้ายได้ % แถว — มีกฎที่ยังไม่ได้เขียน warn_msg ใน VALUES',
-      n_locked, n_moved;
-  END IF;
-
-  -- กันเคส sale_line_warn_msg ว่าง แล้วแถวถูกกรองทิ้งเงียบ ๆ
-  SELECT count(*) INTO n_refs FROM public.product_block_rules
-   WHERE internal_reference IS NOT NULL;
-  IF n_refs <> 4 THEN
-    RAISE EXCEPTION 'กฎระดับ ref ที่ย้ายมาจาก MOQ ได้ % แถว (ต้องได้ 4) — เช็ค sale_line_warn_msg ว่างหรือ ref หาย', n_refs;
-  END IF;
-
-  -- มี MOQ ที่ทำหน้าที่บล็อกเพิ่มมาหลังจากเขียนแผนนี้ไหม
-  SELECT count(*) INTO n_extra FROM public.product_moq_rules
-   WHERE min_order_qty >= 9999
-     AND internal_reference NOT IN
-         ('FAFC4FP1080001', 'FAFC4FP1080003', 'FAFC4FP1080009', 'FAFC4FP1080016');
-  IF n_extra > 0 THEN
-    RAISE EXCEPTION 'พบกฎ MOQ ที่ใช้บล็อกเพิ่มมาอีก % แถว — ต้องเพิ่มเข้ารายการก่อนรัน', n_extra;
-  END IF;
-END $$;
-
-COMMIT;
-```
+1. **ทำให้ idempotent** — `CREATE TABLE IF NOT EXISTS` · `CREATE UNIQUE INDEX IF NOT EXISTS` ·
+   `ON CONFLICT DO NOTHING` ทั้งสอง INSERT ตามธรรมเนียมไฟล์อื่นใน `migrations/changes/`
+   `ON CONFLICT DO NOTHING` ยังแปลว่า **รันซ้ำไม่ทับข้อความที่แอดมินแก้ไปแล้ว**
+2. **ด่านที่ 1 เปลี่ยนจาก "นับแถวเทียบเลข" เป็น `NOT EXISTS`** — ของเดิมเทียบ
+   `count(is_locked) = count(แถวที่ ref เป็น NULL)` ซึ่งจะพังหลังเฟส 4 ทันทีที่แอดมินเพิ่มกฎ
+   ระดับ production เอง (แถวใหม่ไปเพิ่มตัวหารโดยไม่เกี่ยวอะไรกับการย้าย)
+   แบบ `NOT EXISTS` ถามตรง ๆ ว่า "กฎ `is_locked` แถวนี้มีคู่ในตารางใหม่ไหม" ⇒ ถูกเสมอไม่ว่าจะรันเมื่อไหร่
 
 **ต้องเช็คก่อนรัน** (บน DB จริง):
 
@@ -380,16 +280,21 @@ SELECT internal_reference, min_order_qty, sale_line_warn_msg
 หรือแก้ทีหลังผ่านหน้าแอดมินในเฟส 4 ก็ได้
 ส่วนข้อความของ 4 ref ยกมาจากที่แอดมินเขียนเองใน MOQ ไม่ต้องแก้
 
-### 3.1.2 ทดลองรันแล้ว (ยังไม่ commit)
+### 3.1.2 ทดลองรันแล้ว 3 แบบ (ยังไม่ commit ลง DB)
 
-รัน SQL ทั้งก้อนบน DB จริงใน transaction แล้ว `ROLLBACK` (`lock_timeout=5s`, `statement_timeout=30s`)
-— ยืนยันว่าไม่มีอะไรค้าง: `to_regclass('public.product_block_rules')` คืน NULL หลังจบ
+ทั้งสามแบบรันบน **DB จริง** ในทรานแซกชันแล้ว `ROLLBACK` (`lock_timeout=5s`, `statement_timeout=30s`)
+ปิดท้ายด้วย `to_regclass('public.product_block_rules')` → คืน NULL ทุกครั้ง = ไม่มีอะไรค้าง
 
-```
-CREATE TABLE · CREATE INDEX · DO (ผ่าน) · INSERT 0 4 · INSERT 0 4 · DO (ผ่าน)
-```
+| # | ทดสอบอะไร | ผล |
+| --- | --- | --- |
+| 1 | รันปกติ 1 รอบ | `CREATE TABLE · CREATE INDEX · DO · INSERT 0 4 · INSERT 0 4 · DO` → 8 แถว |
+| 2 | **idempotent** — รันไฟล์เดิมซ้ำรอบที่ 2 ในทรานแซกชันเดียว | รอบสอง `INSERT 0 0` ทั้งคู่ ด่านผ่านหมด ยังได้ 8 แถวเท่าเดิม |
+| 3 | **ด่านทำงานจริงไหม** — แทรกกฎ `is_locked` scope ปลอม (`ZZ-TEST-SCOPE`) ก่อนรัน | `ERROR: กฎ is_locked 1 แถวยังไม่มีคู่ในตารางใหม่ …` แล้ว rollback ⇒ ด่านจับได้ ไม่ปล่อยผ่านเงียบ |
 
-ได้ 8 แถวตามนี้:
+ข้อ 3 สำคัญที่สุด — เป็นการพิสูจน์ว่าถ้าวันหนึ่งมีคนไปติ๊ก `is_locked` แถวใหม่ในหน้าเงื่อนไขหลัก
+แล้วรัน migration นี้ทีหลัง มันจะ **หยุดและฟ้อง** ไม่ใช่ย้ายไปครึ่งเดียวแล้วบอกว่าสำเร็จ
+
+รอบที่ 1 ได้ 8 แถวตามนี้:
 
 | id | production | series | internal_reference | warn_msg |
 | --- | --- | --- | --- | --- |
@@ -403,7 +308,16 @@ CREATE TABLE · CREATE INDEX · DO (ผ่าน) · INSERT 0 4 · INSERT 0 4 ·
 | 8 | | | FAFC4FP1080016 | รหัสนี้ขายไม่ได้ครับ |
 
 **ไม่มีแถวไหน `warn_msg` ว่าง** — ทั้ง 3 ด่านใน `DO $$` ผ่านหมด
-ตอนรันจริงยังต้อง dump ก่อนตามกฎใน [DEPLOY.md:512](../DEPLOY.md#L512)
+
+**ยังไม่ได้รันจริงลง DB** — ตอนรันจริงต้อง dump ก่อนตามกฎใน [DEPLOY.md:657](../DEPLOY.md#L657):
+
+```bash
+docker compose exec -T db pg_dump -U "$PG_USER" -d "$PG_DATABASE" -Fc > backup-$(date +%F-%H%M).dump
+ls -lh backup-*.dump      # ต้องมีขนาดสมเหตุผล ไม่ใช่ 0 ไบต์
+npx tsx scripts/runMigration.ts migrations/changes/2026-09-07_02_product_block_rules.sql
+```
+
+ถอนออก: `DROP TABLE public.product_block_rules;` — ปลอดภัยตลอดเฟส 2 เพราะยังไม่มีโค้ดไหนอ่านตารางนี้
 
 ### 3.2 เจอตอนตรวจ: แอดมินทำ workaround ไว้ในตาราง MOQ แล้ว
 
@@ -427,9 +341,9 @@ CREATE TABLE · CREATE INDEX · DO (ผ่าน) · INSERT 0 4 · INSERT 0 4 ·
 ซึ่งอ่านแล้วสับสน (สินค้าไม่ได้ห้ามขายเพราะจำนวน) — หลังเฟส 3 จะเปลี่ยนเป็น
 `❌ ระงับการเสนอราคา ...` ที่ตรงกับความเป็นจริง
 
-### 3.1 ต้องขึ้นทะเบียนตารางใหม่กับ externalSync ด้วย
+### 3.1 ขึ้นทะเบียนตารางใหม่กับ externalSync  ✅ **ทำแล้ว**
 
-[services/externalSync.ts:88-92](../services/externalSync.ts#L88) มีรายชื่อตารางที่ sync ออกไปปลายทาง
+[services/externalSync.ts:88-93](../services/externalSync.ts#L88) มีรายชื่อตารางที่ sync ออกไปปลายทาง
 ตารางกฎอื่นอยู่ในนั้นครบ (`product_moq_rules`, `product_stock_rules`, `quotation_rules`)
 ถ้าลืมเพิ่มตัวใหม่ ระบบยังทำงานถูกทุกอย่าง — แต่ข้อมูลกฎบล็อกจะไม่ถูกส่งออกเลย และไม่มี error ให้เห็น
 
@@ -437,7 +351,7 @@ CREATE TABLE · CREATE INDEX · DO (ผ่าน) · INSERT 0 4 · INSERT 0 4 ·
 { table: 'product_block_rules',      mode: 'snapshot', pk: ['id'],                 pollHintSeconds: 900 },
 ```
 
-ทำในเฟส 2 พร้อมกับ migration (แถวยังว่างอยู่ ยังไม่มีผลอะไร)
+ใส่ถัดจาก `product_moq_rules` แล้ว — ยังไม่มีผลอะไรจนกว่าตารางจะมีจริงและโค้ดจะขึ้น
 
 ---
 
