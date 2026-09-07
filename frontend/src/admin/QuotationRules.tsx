@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import {
   Plus,
@@ -14,111 +14,13 @@ import {
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Layers,
   PackageCheck,
 } from 'lucide-react';
 import { PageHeader } from './PageHeader';
-
-// ── ComboBox ─────────────────────────────────────────────────────────────
-function ComboBox({
-  options,
-  value,
-  onChange,
-  placeholder = 'ไม่ระบุ',
-}: {
-  options: string[];
-  value: string;
-  onChange: (val: string) => void;
-  placeholder?: string;
-}) {
-  const [query, setQuery] = useState('');
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  const filtered = query.trim()
-    ? options.filter(o => o.toLowerCase().includes(query.toLowerCase()))
-    : options;
-
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false);
-        setQuery('');
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
-
-  return (
-    <div ref={ref} className="relative">
-      <div
-        onClick={() => setOpen(o => !o)}
-        className={`flex items-center gap-2 w-full h-9 px-3 rounded-xl border text-sm cursor-pointer transition-all ${open
-          ? 'border-[var(--brand-fg)] bg-card ring-2 ring-[var(--brand-fg)]/10'
-          : value
-            ? 'border-slate-300 bg-card'
-            : 'border-slate-200 bg-slate-50 hover:border-slate-300'
-          }`}
-      >
-        {open ? (
-          <input
-            autoFocus
-            type="text"
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-            onClick={e => e.stopPropagation()}
-            placeholder="พิมพ์เพื่อค้นหา..."
-            className="flex-1 bg-transparent outline-none text-sm text-slate-800 placeholder:text-slate-400"
-          />
-        ) : (
-          <span className={`flex-1 truncate ${value ? 'text-slate-800 font-medium' : 'text-slate-400'}`}>
-            {value || placeholder}
-          </span>
-        )}
-        <div className="flex items-center gap-1 flex-shrink-0">
-          {value && !open && (
-            <button
-              type="button"
-              onClick={e => { e.stopPropagation(); onChange(''); setQuery(''); }}
-              className="w-4 h-4 rounded-full bg-slate-200 hover:bg-slate-300 flex items-center justify-center transition-colors"
-            >
-              <X className="w-2.5 h-2.5 text-slate-500" />
-            </button>
-          )}
-          <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-150 ${open ? 'rotate-180' : ''}`} />
-        </div>
-      </div>
-
-      {open && (
-        <div className="absolute z-50 mt-1 w-full bg-card border border-slate-200 rounded-xl shadow-lg overflow-hidden">
-          <div className="max-h-48 overflow-y-auto">
-            {filtered.length === 0 ? (
-              <p className="px-4 py-3 text-xs text-slate-400 text-center">ไม่พบผลลัพธ์</p>
-            ) : (
-              filtered.map(opt => (
-                <button
-                  key={opt}
-                  type="button"
-                  onClick={() => { onChange(opt); setQuery(''); setOpen(false); }}
-                  className={`w-full text-left px-4 py-2.5 text-sm transition-colors ${opt === value
-                    ? 'bg-emerald-50 text-[var(--brand-fg)] font-semibold'
-                    : 'text-slate-700 hover:bg-slate-50'
-                    }`}
-                >
-                  {opt}
-                </button>
-              ))
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
+import { ScopeComboBox } from './ScopeComboBox';
 
 interface QuotationRule {
   id: number;
@@ -128,6 +30,11 @@ interface QuotationRule {
   quote_company: 'PM' | 'THT' | null;
   warranty_years: number;
   warranty_unit: 'month' | 'year';
+  /**
+   * ⚠️ เลิกใช้แล้ว — กฎบล็อกย้ายไปแท็บ "บล็อกสินค้า" (product_block_rules)
+   * ยังส่งค่าเดิมกลับไปตอนบันทึกเพื่อไม่ให้ค่าใน DB ถูกล้างระหว่าง soak
+   * ลบพร้อมคอลัมน์ในเฟส 5
+   */
   is_locked: boolean;
   delivery_in_stock_days: number;
   delivery_out_of_stock_days: number;
@@ -610,9 +517,6 @@ export function QuotationRules() {
                     จัดส่ง (ไม่มีสต็อก) {renderSortIcon('delivery_out_of_stock_days')}
                   </th>
                   <th className="px-4 py-3 text-center w-36">จัดส่งตามจำนวน</th>
-                  <th onClick={() => handleSort('is_locked')} className="px-4 py-3 text-center cursor-pointer hover:bg-slate-100 transition-colors w-28">
-                    สถานะ {renderSortIcon('is_locked')}
-                  </th>
                   <th className="px-4 py-3 text-center w-20">จัดการ</th>
                 </tr>
               </thead>
@@ -656,36 +560,22 @@ export function QuotationRules() {
                         )}
                       </td>
                       <td className="px-4 py-2.5 text-center align-top">
-                        {rule.is_locked ? (
-                          <span className="text-slate-300 text-xs">—</span>
-                        ) : (
-                          <span className="inline-flex items-center px-2.5 py-0.5 bg-sky-50 border border-sky-200 text-sky-700 rounded-full text-[11px] font-bold whitespace-nowrap">
-                            {rule.warranty_years} {rule.warranty_unit === 'month' ? 'เดือน' : 'ปี'}
-                          </span>
-                        )}
+                        <span className="inline-flex items-center px-2.5 py-0.5 bg-sky-50 border border-sky-200 text-sky-700 rounded-full text-[11px] font-bold whitespace-nowrap">
+                          {rule.warranty_years} {rule.warranty_unit === 'month' ? 'เดือน' : 'ปี'}
+                        </span>
                       </td>
                       <td className="px-4 py-2.5 text-center align-top font-mono text-[13px]">
-                        {rule.is_locked ? (
-                          <span className="text-slate-300 text-xs font-sans">—</span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1.5">
-                            {rule.delivery_in_stock_days} วัน
-                          </span>
-                        )}
+                        <span className="inline-flex items-center gap-1.5">
+                          {rule.delivery_in_stock_days} วัน
+                        </span>
                       </td>
                       <td className="px-4 py-2.5 text-center align-top font-mono text-[13px]">
-                        {rule.is_locked ? (
-                          <span className="text-slate-300 text-xs font-sans">—</span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1.5">
-                            {rule.delivery_out_of_stock_days} วัน
-                          </span>
-                        )}
+                        <span className="inline-flex items-center gap-1.5">
+                          {rule.delivery_out_of_stock_days} วัน
+                        </span>
                       </td>
                       <td className="px-4 py-2.5 text-center align-top">
-                        {rule.is_locked ? (
-                          <span className="text-slate-300 text-xs">—</span>
-                        ) : countTiers(rule) === 0 ? (
+                        {countTiers(rule) === 0 ? (
                           <span className="text-slate-300 text-xs italic">ไม่กำหนด</span>
                         ) : (
                           <button
@@ -696,18 +586,6 @@ export function QuotationRules() {
                             <Layers className="w-3 h-3 text-amber-500" />
                             {countTiers(rule)} ขั้น
                           </button>
-                        )}
-                      </td>
-                      <td className="px-4 py-2.5 text-center align-top">
-                        {rule.is_locked ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-red-50 border border-red-200 text-red-700 rounded-full text-[10px] font-bold uppercase whitespace-nowrap">
-                            <ShieldAlert className="w-3 h-3 text-red-500" />
-                            บล็อก
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-full text-[10px] font-semibold">
-                            ปกติ
-                          </span>
                         )}
                       </td>
                       <td className="px-4 py-2.5 align-top">
@@ -922,7 +800,7 @@ export function QuotationRules() {
                       <label className="block text-[11px] font-semibold text-slate-500 mb-1">
                         ฝ่ายผลิต
                       </label>
-                      <ComboBox
+                      <ScopeComboBox
                         options={options.productions}
                         value={formData.production}
                         onChange={val => {
@@ -950,7 +828,7 @@ export function QuotationRules() {
                       <label className="block text-[11px] font-semibold text-slate-500 mb-1">
                         ยี่ห้อ
                       </label>
-                      <ComboBox
+                      <ScopeComboBox
                         options={availableBrands}
                         value={formData.brand}
                         onChange={val => {
@@ -980,7 +858,7 @@ export function QuotationRules() {
                       <label className="block text-[11px] font-semibold text-slate-500 mb-1">
                         ซีรีส์
                       </label>
-                      <ComboBox
+                      <ScopeComboBox
                         options={availableSeries}
                         value={formData.series}
                         onChange={val => setFormData(p => ({ ...p, series: val }))}
@@ -1021,36 +899,21 @@ export function QuotationRules() {
                   </div>
                 </section>
 
-                {/* ── Lock toggle: compact single row ── */}
-                <label
-                  className={`flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl border cursor-pointer transition-all ${formData.is_locked
-                    ? 'bg-red-50 border-red-200'
-                    : 'bg-slate-50 border-slate-200 hover:border-slate-300'
-                    }`}
-                >
-                  <div className="flex items-center gap-2.5">
-                    <ShieldAlert className={`w-4 h-4 flex-shrink-0 ${formData.is_locked ? 'text-red-500' : 'text-slate-400'}`} />
-                    <div>
-                      <p className={`text-xs font-bold ${formData.is_locked ? 'text-red-700' : 'text-slate-700'}`}>
-                        บล็อกห้ามเสนอราคา
-                      </p>
-                      <p className="text-[10px] text-slate-400">ห้ามออกใบเสนอราคาสินค้ากลุ่มนี้เด็ดขาด</p>
-                    </div>
+                {/* ── กฎบล็อกย้ายไปหน้าของตัวเองแล้ว (แผน §5.3) ──
+                    สวิตช์เดิมอยู่ตรงนี้ ทำได้แค่ระดับซีรีส์ และไม่มีที่ให้กรอกเหตุผลให้เซลล์อ่าน
+                    เหลือไว้แค่ป้ายชี้ทาง เพื่อไม่ให้แอดมินที่เคยใช้หาไม่เจอ */}
+                <div className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50">
+                  <ShieldAlert className="w-4 h-4 flex-shrink-0 text-slate-400" />
+                  <div>
+                    <p className="text-xs font-bold text-slate-700">จะบล็อกห้ามเสนอราคา?</p>
+                    <p className="text-[10px] text-slate-400">
+                      ย้ายไปแท็บ "บล็อกสินค้า" แล้ว — ที่นั่นบล็อกได้ถึงระดับรุ่นและรหัสสินค้า พร้อมกรอกเหตุผลที่เซลล์จะเห็น
+                    </p>
                   </div>
-                  <div className={`relative w-9 h-5 rounded-full flex-shrink-0 transition-colors ${formData.is_locked ? 'bg-red-500' : 'bg-slate-300'}`}>
-                    <div className={`absolute top-0.5 w-4 h-4 bg-card rounded-full shadow-sm transition-all ${formData.is_locked ? 'left-4' : 'left-0.5'}`} />
-                    <input
-                      type="checkbox"
-                      checked={formData.is_locked}
-                      onChange={e => setFormData(p => ({ ...p, is_locked: e.target.checked }))}
-                      className="sr-only"
-                    />
-                  </div>
-                </label>
+                </div>
 
                 {/* ── Warranty + delivery: unified 3-column stat cards ── */}
-                {!formData.is_locked && (
-                  <section>
+                <section>
                     <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-2">
                       เงื่อนไขใบเสนอราคา
                     </p>
@@ -1116,12 +979,10 @@ export function QuotationRules() {
                         </div>
                       </div>
                     </div>
-                  </section>
-                )}
+                </section>
 
                 {/* ── วันจัดส่งเมื่อสั่งจำนวนมาก (tier) ── */}
-                {!formData.is_locked && (
-                  <section>
+                <section>
                     <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-1">
                       จัดส่งเมื่อสั่งจำนวนมาก
                     </p>
@@ -1160,8 +1021,7 @@ export function QuotationRules() {
                         </div>
                       ))}
                     </div>
-                  </section>
-                )}
+                </section>
               </div>
 
               <div className="flex items-center justify-end gap-2 px-5 py-3.5 border-t border-slate-100 bg-slate-50/60 rounded-b-2xl">

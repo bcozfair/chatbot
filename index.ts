@@ -2293,7 +2293,8 @@ app.get('/api/admin/stats', adminAuthMiddleware, requireRole('admin'), async (re
         (SELECT COUNT(*) FROM quotation_rules)        AS quotation_rules,
         (SELECT COUNT(*) FROM product_optional_links) AS optional_links,
         (SELECT COUNT(*) FROM product_stock_rules)    AS stock_rules,
-        (SELECT COUNT(*) FROM product_moq_rules)      AS moq_rules
+        (SELECT COUNT(*) FROM product_moq_rules)      AS moq_rules,
+        (SELECT COUNT(*) FROM product_block_rules)    AS block_rules
     `);
     const row = result.rows[0];
     // COUNT(*) returns a string in pg — convert to number
@@ -2305,6 +2306,7 @@ app.get('/api/admin/stats', adminAuthMiddleware, requireRole('admin'), async (re
       optional_links: Number(row.optional_links),
       stock_rules: Number(row.stock_rules),
       moq_rules: Number(row.moq_rules),
+      block_rules: Number(row.block_rules),
     });
   } catch (err: any) {
     console.error("GET /api/admin/stats error:", err);
