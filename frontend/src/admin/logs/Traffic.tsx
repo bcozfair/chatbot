@@ -24,11 +24,6 @@ import {
 
 const BRAND = 'var(--brand-fg)';
 
-/**
- * ส่ง now/before ให้ Kpi ก็ต่อเมื่อ "ทั้งสองช่วงมีค่าที่วัดจริง"
- * ช่วงก่อนหน้าที่ยังไม่ได้เก็บตัวเลข LLM ต้องไม่ถูกอ่านเป็น 0 แล้วโชว์ลูกศรพุ่งขึ้น
- * — นั่นคือการเทียบกับของที่ไม่มีอยู่ ซึ่งเป็นตัวเลขที่โกหก
- */
 /** ผลรวม bigint มาจาก API เป็น string — null ต้องคง null ไว้ ไม่ใช่กลายเป็น 0 ตอนแปลง */
 function bigToNum(v: string | null | undefined): number | null {
   if (v === null || v === undefined) return null;
@@ -41,6 +36,11 @@ function pct10(v: number | null | undefined): number | null {
   return v === null || v === undefined ? null : Math.round(v * 10);
 }
 
+/**
+ * ส่ง now/before ให้ Kpi ก็ต่อเมื่อ "ทั้งสองช่วงมีค่าที่วัดจริง"
+ * ช่วงก่อนหน้าที่ยังไม่ได้เก็บตัวเลข LLM ต้องไม่ถูกอ่านเป็น 0 แล้วโชว์ลูกศรพุ่งขึ้น
+ * — นั่นคือการเทียบกับของที่ไม่มีอยู่ ซึ่งเป็นตัวเลขที่โกหก
+ */
 function cmp(now: number | null, before: number | null | undefined):
   { now: number; before: number } | Record<string, never> {
   return now !== null && before !== null && before !== undefined ? { now, before } : {};
