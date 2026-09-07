@@ -36,6 +36,8 @@ INSERT INTO traffic_daily AS td (
   errors_4xx, errors_5xx, uniq_line_users, uniq_admin_users, uniq_ips,
   bytes_out, duration_sum_ms, p50_ms, p95_ms, p99_ms, max_inflight, db_wait_hits,
   quotations_created, messages_in, audit_changes, system_errors,
+  llm_tasks, llm_ms_sum, llm_calls_sum, own_ms_sum, llm_p95_ms,
+  llm_token_tasks, llm_prompt_tokens, llm_cached_tokens,
   audit_digest, audit_prev_digest, computed_at
 )
 SELECT
@@ -63,6 +65,20 @@ SELECT
   (SELECT count(*) FROM audit_logs, bound WHERE occurred_at >= lo AND occurred_at < hi),
   (SELECT count(*) FROM system_logs, bound
     WHERE created_at >= lo AND created_at < hi AND level IN ('error', 'fatal')),
+  -- ── ตัวเลข LLM (แผน G/G#2) — ยกขึ้นมาเก็บถาวรเพราะ api_logs ลบทิ้งที่ 120 วัน ──
+  -- ⚠️ ห้าม COALESCE เป็น 0 — วันที่ยังไม่ได้เก็บค่าพวกนี้ต้องเป็น NULL ("ไม่ได้วัด")
+  --    ไม่ใช่ 0 ("ไม่เคยเรียก LLM") · เหตุผลเต็มใน migration 2026-09-07_01
+  -- กรองด้วย llm_ms IS NOT NULL ไม่ใช่ method='TASK' — ตัวเลขต้องผูกกับ "แถวที่วัดจริง"
+  --   ไม่ใช่กับสมมติฐานว่าเส้นทางไหนเรียก LLM ซึ่งเปลี่ยนได้ในอนาคต
+  (SELECT count(*)                            FROM l WHERE llm_ms    IS NOT NULL),
+  (SELECT sum(llm_ms)::bigint                 FROM l WHERE llm_ms    IS NOT NULL),
+  (SELECT sum(llm_calls)::int                 FROM l WHERE llm_calls IS NOT NULL),
+  (SELECT sum(own_ms)::bigint                 FROM l WHERE own_ms    IS NOT NULL),
+  (SELECT percentile_disc(0.95) WITHIN GROUP (ORDER BY llm_ms)::int
+     FROM l WHERE llm_ms IS NOT NULL),
+  (SELECT count(*)                            FROM l WHERE llm_prompt_tokens IS NOT NULL),
+  (SELECT sum(llm_prompt_tokens)::bigint      FROM l WHERE llm_prompt_tokens IS NOT NULL),
+  (SELECT sum(llm_cached_tokens)::bigint      FROM l WHERE llm_cached_tokens IS NOT NULL),
   -- ลายนิ้วมือรายวันของ audit — ต่อโซ่กับ digest ของเมื่อวาน
   -- ⚠️ NULL เมื่อวันนั้นไม่มีแถว audit เลย (COALESCE เป็นสตริงว่างจะทำให้ digest ของ "วันว่าง"
   --    ทุกวันเหมือนกันหมดจนไร้ความหมาย) — โซ่ข้ามวันว่างไปได้ ไม่ขาด
@@ -89,6 +105,11 @@ ON CONFLICT (day) DO UPDATE SET
   max_inflight = EXCLUDED.max_inflight, db_wait_hits = EXCLUDED.db_wait_hits,
   quotations_created = EXCLUDED.quotations_created, messages_in = EXCLUDED.messages_in,
   audit_changes = EXCLUDED.audit_changes, system_errors = EXCLUDED.system_errors,
+  llm_tasks = EXCLUDED.llm_tasks, llm_ms_sum = EXCLUDED.llm_ms_sum,
+  llm_calls_sum = EXCLUDED.llm_calls_sum, own_ms_sum = EXCLUDED.own_ms_sum,
+  llm_p95_ms = EXCLUDED.llm_p95_ms, llm_token_tasks = EXCLUDED.llm_token_tasks,
+  llm_prompt_tokens = EXCLUDED.llm_prompt_tokens,
+  llm_cached_tokens = EXCLUDED.llm_cached_tokens,
   -- ⚠️ digest ของวันที่ "ปิดไปแล้ว" ห้ามเขียนทับ — ไม่งั้นการแก้แถวเก่าย้อนหลังจะถูกกลบด้วย
   --    การคำนวณใหม่ ซึ่งทำลายเหตุผลทั้งหมดที่มีคอลัมน์นี้
   --    วันที่ยังไม่ปิด (วันนี้/เมื่อวานที่เพิ่งสรุปครั้งแรก) ยังเขียนได้ตามปกติ

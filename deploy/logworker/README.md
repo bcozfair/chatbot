@@ -38,6 +38,7 @@ cd /home/app_sales/salechatbot/chatbot
 docker compose exec app npx tsx scripts/runMigration.ts migrations/changes/2026-09-03_03_system_logs.sql
 docker compose exec app npx tsx scripts/runMigration.ts migrations/changes/2026-09-03_04_audit_logs.sql
 docker compose exec app npx tsx scripts/runMigration.ts migrations/changes/2026-09-03_05_traffic_daily.sql
+docker compose exec app npx tsx scripts/runMigration.ts migrations/changes/2026-09-07_01_traffic_daily_llm.sql
 
 # 1) dependency ขั้นต่ำ + symlink
 cd deploy/logworker
@@ -89,6 +90,20 @@ services:
 
 ค่าที่พิมพ์ผิดจะตกกลับเป็นค่าปลอดภัยเสมอ (`warn` / ค่าตั้งต้นของแต่ละ retention) — ไม่มีทางที่พิมพ์ผิด
 แล้วตารางโตวันละหลาย MB เงียบ ๆ หรือข้อมูลถูกลบทันที
+
+## คำนวณแถว traffic_daily เก่าใหม่ (ใช้มือ)
+
+`backfillFromApiLogs` ตอนสตาร์ท**ข้ามวันที่มีแถวอยู่แล้ว**โดยตั้งใจ (ไม่งั้นรีสตาร์ททีคำนวณร้อยกว่าวัน)
+⇒ ทุกครั้งที่เพิ่มคอลัมน์ใหม่ให้ `traffic_daily` ต้องสั่งคำนวณย้อนหลังเอง:
+
+```bash
+cd deploy/logworker
+node --import tsx ../../scripts/logworker/recompute.ts                 # ทุกวันที่ยังมีข้อมูลดิบ
+node --import tsx ../../scripts/logworker/recompute.ts 2026-08-01 2026-09-07
+```
+
+ข้ามวันที่ `api_logs` ไม่มีข้อมูลดิบแล้ว (เกิน 120 วัน) — คำนวณจากข้อมูลไม่ครบจะได้ตัวเลขที่
+"ไม่ครบแต่ดูเหมือนครบ" ซึ่งแย่กว่าปล่อยค่าเดิมไว้ · ไม่ทำลายโซ่ `audit_digest` ของวันที่ปิดแล้ว
 
 ## ตรวจว่ายังทำงานอยู่
 
