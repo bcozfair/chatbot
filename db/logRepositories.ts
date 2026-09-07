@@ -67,6 +67,16 @@ export interface TrafficBucket {
   messages_in: number;
   audit_changes: number;
   system_errors: number;
+  // ── ตัวเลข LLM (แผน G/G#2) ──
+  // ทุกตัวเป็น null ได้ = "ช่วงนี้ไม่มีวันไหนวัดค่าไว้เลย" (ก่อน 2026-09-03) ซึ่งต่างจาก 0
+  llm_tasks: number | null;
+  llm_avg_ms: number | null;
+  own_avg_ms: number | null;
+  llm_calls_per_task: number | null;
+  llm_p95_worst_day: number | null;
+  llm_prompt_tokens: string | null;
+  llm_cached_tokens: string | null;
+  cache_hit_pct: number | null;
 }
 
 const BUCKET_SELECT = `
@@ -92,7 +102,22 @@ const BUCKET_SELECT = `
   COALESCE(sum(quotations_created), 0)::int                    AS quotations_created,
   COALESCE(sum(messages_in), 0)::int                           AS messages_in,
   COALESCE(sum(audit_changes), 0)::int                         AS audit_changes,
-  COALESCE(sum(system_errors), 0)::int                         AS system_errors`;
+  COALESCE(sum(system_errors), 0)::int                         AS system_errors,
+  -- ── LLM ── จงใจไม่ COALESCE เป็น 0: ช่วงที่ยังไม่มีการวัดต้องออกมาเป็น null
+  --    เพื่อให้หน้าจอแยกได้ว่า "ไม่ได้วัด" กับ "ไม่เคยเรียก LLM" ไม่ใช่เรื่องเดียวกัน
+  sum(llm_tasks)::int                                          AS llm_tasks,
+  -- ค่าเฉลี่ยจาก sum ÷ sum ⇒ ถูกต้อง 100% ทุกระดับการรวม (หลักเดียวกับ avg_ms)
+  (sum(llm_ms_sum) / NULLIF(sum(llm_tasks), 0))::int            AS llm_avg_ms,
+  (sum(own_ms_sum) / NULLIF(sum(llm_tasks), 0))::int            AS own_avg_ms,
+  round(sum(llm_calls_sum)::numeric
+        / NULLIF(sum(llm_tasks), 0), 2)::float8                 AS llm_calls_per_task,
+  -- p95 รวมข้ามวันไม่ได้ — ชื่อฟิลด์บอกตรง ๆ เหมือน p95_worst_day
+  max(llm_p95_ms)                                               AS llm_p95_worst_day,
+  sum(llm_prompt_tokens)::text                                  AS llm_prompt_tokens,
+  sum(llm_cached_tokens)::text                                  AS llm_cached_tokens,
+  -- อัตราแคช = อัตราส่วนของผลรวมสองตัว ⇒ รวมข้ามวันได้ถูกต้องจริง ไม่ต้องติดป้ายเตือน
+  round(sum(llm_cached_tokens)::numeric * 100
+        / NULLIF(sum(llm_prompt_tokens), 0), 1)::float8         AS cache_hit_pct`;
 
 export function listTrafficBuckets(
   granularity: Granularity, from: string, to: string

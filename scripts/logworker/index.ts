@@ -146,6 +146,22 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // ตารางครบไม่พอ — migration ที่มาทีหลังเพิ่ม "คอลัมน์" ให้ตารางเดิม
+  // ถ้าโค้ดใหม่ขึ้นแต่ migration ไม่ขึ้น traffic_daily จะพังทุก 15 นาทีเงียบ ๆ ลง last_error
+  // แทนที่จะล้มดัง ๆ ตรงนี้ ⇒ เช็กคอลัมน์ตัวแทนของทุก migration ที่ worker พึ่งพา
+  const { rows: cols } = await pool.query<{ missing: string }>(
+    `SELECT x.t || '.' || x.c AS missing
+       FROM (VALUES ('traffic_daily', 'llm_ms_sum')) AS x(t, c)
+      WHERE NOT EXISTS (SELECT 1 FROM information_schema.columns
+                         WHERE table_schema = 'public' AND table_name = x.t AND column_name = x.c)`);
+  if (cols.length > 0) {
+    logErr(`ยังไม่ได้รัน migration: ขาดคอลัมน์ ${cols.map(r => r.missing).join(', ')}`);
+    logErr('รัน: npx tsx scripts/runMigration.ts migrations/changes/2026-09-07_01_traffic_daily_llm.sql');
+    logErr('แล้วสั่งคำนวณวันเก่าใหม่: node --import tsx scripts/logworker/recompute.ts');
+    await pool.end();
+    process.exit(1);
+  }
+
   process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
   process.on('SIGINT',  () => { void shutdown('SIGINT'); });
 

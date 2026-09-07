@@ -139,6 +139,33 @@ async function dbChecks(): Promise<void> {
     return;
   }
 
+  // migration ที่มาทีหลังเพิ่มคอลัมน์ให้ตารางเดิม — ตารางครบไม่ได้แปลว่า migration ครบ
+  const { rows: missingCols } = await pool.query<{ missing: string }>(
+    `SELECT x.t || '.' || x.c AS missing
+       FROM (VALUES ('traffic_daily', 'llm_ms_sum'),
+                    ('traffic_daily', 'llm_cached_tokens'),
+                    ('api_logs',      'llm_prompt_tokens')) AS x(t, c)
+      WHERE NOT EXISTS (SELECT 1 FROM information_schema.columns
+                         WHERE table_schema = 'public' AND table_name = x.t AND column_name = x.c)`);
+  ok('คอลัมน์ของ migration ที่มาทีหลัง (ตัวเลข LLM) ขึ้นครบ', missingCols.length === 0,
+    missingCols.map(r => r.missing).join(', ') || 'ครบ');
+
+  // เก็บ LLM ลง traffic_daily แล้วหรือยัง — ถ้ายัง ข้อมูลจะหายตอน api_logs พ้น 120 วัน
+  // ข้ามข้อนี้ถ้าคอลัมน์ยังไม่ขึ้น (query อ้างถึงคอลัมน์นั้นตรง ๆ) แต่ต้องไม่ข้ามข้อที่เหลือ
+  if (missingCols.length === 0) {
+    const { rows: llmGap } = await pool.query<{ n: string }>(
+      `SELECT count(*)::text AS n
+         FROM traffic_daily td
+        WHERE td.llm_ms_sum IS NULL
+          AND EXISTS (SELECT 1 FROM api_logs a
+                       WHERE a.llm_ms IS NOT NULL
+                         AND a.created_at >= (td.day)::timestamp     AT TIME ZONE 'Asia/Bangkok'
+                         AND a.created_at <  (td.day + 1)::timestamp AT TIME ZONE 'Asia/Bangkok')`);
+    ok('ไม่มีวันที่ api_logs มีตัวเลข LLM แต่ traffic_daily ยังว่าง',
+      llmGap[0].n === '0',
+      llmGap[0].n === '0' ? 'ครบ' : `${llmGap[0].n} วัน → สั่ง node --import tsx scripts/logworker/recompute.ts`);
+  }
+
   const { rows: bad } = await pool.query<{ relname: string }>(
     `SELECT DISTINCT c.relname FROM pg_trigger tg JOIN pg_class c ON c.oid = tg.tgrelid
       WHERE tg.tgname LIKE 'trg_audit%'

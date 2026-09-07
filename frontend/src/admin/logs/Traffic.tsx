@@ -24,6 +24,28 @@ import {
 
 const BRAND = 'var(--brand-fg)';
 
+/**
+ * ส่ง now/before ให้ Kpi ก็ต่อเมื่อ "ทั้งสองช่วงมีค่าที่วัดจริง"
+ * ช่วงก่อนหน้าที่ยังไม่ได้เก็บตัวเลข LLM ต้องไม่ถูกอ่านเป็น 0 แล้วโชว์ลูกศรพุ่งขึ้น
+ * — นั่นคือการเทียบกับของที่ไม่มีอยู่ ซึ่งเป็นตัวเลขที่โกหก
+ */
+/** ผลรวม bigint มาจาก API เป็น string — null ต้องคง null ไว้ ไม่ใช่กลายเป็น 0 ตอนแปลง */
+function bigToNum(v: string | null | undefined): number | null {
+  if (v === null || v === undefined) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** เปอร์เซ็นต์ทศนิยม 1 ตำแหน่ง → จำนวนเต็ม เพื่อให้ delta() เทียบได้โดยไม่เสียความละเอียด */
+function pct10(v: number | null | undefined): number | null {
+  return v === null || v === undefined ? null : Math.round(v * 10);
+}
+
+function cmp(now: number | null, before: number | null | undefined):
+  { now: number; before: number } | Record<string, never> {
+  return now !== null && before !== null && before !== undefined ? { now, before } : {};
+}
+
 interface Bucket {
   bucket: string; days: number;
   requests: number; requests_api: number;
@@ -34,6 +56,11 @@ interface Bucket {
   max_inflight: number | null; db_wait_hits: number;
   quotations_created: number; messages_in: number;
   audit_changes: number; system_errors: number;
+  // ── LLM (แผน G/G#2) — null = ช่วงนี้ไม่มีวันไหนวัดค่าไว้เลย ซึ่งไม่เท่ากับ 0 ──
+  llm_tasks: number | null; llm_avg_ms: number | null; own_avg_ms: number | null;
+  llm_calls_per_task: number | null; llm_p95_worst_day: number | null;
+  llm_prompt_tokens: string | null; llm_cached_tokens: string | null;
+  cache_hit_pct: number | null;
 }
 
 interface TrafficResponse {
@@ -357,6 +384,58 @@ export const Traffic: React.FC = () => {
                  sub={`p95 สูงสุดรายวัน ${formatMs(t.p95_worst_day)}`} />
           </div>
 
+          {/* ── เวลาที่ใช้กับ LLM และอัตราแคช (แผน G/G#2) ──
+              แยกการ์ดออกมาแทนที่จะยัดเข้าแถว KPI ด้านบน เพราะมันตอบคนละคำถาม
+              (แถวบน = "ระบบรับงานได้แค่ไหน" · แถวนี้ = "เวลาหมดไปกับอะไร ควรไปแก้ฝั่งไหน")
+              และเพราะมันมีช่วงเวลาที่ไม่มีข้อมูลของตัวเอง ซึ่งต้องบอกผู้ใช้ตรงจุดนี้ ไม่ใช่เชิงอรรถรวม */}
+          <div className="bg-card border border-slate-200 rounded-2xl p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-slate-700">เวลาที่ใช้กับ LLM และอัตราแคช</h3>
+              {t.llm_tasks !== null && (
+                <span className="text-xs text-slate-400">
+                  วัดได้ {formatNumber(t.llm_tasks)} งาน จากงานบอท {formatNumber(t.webhook_events)}
+                </span>
+              )}
+            </div>
+
+            {t.llm_tasks === null || t.llm_tasks === 0 ? (
+              <div className="py-8 text-center text-sm text-slate-400">
+                ช่วงนี้ยังไม่ได้เก็บตัวเลข LLM
+                <div className="mt-1 text-xs">ระบบเริ่มบันทึกเวลา LLM ตั้งแต่ 3 ก.ย. 69 และอัตราแคชตั้งแต่ 4 ก.ย. 69</div>
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
+                  <Kpi label="รอ LLM เฉลี่ยต่อข้อความ" value={formatMs(t.llm_avg_ms)} tone="bad"
+                       {...cmp(t.llm_avg_ms, p?.llm_avg_ms)}
+                       hint="เวลาที่นั่งรอโมเดลตอบอย่างเดียว ไม่รวมงานของเรา"
+                       sub={`p95 สูงสุดรายวัน ${formatMs(t.llm_p95_worst_day)}`} />
+                  <Kpi label="งานของเราเองเฉลี่ย" value={formatMs(t.own_avg_ms)} tone="bad"
+                       {...cmp(t.own_avg_ms, p?.own_avg_ms)}
+                       hint="DB + LINE API + โค้ดของเรา — ตัวที่แก้ได้ด้วยการ optimize ฝั่งเรา" />
+                  <Kpi label="เรียก LLM ต่อข้อความ"
+                       value={t.llm_calls_per_task === null ? '-' : t.llm_calls_per_task.toFixed(2)}
+                       tone="bad"
+                       {...cmp(t.llm_calls_per_task, p?.llm_calls_per_task)}
+                       hint="ตัวคูณที่แยกว่า &quot;ช้าเพราะเรียกหลายครั้ง&quot; หรือ &quot;เรียกครั้งเดียวแต่ครั้งนั้นช้า&quot;" />
+                  <Kpi label="อัตราแคช prompt"
+                       value={t.cache_hit_pct === null ? '-' : `${t.cache_hit_pct.toFixed(1)}%`}
+                       {...cmp(pct10(t.cache_hit_pct), pct10(p?.cache_hit_pct))}
+                       hint="ส่วนของ prompt ที่ DeepSeek คืนจากแคช — ยิ่งสูงยิ่งถูกและเร็ว ต่ำแปลว่า prompt เปลี่ยนหัวทุกครั้ง"
+                       sub={`แคช ${formatNumber(bigToNum(t.llm_cached_tokens))} จาก ${formatNumber(bigToNum(t.llm_prompt_tokens))} token`} />
+                  <Kpi label="prompt token ทั้งช่วง"
+                       value={formatNumber(bigToNum(t.llm_prompt_tokens))}
+                       {...cmp(
+                         bigToNum(t.llm_prompt_tokens), bigToNum(p?.llm_prompt_tokens))} />
+                </div>
+                <p className="mt-3 text-xs text-slate-400">
+                  ค่าเฉลี่ยหารด้วย &quot;งานที่วัดค่าได้&quot; ไม่ใช่จำนวนงานบอททั้งหมด — งานที่ถูกทิ้งตอนคิวตันไม่เคยเรียก LLM
+                  ถ้านับรวมค่าเฉลี่ยจะต่ำกว่าความจริง
+                </p>
+              </>
+            )}
+          </div>
+
           {/* ── กราฟ ── */}
           <div className="bg-card border border-slate-200 rounded-2xl p-4">
             <div className="flex items-center justify-between mb-3">
@@ -473,6 +552,14 @@ export const Traffic: React.FC = () => {
                   ['request พร้อมกันสูงสุด', formatNumber(picked.max_inflight)],
                   ['การแก้ไขข้อมูล', formatNumber(picked.audit_changes)],
                   ['ข้อผิดพลาดของระบบ', formatNumber(picked.system_errors)],
+                  ['งานที่วัดเวลา LLM ได้', formatNumber(picked.llm_tasks)],
+                  ['รอ LLM เฉลี่ย', formatMs(picked.llm_avg_ms)],
+                  ['งานของเราเองเฉลี่ย', formatMs(picked.own_avg_ms)],
+                  ['เรียก LLM ต่อข้อความ',
+                   picked.llm_calls_per_task === null ? '-' : picked.llm_calls_per_task.toFixed(2)],
+                  ['อัตราแคช prompt',
+                   picked.cache_hit_pct === null ? '-' : `${picked.cache_hit_pct.toFixed(1)}%`],
+                  ['prompt token', formatNumber(bigToNum(picked.llm_prompt_tokens))],
                 ] as [string, string][]).map(([k, v]) => (
                   <div key={k}>
                     <div className="text-xs text-slate-400">{k}</div>

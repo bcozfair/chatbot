@@ -495,9 +495,17 @@ docker compose exec app npm run diag:sync-api                  # ต้องเ
 docker compose exec app npx tsx scripts/runMigration.ts migrations/changes/2026-09-03_03_system_logs.sql
 docker compose exec app npx tsx scripts/runMigration.ts migrations/changes/2026-09-03_04_audit_logs.sql
 docker compose exec app npx tsx scripts/runMigration.ts migrations/changes/2026-09-03_05_traffic_daily.sql
+docker compose exec app npx tsx scripts/runMigration.ts migrations/changes/2026-09-07_01_traffic_daily_llm.sql
 ```
 
 จากนั้นติดตั้ง logworker บน host ตาม [`deploy/logworker/README.md`](deploy/logworker/README.md)
+
+**ถ้าติดตั้ง logworker ไว้ก่อนแล้วเพิ่งมารันไฟล์ที่ 4** (คอลัมน์ LLM) ต้องสั่งคำนวณวันเก่าใหม่
+ไม่งั้นคอลัมน์ใหม่จะว่างจนกว่าจะขึ้นวันใหม่ — `backfillFromApiLogs` ข้ามวันที่มีแถวอยู่แล้วโดยตั้งใจ:
+```bash
+cd deploy/logworker && node --import tsx ../../scripts/logworker/recompute.ts
+sudo systemctl restart logworker      # ให้ worker โหลดโค้ดที่รู้จักคอลัมน์ใหม่
+```
 
 **ตรวจหลังขึ้น:**
 ```bash
