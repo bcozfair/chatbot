@@ -209,11 +209,20 @@ const AUDIT_COLS = `
   id::text AS id, occurred_at, request_id, actor_type, actor_id, actor_name, actor_source,
   action, entity_type, entity_id, entity_label, changed_cols, "before", "after", ip, result, note`;
 
-export function listAuditLogs(f: AuditFilters, limit: number, offset: number) {
+/**
+ * ทิศการเรียงเวลา — รับได้แค่ 'asc' เท่านั้น ค่าอื่นทั้งหมดตกกลับเป็น DESC
+ * (ORDER BY ผูก parameter ไม่ได้ ค่าที่มาจาก query string จึงห้ามไปโผล่ใน SQL โดยตรง)
+ */
+function timeDir(dir?: string): 'ASC' | 'DESC' {
+  return String(dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+}
+
+export function listAuditLogs(f: AuditFilters, limit: number, offset: number, dir?: string) {
   const { where, params } = auditWhere(f);
+  const d = timeDir(dir);
   return q(
     `SELECT ${AUDIT_COLS} FROM audit_logs ${where}
-      ORDER BY occurred_at DESC, id DESC
+      ORDER BY occurred_at ${d}, id ${d}
       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
     [...params, limit, offset]);
 }
@@ -279,11 +288,12 @@ const SYSTEM_COLS = `
   id::text AS id, created_at, container, stream, level, source, event,
   message, request_id, ctx, err_stack`;
 
-export function listSystemLogs(f: SystemFilters, limit: number, offset: number) {
+export function listSystemLogs(f: SystemFilters, limit: number, offset: number, dir?: string) {
   const { where, params } = systemWhere(f);
+  const d = timeDir(dir);
   return q(
     `SELECT ${SYSTEM_COLS} FROM system_logs ${where}
-      ORDER BY created_at DESC, id DESC
+      ORDER BY created_at ${d}, id ${d}
       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
     [...params, limit, offset]);
 }

@@ -3,14 +3,18 @@ import { useAuth } from '../../context/AuthContext';
 import { PageHeader } from '../PageHeader';
 import { DateInput } from '../DateInput';
 import {
-  History, Download, Loader2, AlertCircle, Search, ChevronLeft, ChevronRight,
+  History, Download, Loader2,
   ChevronDown, ChevronRight as ChevronRightSmall, ArrowRight, Link2, Layers,
 } from 'lucide-react';
 import { useHashState } from './useHashState';
 import {
   errMsg, formatDateTime, relativeTime, formatNumber, actorStyle, entityLabel,
-  actionLabel, displayValue, downloadCsv, inputCls, PAGE_SIZE_OPTIONS, isBulk,
+  actionLabel, displayValue, downloadCsv, inputCls, isBulk,
 } from './format';
+import {
+  CheckField, EmptyState, ErrorBox, FilterCard, FilterField, FilterFooter, FilterRow,
+  Pagination, SearchField, SelectField, SkeletonRows, TimeSortToggle,
+} from './ui';
 import { RequestTimeline } from './RequestTimeline';
 
 /**
@@ -165,6 +169,8 @@ export const AuditLogs: React.FC = () => {
     includeViews: '',
     page: '1',
     size: '50',
+    // ว่าง = ใหม่ไปเก่า (ค่าตั้งต้น) จึงไม่ถูกเขียนลง URL เว้นแต่ผู้ใช้สลับเป็น asc เอง
+    dir: '',
   });
 
   const [rows, setRows] = useState<AuditRow[]>([]);
@@ -189,6 +195,8 @@ export const AuditLogs: React.FC = () => {
     if (state.actorType) qs.set('actorType', state.actorType);
     if (state.q.trim()) qs.set('q', state.q.trim());
     if (state.includeViews === '1') qs.set('includeViews', '1');
+    // เรียงที่ SQL — หน้านี้แบ่งหน้าจาก server การกลับลำดับเฉพาะหน้าที่เปิดอยู่จะได้ลำดับที่ผิด
+    if (state.dir === 'asc') qs.set('dir', 'asc');
     for (const [k, v] of Object.entries(extra ?? {})) qs.set(k, v);
     return qs;
   }, [state, page, size]);
@@ -264,107 +272,71 @@ export const AuditLogs: React.FC = () => {
       </PageHeader>
 
       {/* ── ตัวกรอง ── */}
-      <div className="bg-card border border-slate-200 rounded-2xl p-4 space-y-3">
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="flex-1 min-w-56">
-            <label className="block text-xs text-slate-500 mb-1">ค้นหา (ชื่อคนทำ / ชื่อรายการ / การกระทำ)</label>
-            <div className="relative">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-              <input
-                ref={searchRef}
-                className={`${inputCls} pl-10`}
-                placeholder="พิมพ์เพื่อค้นหา… (กด / เพื่อโฟกัส)"
-                value={state.q}
-                onChange={e => set({ q: e.target.value, page: '1' })}
-              />
-            </div>
-          </div>
-          <div>
-            <label className="block text-xs text-slate-500 mb-1">ตั้งแต่</label>
-            <DateInput value={state.dateFrom} onChange={v => set({ dateFrom: v, page: '1' })} />
-          </div>
-          <div>
-            <label className="block text-xs text-slate-500 mb-1">ถึง</label>
-            <DateInput value={state.dateTo} onChange={v => set({ dateTo: v, page: '1' })} />
-          </div>
-          <div>
-            <label className="block text-xs text-slate-500 mb-1">ชนิดข้อมูล</label>
-            <select className={inputCls} value={state.entityType}
-                    onChange={e => set({ entityType: e.target.value, page: '1' })}>
+      <FilterCard>
+        <FilterRow>
+          <FilterField label="ค้นหา (ชื่อคนทำ / ชื่อรายการ / การกระทำ)" grow>
+            <SearchField
+              ref={searchRef}
+              value={state.q}
+              onChange={v => set({ q: v, page: '1' })}
+              placeholder="พิมพ์เพื่อค้นหา… (กด / เพื่อโฟกัส)"
+            />
+          </FilterField>
+          <FilterField label="ตั้งแต่" width="w-36">
+            <DateInput className={inputCls} value={state.dateFrom}
+                       onChange={v => set({ dateFrom: v, page: '1' })} aria-label="ตั้งแต่วันที่" />
+          </FilterField>
+          <FilterField label="ถึง" width="w-36">
+            <DateInput className={inputCls} value={state.dateTo}
+                       onChange={v => set({ dateTo: v, page: '1' })} aria-label="ถึงวันที่" />
+          </FilterField>
+          <FilterField label="ชนิดข้อมูล" width="w-52">
+            <SelectField value={state.entityType} onChange={v => set({ entityType: v, page: '1' })}>
               <option value="">ทั้งหมด</option>
               {entityFacets.map(f => (
                 <option key={f.value} value={f.value}>{entityLabel(f.value)} ({f.n})</option>
               ))}
-            </select>
-          </div>
-          <div>
-            <label className="block text-xs text-slate-500 mb-1">ความแน่นอนของชื่อคนทำ</label>
-            <select className={inputCls} value={state.actorType}
-                    onChange={e => set({ actorType: e.target.value, page: '1' })}>
+            </SelectField>
+          </FilterField>
+          <FilterField label="ความแน่นอนของชื่อคนทำ" width="w-52">
+            <SelectField value={state.actorType} onChange={v => set({ actorType: v, page: '1' })}>
               <option value="">ทั้งหมด</option>
               <option value="admin">รู้ตัวคนทำ</option>
               <option value="unknown">ไม่ทราบ (แก้จาก psql/script)</option>
               <option value="ambiguous">แยกไม่ออก</option>
               <option value="pending">กำลังหา</option>
-            </select>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-4 text-xs">
-          <label className="inline-flex items-center gap-2 text-slate-600 cursor-pointer">
-            <input
-              type="checkbox"
+            </SelectField>
+          </FilterField>
+          <div className="pb-px">
+            <CheckField
               checked={state.includeViews === '1'}
-              onChange={e => set({ includeViews: e.target.checked ? '1' : '', page: '1' })}
-              className="rounded border-slate-300"
+              onChange={v => set({ includeViews: v ? '1' : '', page: '1' })}
+              label="แสดงการเข้าดู log ด้วย"
+              hint="ตั้งต้นซ่อนไว้เพราะมีมากกว่าการแก้จริงหลายเท่า"
             />
-            แสดงการเข้าดู log ด้วย
-            <span className="text-slate-400">(ตั้งต้นซ่อนไว้เพราะมีมากกว่าการแก้จริงหลายเท่า)</span>
-          </label>
-          <button onClick={reset} className="text-slate-400 hover:text-slate-600 underline underline-offset-2">
-            ล้างตัวกรอง
-          </button>
-          <span className="ml-auto text-slate-500 tabular-nums">
-            {loading ? 'กำลังโหลด…' : `${formatNumber(total)} รายการ`}
-          </span>
-        </div>
-      </div>
-
-      {error && (
-        <div className="bg-red-50 border border-red-200 rounded-2xl p-4 flex items-start gap-2">
-          <AlertCircle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
-          <div className="flex-1">
-            <div className="text-sm font-medium text-red-800">โหลดข้อมูลไม่สำเร็จ</div>
-            <div className="text-xs text-red-600 mt-0.5">{error}</div>
           </div>
-          <button onClick={() => { void load(); }}
-                  className="px-3 py-1.5 rounded-lg bg-white border border-red-200 text-sm text-red-700">
-            ลองใหม่
-          </button>
-        </div>
-      )}
+        </FilterRow>
+
+        <FilterFooter onReset={reset} loading={loading} total={total} unit="รายการ">
+          <TimeSortToggle
+            dir={state.dir === 'asc' ? 'asc' : 'desc'}
+            onChange={d => set({ dir: d === 'asc' ? 'asc' : '', page: '1' })}
+          />
+        </FilterFooter>
+      </FilterCard>
+
+      {error && <ErrorBox message={error} onRetry={() => { void load(); }} />}
 
       {/* ── รายการ ── */}
       <div className="bg-card border border-slate-200 rounded-2xl overflow-hidden">
-        {loading && rows.length === 0 && (
-          <div className="divide-y divide-slate-100">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className="p-4 animate-pulse flex gap-4">
-                <div className="h-4 w-32 bg-slate-200 rounded" />
-                <div className="h-4 flex-1 bg-slate-100 rounded" />
-              </div>
-            ))}
-          </div>
-        )}
+        {loading && rows.length === 0 && <SkeletonRows rows={6} />}
 
         {!loading && rows.length === 0 && !error && (
-          <div className="py-16 text-center">
-            <History className="w-9 h-9 text-slate-300 mx-auto" />
-            <div className="mt-2 text-sm text-slate-500">ไม่มีการแก้ไขในช่วงที่เลือก</div>
-            <div className="mt-1 text-xs text-slate-400">
-              ตารางตั้งค่าถูกแก้กันวันละไม่กี่ครั้ง — ช่วงที่ว่างเปล่าเป็นเรื่องปกติ
-            </div>
-          </div>
+          <EmptyState
+            icon={History}
+            title="ไม่มีการแก้ไขในช่วงที่เลือก"
+            hint="ตารางตั้งค่าถูกแก้กันวันละไม่กี่ครั้ง — ช่วงที่ว่างเปล่าเป็นเรื่องปกติ"
+          />
         )}
 
         {rows.length > 0 && (
@@ -449,35 +421,12 @@ export const AuditLogs: React.FC = () => {
         )}
 
         {/* ── แบ่งหน้า ── */}
-        {total > size && (
-          <div className="flex items-center justify-between px-4 py-3 border-t border-slate-100 text-sm">
-            <select
-              className="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-card text-slate-600"
-              value={size}
-              onChange={e => set({ size: e.target.value, page: '1' })}
-            >
-              {PAGE_SIZE_OPTIONS.map(n => <option key={n} value={n}>{n} ต่อหน้า</option>)}
-            </select>
-            <div className="flex items-center gap-2">
-              <button
-                disabled={page <= 1}
-                onClick={() => set({ page: String(page - 1) })}
-                className="p-1.5 rounded-lg border border-slate-200 disabled:opacity-40 hover:bg-slate-50"
-                aria-label="หน้าก่อนหน้า"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-              <span className="text-xs text-slate-500 tabular-nums">หน้า {page} / {pages}</span>
-              <button
-                disabled={page >= pages}
-                onClick={() => set({ page: String(page + 1) })}
-                className="p-1.5 rounded-lg border border-slate-200 disabled:opacity-40 hover:bg-slate-50"
-                aria-label="หน้าถัดไป"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
+        {total > 0 && (
+          <Pagination
+            page={Math.min(page, pages)} pages={pages} size={size} total={total} unit="รายการ"
+            onPage={p => set({ page: String(p) })}
+            onSize={s => set({ size: String(s), page: '1' })}
+          />
         )}
       </div>
 
