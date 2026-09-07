@@ -18,13 +18,16 @@ export function normalizeProductScope(src: any): ProductScope {
   return {
     production: norm(src?.production),
     brand: norm(src?.brand),
-    series: norm(src?.series)
+    series: norm(src?.series),
+    // snapshot item ใช้ product_code บ้าง model บ้าง — รับทั้งสองแบบเหมือนที่อื่นในโค้ด
+    model: norm(src?.model || src?.product_code),
+    internal_reference: norm(src?.internal_reference)
   };
 }
 
 /**
  * กฏ match สินค้าหรือไม่
- * Semantics: field ว่างในกฏ = wildcard · 'import' prefix-match 'import*' · นอกนั้น exact
+ * Semantics: field ว่างในกฏ = wildcard · 'import' prefix-match 'import*' (production เท่านั้น) · นอกนั้น exact
  */
 export function ruleMatchesScope(rule: ScopeKey, scope: ProductScope): boolean {
   if (rule.production) {
@@ -35,16 +38,27 @@ export function ruleMatchesScope(rule: ScopeKey, scope: ProductScope): boolean {
   }
   if (rule.brand && norm(rule.brand) !== scope.brand) return false;
   if (rule.series && norm(rule.series) !== scope.series) return false;
+  if (rule.model && norm(rule.model) !== scope.model) return false;
+  if (rule.internal_reference && norm(rule.internal_reference) !== scope.internal_reference) return false;
   return true;
 }
 
 /**
- * ความจำเพาะของกฏเป็น bitmask 0..7
- * series=4, brand=2, production=1 เพราะ series ⊂ brand ⊂ production
+ * ความจำเพาะของกฏเป็น bitmask 0..31
+ * internal_reference=16, model=8, series=4, brand=2, production=1
+ * เพราะ internal_reference ⊂ model ⊂ series ⊂ brand ⊂ production
  * ดังนั้นกฏที่ระบุ {series} (=4) ต้องชนะกฏที่ระบุ {production, brand} (=3)
+ * และกฏที่ระบุ {internal_reference} (=16) ชนะ {production,brand,series,model} (=15)
+ *
+ * ⚠️ บิตใหม่ต้องอยู่ "เหนือ" ของเดิมเสมอ ห้ามแทรกกลาง — ค่า 1/2/4 ของกฏ 3 ระดับเดิม
+ *    ต้องคงเดิมเป๊ะ ลำดับตัดสินของ quotation_rules จึงไม่ขยับแม้แต่คู่เดียว
  */
 export function scopeSpecificity(rule: ScopeKey): number {
-  return (rule.series ? 4 : 0) + (rule.brand ? 2 : 0) + (rule.production ? 1 : 0);
+  return (rule.internal_reference ? 16 : 0)
+       + (rule.model              ?  8 : 0)
+       + (rule.series             ?  4 : 0)
+       + (rule.brand              ?  2 : 0)
+       + (rule.production         ?  1 : 0);
 }
 
 /**
