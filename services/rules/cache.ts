@@ -8,7 +8,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** ชื่อ cache ของแต่ละตารางกฏ — เพิ่มตัวใหม่เมื่อมี rule type ใหม่ */
-export type RuleCacheKey = 'quotation_rules' | 'shipping_fee_config' | 'quotation_credit_policy';
+export type RuleCacheKey =
+  | 'quotation_rules'
+  | 'product_block_rules'
+  | 'shipping_fee_config'
+  | 'quotation_credit_policy';
 
 interface CacheEntry {
   rows: any[];

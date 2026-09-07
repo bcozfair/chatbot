@@ -687,8 +687,42 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
     }
   }
 
+  // เตือนต้นทาง — รายการที่ติดกฎบล็อกต้องเห็นตั้งแต่การ์ดสรุป ไม่ใช่ไปเจอตอนกดยืนยัน
+  // ถ้อยคำมาจาก buildViolationDisplay ตัวเดียวกับด่านกลางและ PDF จึงไม่มีทางเพี้ยนกัน
+  // ล้มแล้วปล่อยผ่านเหมือนด่าน blacklist ข้างล่าง — ตัวบล็อกจริงคือด่านตอนกดยืนยัน การ์ดพังไม่ได้
+  const blockedMap: Record<string, string> = {};
+  if (productCodes.length > 0) {
+    try {
+      const { loadProductBlockRules, findBlockingRule, normalizeProductScope, blockWarnText } =
+        await import('../services/rules/index.js');
+      const blockRules = await loadProductBlockRules();
+      if (blockRules.length > 0) {
+        // DISTINCT ON (model) + ORDER BY เดียวกับ checkBlockedProducts — ต้องเลือกแถวเดียวกัน
+        // ไม่งั้นการ์ดกับด่านจริงอาจตัดสินคนละอย่างสำหรับสินค้าตัวเดียวกัน
+        const { rows: scopeRows } = await pool.query(`
+          SELECT DISTINCT ON (model)
+                 model, model AS code, brand, series, production, internal_reference
+            FROM products
+           WHERE model = ANY($1)
+           ORDER BY model, quantity_on_hand_unreserved DESC
+        `, [productCodes]);
+        const { buildViolationDisplay } = await import('../services/quotationService.js');
+        for (const p of scopeRows) {
+          const rule = findBlockingRule(blockRules, normalizeProductScope(p));
+          if (!rule) continue;
+          blockedMap[p.code] = buildViolationDisplay({
+            type: 'BLOCKED', model: p.code, warn_msg: blockWarnText(rule) ?? undefined
+          });
+        }
+      }
+    } catch (err) {
+      console.error('[getQuotationSummaryMessage] block rules check failed (ปล่อยผ่าน):', err);
+    }
+  }
+
   // Track minimum price violations
   let hasMinPriceViolation = false;
+  let hasBlockedItem = false;
 
   // Parse customer info
   const meta = parseCustomerNameMeta(quotes[0].customer_name);
@@ -984,6 +1018,32 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
         });
       }
 
+      // แถบ "ถูกระงับ" มาก่อนแถบสต๊อก — เป็นเรื่องที่เซลล์แก้เองไม่ได้ ต้องเห็นก่อน
+      // ค่าขนส่งข้ามเสมอ ตรงกับที่ด่านกลางและ PDF ข้ามบรรทัดนี้
+      const blockedText = isShippingFeeLine ? undefined : blockedMap[itemKey];
+      if (blockedText) {
+        hasBlockedItem = true;
+        summaryText += `   ${blockedText}\n`;
+        itemBoxContents.push({
+          type: "box",
+          layout: "vertical",
+          margin: "xs",
+          paddingAll: "xs",
+          cornerRadius: "md",
+          backgroundColor: "#FEF2F2",
+          contents: [
+            {
+              type: "text",
+              text: blockedText,
+              size: "xs",
+              color: "#DC2626",
+              weight: "bold",
+              wrap: true
+            }
+          ]
+        });
+      }
+
       // ไฮไลท์สถานะสต๊อก: ไม่พอ = แดง / พร้อมส่ง = เขียว (ค่าขนส่งไม่มีสต๊อก จึงไม่มีแถบนี้)
       if (!isShippingFeeLine) {
         itemBoxContents.push({
@@ -1173,8 +1233,9 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
             }
           ];
 
-          if (customerIncomplete || hasMinPriceViolation || customerBlacklisted || creditHoldText) {
+          if (customerIncomplete || hasBlockedItem || hasMinPriceViolation || customerBlacklisted || creditHoldText) {
             // แสดงข้อความเตือนแทนปุ่มยืนยัน
+            // ลำดับ: เรื่องระดับลูกค้า (ครอบทั้งใบ) → ถูกระงับ (เซลล์แก้เองไม่ได้) → ราคาต่ำกว่าขั้นต่ำ (แก้เองได้)
             footerButtons.push({
               type: "box",
               layout: "vertical",
@@ -1187,7 +1248,9 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
                       ? "🚫 บริษัท/ผู้ติดต่อ รายนี้ถูกระงับการเสนอราคา กรุณาติดต่อแอดมิน"
                       : creditHoldText
                         ? creditHoldText
-                        : "⚠️ ไม่สามารถยืนยันได้ — มีสินค้าราคาต่ำกว่าขั้นต่ำ",
+                        : hasBlockedItem
+                          ? "❌ ยืนยันไม่ได้ — มีสินค้าที่ถูกระงับการเสนอราคา กรุณาติดต่อแอดมิน"
+                          : "⚠️ ไม่สามารถยืนยันได้ — มีสินค้าราคาต่ำกว่าขั้นต่ำ",
                   size: "xs",
                   color: "#DC2626",
                   weight: "bold",

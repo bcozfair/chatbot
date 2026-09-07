@@ -47,6 +47,7 @@
     "diag:log-worker": "tsx scripts/diag/logWorkerSmoke.ts",
     "diag:llm-timing": "tsx scripts/diag/llmTimingSmoke.ts",
     "diag:block-parity": "tsx scripts/diag/blockParity.ts",
+    "diag:block-rule": "tsx scripts/diag/blockRuleSmoke.ts",
     "backfill:contacts": "tsx scripts/backfillContactsFromSaleOrders.ts",
     "backfill:delivery-terms": "tsx scripts/backfillDeliveryTerms.ts",
     "backfill:print-snapshot": "tsx scripts/backfillPrintSnapshot.ts",

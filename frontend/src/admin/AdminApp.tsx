@@ -15,6 +15,7 @@ import { QuotationRules } from './QuotationRules';
 import { OptionalLinks } from './OptionalLinks';
 import { StockRules } from './StockRules';
 import { ProductMoqRules } from './ProductMoqRules';
+import { BlockRules } from './BlockRules';
 import { ShippingFee } from './ShippingFee';
 import { SyncPanel } from './SyncPanel';
 import { ApiLogs } from './ApiLogs';
@@ -48,7 +49,7 @@ type MainTab =
   // กลุ่ม "บันทึกและรายงาน" — 4 หน้าที่อยู่ใต้หัวข้อพับได้อันเดียวกัน
   | 'traffic' | 'apilogs' | 'auditlogs' | 'systemlogs'
   | 'settings';
-type SubTab = 'quotation' | 'optional' | 'stock' | 'moq' | 'shipping';
+type SubTab = 'quotation' | 'optional' | 'stock' | 'moq' | 'block' | 'shipping';
 
 interface AdminStats {
   quotations: number;
@@ -58,6 +59,7 @@ interface AdminStats {
   optional_links: number;
   stock_rules: number;
   moq_rules: number;
+  block_rules: number;
 }
 
 const BRAND = 'var(--brand-fg)';
@@ -96,6 +98,7 @@ const SETTINGS_SUBITEMS: { key: SubTab; label: string }[] = [
   { key: 'optional', label: 'สินค้าพ่วงเสริม' },
   { key: 'stock', label: 'ระงับเมื่อหมดสต็อก' },
   { key: 'moq', label: 'ขั้นต่ำสั่งซื้อ' },
+  { key: 'block', label: 'บล็อกสินค้า' },
   { key: 'shipping', label: 'ค่าขนส่ง & เครดิต' },
 ];
 
@@ -251,6 +254,7 @@ function AdminContent() {
     { key: 'optional_links', label: 'สินค้าพ่วงเสริม', unit: 'รายการ', icon: Sliders, onClick: () => goToSubTab('optional') },
     { key: 'stock_rules', label: 'ระงับเมื่อหมดสต็อก', unit: 'รายการ', icon: Sliders, onClick: () => goToSubTab('stock') },
     { key: 'moq_rules', label: 'ขั้นต่ำสั่งซื้อ (MOQ)', unit: 'รายการ', icon: Sliders, onClick: () => goToSubTab('moq') },
+    { key: 'block_rules', label: 'บล็อกสินค้า', unit: 'รายการ', icon: Sliders, onClick: () => goToSubTab('block') },
   ];
 
   const sidebarWidth = collapsed ? 76 : 264;
@@ -654,6 +658,7 @@ function AdminContent() {
               {subTab === 'optional' && <OptionalLinks />}
               {subTab === 'stock' && <StockRules />}
               {subTab === 'moq' && <ProductMoqRules />}
+              {subTab === 'block' && <BlockRules />}
               {/* สองกฎคนละตาราง/คนละ endpoint แต่รวมหน้าเดียวกันเพราะแอดมินตั้งค่าทีเดียวจบ
                   อยากแยกหน้าเมื่อไหร่ก็ย้าย <CreditPolicy /> ไป subTab ใหม่ได้เลย
                   วางซ้าย-ขวาบนจอกว้าง (ทั้งคู่เป็นบล็อกแคบ max-w-3xl อยู่แล้ว) และเรียงบนลงล่างเมื่อจอแคบกว่า xl

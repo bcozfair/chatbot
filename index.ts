@@ -39,7 +39,7 @@ import {
   getApiLogById,
   getApiLogStats,
 } from './db/repositories.js';
-import { confirmQuotationAtomic, enrichQuotationData, buildItemSnapshots } from './services/quotationService.js';
+import { confirmQuotationAtomic, enrichQuotationData, buildItemSnapshots, buildViolationDisplay } from './services/quotationService.js';
 import { pdfCacheKey, getCachedPdf, setCachedPdf, isPrintFrozen, invalidatePdfCache } from './services/pdfCache.js';
 import {
   listBlacklist,
@@ -67,9 +67,9 @@ import {
   type OdooExportFormat,
 } from './services/odooSaleOrderExport.js';
 import {
-  loadQuotationRules,
+  loadProductBlockRules,
   findBlockingRule,
-  buildBlockedMessage,
+  blockWarnText,
   normalizeProductScope,
   invalidateRuleCache
 } from './services/rules/index.js';
@@ -483,6 +483,7 @@ app.get('/api/products/search', async (req: any, res: any) => {
         p.product_template_id AS product_id,
         p.internal_reference,
         p.brand,
+        p.series,
         sr.is_active AS stock_rule_active
       FROM products p
       LEFT JOIN product_stock_rules sr ON p.internal_reference = sr.internal_reference
@@ -578,10 +579,24 @@ app.get('/api/products/search', async (req: any, res: any) => {
     const { resolveQuoteCompany } = await import('./services/quotationService.js');
     const { resolveOptionalProductsFor } = await import('./services/productService.js');
 
+    // กฎระงับการเสนอราคา — โหลดครั้งเดียวต่อการค้นหา แล้วตัดสินในหน่วยความจำ
+    // ให้ผลค้นหาติดป้ายได้เลยโดยไม่ต้องยิง /blocked ทีละแถว
+    // ล้มแล้วปล่อยผ่าน: ไม่มีป้าย แต่ยังเจอด่านจริงตอนหยิบ/ตอนบันทึกอยู่ดี
+    let searchBlockRules: any[] = [];
+    try {
+      searchBlockRules = await loadProductBlockRules();
+    } catch (err) {
+      console.error('Error loading block rules in product search API:', err);
+    }
+
     // Map properties to match original output structure and enrich with stock block flags
     const mappedPromises = sorted.slice(0, limit).map(async (item: any) => {
       const availableQty = Number(item.stock) || 0;
       const isBlocked = (availableQty <= 0 && item.stock_rule_active);
+
+      const blockingRule = searchBlockRules.length
+        ? findBlockingRule(searchBlockRules, normalizeProductScope(item))
+        : null;
 
       let qCompany: 'PM' | 'THT' = 'PM';
       try {
@@ -610,6 +625,15 @@ app.get('/api/products/search', async (req: any, res: any) => {
         quote_company: qCompany,
         internal_reference: item.internal_reference,
         brand: item.brand,
+        series: item.series,
+        is_quote_blocked: !!blockingRule,
+        quote_blocked_msg: blockingRule
+          ? buildViolationDisplay({
+              type: 'BLOCKED',
+              model: item.code,
+              warn_msg: blockWarnText(blockingRule) ?? undefined
+            })
+          : null,
         optional_products: optionalProducts
       };
     });
@@ -629,12 +653,13 @@ app.get('/api/products/:code/blocked', async (req: any, res: any) => {
     const code = req.params.code;
     if (!code) return res.status(400).json({ error: 'Missing product code' });
 
-    const rules = await loadQuotationRules();
-    if (!rules.some(r => r.is_locked === true)) return res.json({ blocked: false });
+    const rules = await loadProductBlockRules();
+    if (rules.length === 0) return res.json({ blocked: false });
 
-    // ดึงข้อมูลสินค้า
+    // ดึงข้อมูลสินค้า — ต้องมี model + internal_reference ด้วย ไม่งั้นกฎ 2 ระดับล่างจะไม่มีวัน match
+    // (พลาดตรงนี้แล้วจะเงียบสนิท: API ตอบ blocked:false ตามปกติ ไม่มี error ให้เห็น)
     const { rows } = await pool.query(
-      'SELECT model AS code, brand, series, production FROM products WHERE model = $1 ORDER BY quantity_on_hand_unreserved DESC LIMIT 1',
+      'SELECT model, model AS code, brand, series, production, internal_reference FROM products WHERE model = $1 ORDER BY quantity_on_hand_unreserved DESC LIMIT 1',
       [code]
     );
     const prod = rows[0] || null;
@@ -643,7 +668,15 @@ app.get('/api/products/:code/blocked', async (req: any, res: any) => {
 
     const matchedRule = findBlockingRule(rules, normalizeProductScope(prod));
     if (matchedRule) {
-      return res.json({ blocked: true, message: buildBlockedMessage(matchedRule, prod.code) });
+      // ถ้อยคำเดียวกับด่านกลางและ PDF — ประกอบที่ buildViolationDisplay ที่เดียว
+      return res.json({
+        blocked: true,
+        message: buildViolationDisplay({
+          type: 'BLOCKED',
+          model: prod.code,
+          warn_msg: blockWarnText(matchedRule) ?? undefined
+        })
+      });
     }
 
     res.json({ blocked: false });
@@ -2266,7 +2299,8 @@ app.get('/api/admin/stats', adminAuthMiddleware, requireRole('admin'), async (re
         (SELECT COUNT(*) FROM quotation_rules)        AS quotation_rules,
         (SELECT COUNT(*) FROM product_optional_links) AS optional_links,
         (SELECT COUNT(*) FROM product_stock_rules)    AS stock_rules,
-        (SELECT COUNT(*) FROM product_moq_rules)      AS moq_rules
+        (SELECT COUNT(*) FROM product_moq_rules)      AS moq_rules,
+        (SELECT COUNT(*) FROM product_block_rules)    AS block_rules
     `);
     const row = result.rows[0];
     // COUNT(*) returns a string in pg — convert to number
@@ -2278,6 +2312,7 @@ app.get('/api/admin/stats', adminAuthMiddleware, requireRole('admin'), async (re
       optional_links: Number(row.optional_links),
       stock_rules: Number(row.stock_rules),
       moq_rules: Number(row.moq_rules),
+      block_rules: Number(row.block_rules),
     });
   } catch (err: any) {
     console.error("GET /api/admin/stats error:", err);
@@ -3804,6 +3839,194 @@ app.delete('/api/admin/moq-rules/:internal_reference', adminAuthMiddleware, requ
   } catch (err: any) {
     console.error("DELETE /api/admin/moq-rules error:", err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Admin CRUD: block-rules — กฎบล็อกสินค้า 5 ระดับ (ดู docs/plan-product-block-rules.md)
+//
+//  ทุก write path ต้องเรียก invalidateRuleCache('product_block_rules')
+//  ลืมแล้วอาการคือ "แอดมินกดบันทึกแล้วไม่มีผลไป 60 วินาที" ซึ่งเดาสาเหตุยากมาก
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * ช่อง scope ที่ว่าง/มีแต่ช่องว่าง ต้องลง DB เป็น NULL
+ * engine มอง '' เป็น wildcard เท่ากับ NULL อยู่แล้ว แต่ '  ' จะกลายเป็นค่าที่ไม่มีวัน match อะไร
+ * = กฎที่ดูเหมือนเจาะจงแต่ตายเงียบ ๆ (ของเดิมที่ quotation-rules ใช้ `x || null` กัน '' ได้แต่ไม่กัน '  ')
+ */
+const nzScope = (v: unknown): string | null => {
+  const t = String(v ?? '').trim();
+  return t === '' ? null : t;
+};
+
+/** ทุกช่องว่างหมด = กฎ wildcard ที่บล็อกทั้งคลัง — ต้องตอบ 400 ไม่ใช่ปล่อยให้ CHECK โยน 500 */
+function readBlockRuleBody(body: any): { scope: (string | null)[]; warn_msg: string } | { error: string } {
+  const scope = [
+    nzScope(body?.production),
+    nzScope(body?.brand),
+    nzScope(body?.series),
+    nzScope(body?.model),
+    nzScope(body?.internal_reference)
+  ];
+  if (scope.every(v => v === null)) {
+    return { error: 'ต้องระบุขอบเขตอย่างน้อย 1 ช่อง (ฝ่ายผลิต / ยี่ห้อ / ซีรีส์ / รุ่น / รหัสอ้างอิง)' };
+  }
+  const warn_msg = String(body?.warn_msg ?? '').trim();
+  if (warn_msg === '') {
+    return { error: 'ต้องกรอกข้อความแจ้งเซลล์ (warn_msg)' };
+  }
+  return { scope, warn_msg };
+}
+
+const BLOCK_RULE_SPECIFICITY = `
+  (CASE WHEN br.internal_reference IS NOT NULL THEN 16 ELSE 0 END
+ + CASE WHEN br.model IS NOT NULL THEN 8 ELSE 0 END
+ + CASE WHEN br.series IS NOT NULL THEN 4 ELSE 0 END
+ + CASE WHEN br.brand IS NOT NULL THEN 2 ELSE 0 END
+ + CASE WHEN br.production IS NOT NULL THEN 1 ELSE 0 END)
+`;
+
+// GET /api/admin/block-rules
+app.get('/api/admin/block-rules', adminAuthMiddleware, requireRole('admin'), async (req: any, res: any) => {
+  try {
+    // ต่อชื่อสินค้าให้กฎระดับ model/ref เพื่อให้แอดมินเห็นว่ารหัสนั้นคือของอะไร
+    // LATERAL + LIMIT 1 เพราะรหัสเดียวมีได้หลายแถวใน products
+    const { rows } = await pool.query(`
+      SELECT br.*, ${BLOCK_RULE_SPECIFICITY} AS specificity, p.name AS product_name
+        FROM product_block_rules br
+        LEFT JOIN LATERAL (
+          SELECT name FROM products
+           WHERE (br.internal_reference IS NOT NULL AND internal_reference = br.internal_reference)
+              OR (br.internal_reference IS NULL AND br.model IS NOT NULL AND model = br.model)
+           ORDER BY quantity_on_hand_unreserved DESC
+           LIMIT 1
+        ) p ON true
+       ORDER BY ${BLOCK_RULE_SPECIFICITY} DESC, br.id ASC
+    `);
+    res.json(rows);
+  } catch (err: any) {
+    console.error('GET /api/admin/block-rules error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// POST /api/admin/block-rules
+app.post('/api/admin/block-rules', adminAuthMiddleware, requireRole('admin'), express.json(), async (req: any, res: any) => {
+  const parsed = readBlockRuleBody(req.body);
+  if ('error' in parsed) return res.status(400).json({ error: parsed.error });
+
+  try {
+    // เทียบแบบ lower(btrim(...)) ให้ตรงกับ unique index และวิธีเทียบของ engine
+    // ('ACME' กับ 'acme ' คือกฎเดียวกัน) — เช็คเองก่อนเพื่อตอบข้อความไทย ไม่ใช่ 500 จาก constraint
+    const dup = await pool.query(`
+      SELECT id FROM product_block_rules
+       WHERE lower(btrim(COALESCE(production, '')))         = lower(btrim(COALESCE($1, '')))
+         AND lower(btrim(COALESCE(brand, '')))              = lower(btrim(COALESCE($2, '')))
+         AND lower(btrim(COALESCE(series, '')))             = lower(btrim(COALESCE($3, '')))
+         AND lower(btrim(COALESCE(model, '')))              = lower(btrim(COALESCE($4, '')))
+         AND lower(btrim(COALESCE(internal_reference, ''))) = lower(btrim(COALESCE($5, '')))
+    `, parsed.scope);
+    if (dup.rows.length > 0) {
+      return res.status(400).json({ error: 'มีกฎบล็อกของขอบเขตนี้อยู่ในระบบแล้ว' });
+    }
+
+    const { rows } = await pool.query(`
+      INSERT INTO product_block_rules
+        (production, brand, series, model, internal_reference, warn_msg, is_active)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING *
+    `, [...parsed.scope, parsed.warn_msg, req.body?.is_active !== false]);
+
+    invalidateRuleCache('product_block_rules');
+    res.status(201).json(rows[0]);
+  } catch (err: any) {
+    console.error('POST /api/admin/block-rules error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// PUT /api/admin/block-rules/:id
+app.put('/api/admin/block-rules/:id', adminAuthMiddleware, requireRole('admin'), express.json(), async (req: any, res: any) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'id ไม่ถูกต้อง' });
+
+  const parsed = readBlockRuleBody(req.body);
+  if ('error' in parsed) return res.status(400).json({ error: parsed.error });
+
+  try {
+    const dup = await pool.query(`
+      SELECT id FROM product_block_rules
+       WHERE id <> $6
+         AND lower(btrim(COALESCE(production, '')))         = lower(btrim(COALESCE($1, '')))
+         AND lower(btrim(COALESCE(brand, '')))              = lower(btrim(COALESCE($2, '')))
+         AND lower(btrim(COALESCE(series, '')))             = lower(btrim(COALESCE($3, '')))
+         AND lower(btrim(COALESCE(model, '')))              = lower(btrim(COALESCE($4, '')))
+         AND lower(btrim(COALESCE(internal_reference, ''))) = lower(btrim(COALESCE($5, '')))
+    `, [...parsed.scope, id]);
+    if (dup.rows.length > 0) {
+      return res.status(400).json({ error: 'มีกฎบล็อกของขอบเขตนี้อยู่ในระบบแล้ว' });
+    }
+
+    const { rows } = await pool.query(`
+      UPDATE product_block_rules
+         SET production = $1, brand = $2, series = $3, model = $4, internal_reference = $5,
+             warn_msg = $6, is_active = $7, updated_at = now()
+       WHERE id = $8
+       RETURNING *
+    `, [...parsed.scope, parsed.warn_msg, req.body?.is_active !== false, id]);
+
+    if (rows.length === 0) return res.status(404).json({ error: 'ไม่พบกฎบล็อกนี้' });
+
+    invalidateRuleCache('product_block_rules');
+    res.json(rows[0]);
+  } catch (err: any) {
+    console.error('PUT /api/admin/block-rules error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// PATCH /api/admin/block-rules/:id/active — ปุ่มเปิด/ปิดในตาราง (ไม่ต้องส่งทั้งฟอร์ม)
+app.patch('/api/admin/block-rules/:id/active', adminAuthMiddleware, requireRole('admin'), express.json(), async (req: any, res: any) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'id ไม่ถูกต้อง' });
+  if (typeof req.body?.is_active !== 'boolean') {
+    return res.status(400).json({ error: 'ต้องส่ง is_active เป็น true หรือ false' });
+  }
+
+  try {
+    const { rows } = await pool.query(`
+      UPDATE product_block_rules
+         SET is_active = $1, updated_at = now()
+       WHERE id = $2
+       RETURNING *
+    `, [req.body.is_active, id]);
+
+    if (rows.length === 0) return res.status(404).json({ error: 'ไม่พบกฎบล็อกนี้' });
+
+    invalidateRuleCache('product_block_rules');
+    res.json(rows[0]);
+  } catch (err: any) {
+    console.error('PATCH /api/admin/block-rules/:id/active error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// DELETE /api/admin/block-rules/:id
+app.delete('/api/admin/block-rules/:id', adminAuthMiddleware, requireRole('admin'), async (req: any, res: any) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'id ไม่ถูกต้อง' });
+
+  try {
+    const { rows } = await pool.query(
+      'DELETE FROM product_block_rules WHERE id = $1 RETURNING *', [id]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'ไม่พบกฎบล็อกนี้' });
+
+    invalidateRuleCache('product_block_rules');
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error('DELETE /api/admin/block-rules error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
   }
 });
 

@@ -26,9 +26,10 @@ import {
   loadQuotationRules,
   resolveQuotationRule,
   resolveDeliveryOutOfStockDays,
+  loadProductBlockRules,
   findBlockingRule,
+  blockWarnText,
   findCompanyRule,
-  buildBlockedMessage,
   normalizeProductScope
 } from './rules/index.js';
 
@@ -56,8 +57,12 @@ export function buildViolationDisplay(v: Omit<Violation, 'display_message'>): st
   const model = v.model || '-';
   const optionalNote = v.is_optional && v.linked_to_model ? ` (สินค้าเสริมของ ${v.linked_to_model})` : '';
   switch (v.type) {
-    case 'BLOCKED':
-      return v.warn_msg || `❌ ระงับการเสนอราคาสินค้า ${model} กรุณาติดต่อแอดมิน`;
+    // ทรงเดียวกับ MOQ: หัวข้อ + รหัสสินค้า + เหตุผลที่แอดมินกรอก
+    // ห้ามพิมพ์ scope ของกฎ (production > brand > series) ให้เซลล์เห็น — เป็นเรื่องภายใน
+    case 'BLOCKED': {
+      const detail = v.warn_msg ? `: ${v.warn_msg}` : ' กรุณาติดต่อแอดมิน';
+      return `❌ ระงับการเสนอราคา รายการ ${model}${optionalNote}${detail}`;
+    }
     case 'OUT_OF_STOCK': {
       const detail = v.warn_msg ? `: ${v.warn_msg}` : '';
       return `📦 ระงับเมื่อสต็อกไม่พอ รายการ ${model}${optionalNote}${detail}`;
@@ -857,36 +862,76 @@ export async function getProductInfo(code: string, executor: DbExecutor = pool):
   }
 }
 
+export interface BlockViolation {
+  type: 'BLOCKED';
+  model: string;
+  name: string;
+  warn_msg: string | null;
+}
+
 /**
- * ค้นหาข้อมูลสินค้าและตรวจสอบว่ามีสินค้าใดติดกฎล็อกเสนอราคา (is_locked) หรือไม่
+ * ตรวจว่ามีบรรทัดไหนติดกฎบล็อกสินค้า (product_block_rules) — คืนครบทุกบรรทัดที่ผิด
+ *
+ * ทรงเดียวกับ checkMinOrderQty: lookup รอบเดียวด้วย ANY($1) แล้ววนของในหน่วยความจำ
+ * (ของเดิมเรียก getProductInfo ทีละ item ในลูป = N+1 query และ return ทันทีที่เจอตัวแรก
+ *  เซลล์จึงเห็นทีละรายการ ต้องแก้แล้วกดใหม่ซ้ำ ๆ กว่าจะรู้ว่าติดกี่ตัว)
+ *
+ * ⚠️ ข้ามบรรทัดค่าขนส่ง — มันมี internal_reference จริง (SOFBLDXXXX0010) กฎระดับ ref
+ * จึงเผลอครอบมันได้ ถ้าโดนจะออกใบไม่ได้ทั้งใบ ทั้งที่ pdfGenerator ข้ามบรรทัดนี้อยู่แล้ว
  */
-export async function getBlockedProductError(items: any[] | null): Promise<string | null> {
-  if (!items || items.length === 0) return null;
+export async function checkBlockedProducts(items: any[] | null): Promise<BlockViolation[]> {
+  if (!items || items.length === 0) return [];
 
   let rules: any[] = [];
   try {
-    rules = await loadQuotationRules();
+    rules = await loadProductBlockRules();
   } catch (err) {
-    console.error('Error fetching quotation rules for blocking validation:', err);
-    return null;
+    console.error('Error fetching product block rules for blocking validation:', err);
+    throw err;   // fail-closed — ผู้เรียกจะเปลี่ยนเป็น SYSTEM_ERROR ให้เอง
   }
+  if (rules.length === 0) return [];
 
-  if (!rules.some((r: any) => r.is_locked === true)) return null;
+  const { isShippingFeeItem, loadShippingFeeConfig } = await import('./shippingFee.js');
+  const shippingCfg = await loadShippingFeeConfig();
 
-  for (const item of items) {
-    const code = item.product_code || item.model || item.code;
+  const targets = items.filter(i => !isShippingFeeItem(i, shippingCfg));
+  const codes = Array.from(new Set(
+    targets.map(i => String(i.product_code || i.model || i.code || '').trim()).filter(Boolean)
+  ));
+  if (codes.length === 0) return [];
+
+  // DISTINCT ON (model) + ORDER BY เดียวกับ getProductInfo — สินค้ารหัสเดียวกันมีได้หลายแถว
+  // ต้องเลือกแถวเดิมกับที่จุดอื่นเลือก ไม่งั้น scope อาจต่างกันแล้วผลบล็อกไม่ตรงกัน
+  const { rows } = await pool.query(`
+    SELECT DISTINCT ON (model)
+           model, model AS code, name, brand, series, production, internal_reference
+      FROM products
+     WHERE model = ANY($1)
+     ORDER BY model, quantity_on_hand_unreserved DESC
+  `, [codes]);
+
+  const prodMap = new Map(rows.map((r: any) => [r.model, r]));
+  const violations: BlockViolation[] = [];
+
+  for (const item of targets) {
+    const code = String(item.product_code || item.model || item.code || '').trim();
     if (!code) continue;
 
-    const prod = await getProductInfo(code);
-    if (!prod) continue;
+    const prod = prodMap.get(code);
+    if (!prod) continue;   // ไม่มีในคลัง = ไม่มี scope ให้ตัดสิน ปล่อยให้ด่านอื่นจัดการ
 
-    const matchedRule = findBlockingRule(rules as any, normalizeProductScope(prod));
-    if (matchedRule) {
-      return buildBlockedMessage(matchedRule, prod.code);
-    }
+    const rule = findBlockingRule(rules as any, normalizeProductScope(prod));
+    if (!rule) continue;
+
+    violations.push({
+      type: 'BLOCKED' as const,
+      model: prod.code,
+      name: prod.name,
+      warn_msg: blockWarnText(rule as any)
+    });
   }
 
-  return null;
+  return violations;
 }
 
 export interface MoqViolation {
@@ -1121,10 +1166,12 @@ export async function validateQuotationItems(
   try {
     expanded = await expandOptionalProducts(items);
 
-    // blocked (is_locked)
-    const blockedMsg = await getBlockedProductError(expanded);
-    if (blockedMsg) {
-      const v: Omit<Violation, 'display_message'> = { type: 'BLOCKED', model: '-', warn_msg: blockedMsg };
+    // blocked — รายงานครบทุกบรรทัดพร้อมรหัสสินค้าจริง (เดิมบอกได้ทีละ 1 รายการ และ model เป็น '-')
+    const blockErrors = await checkBlockedProducts(expanded);
+    for (const e of blockErrors) {
+      const v: Omit<Violation, 'display_message'> = {
+        type: 'BLOCKED', model: e.model, warn_msg: e.warn_msg ?? undefined
+      };
       violations.push({ ...v, display_message: buildViolationDisplay(v) });
     }
 

@@ -3,12 +3,14 @@ import puppeteer from "puppeteer";
 import ThaiBahtText from "thai-baht-text";
 import fs from "fs";
 import path from "path";
-import { resolveQuoteCompany, resolveQuotationDeliveryDays } from "./services/quotationService.js";
+import { resolveQuoteCompany, resolveQuotationDeliveryDays, buildViolationDisplay } from "./services/quotationService.js";
 import {
   loadQuotationRules,
   resolveQuotationRule,
   resolveDeliveryOutOfStockDays,
-  buildBlockedPdfMessage,
+  loadProductBlockRules,
+  findBlockingRule,
+  blockWarnText,
   normalizeProductScope
 } from "./services/rules/index.js";
 import { calcNetPrice, calcVat, calcGrandTotal } from "./utils/pricing.js";
@@ -170,6 +172,13 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
       console.error('Error fetching quotation rules in PDF generator:', err);
     }
 
+    let blockRules: any[] = [];
+    try {
+      blockRules = await loadProductBlockRules();
+    } catch (err) {
+      console.error('Error fetching product block rules in PDF generator:', err);
+    }
+
     let minWarrantyMonths = Infinity;
 
     itemsList.forEach((item: any) => {
@@ -185,12 +194,19 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
         allItemsInStock = false;
       }
 
-      const outcome = resolveQuotationRule(quotationRules, normalizeProductScope(item));
+      const scope = normalizeProductScope(item);
+      const outcome = resolveQuotationRule(quotationRules, scope);
 
-      // ตรวจสอบเงื่อนไขล็อคเสนอราคา
-      if (outcome.is_locked) {
-        const blockingRule = quotationRules.find((r: any) => r.id === outcome.matched_rule_id);
-        throw new Error(buildBlockedPdfMessage(blockingRule, item.product_code || item.model));
+      // ตรวจสอบเงื่อนไขระงับการเสนอราคา
+      // เดิมอ่าน outcome.is_locked (resolve ชุดเต็มก่อนแล้วดูว่าตัวชนะล็อกไหม) ตอนนี้ filter-then-match
+      // เหมือนด่านกลาง ⇒ 3 จุดที่บล็อกใช้ตรรกะเดียวกันหมดแล้ว (ดูแผน §4.2)
+      const blockingRule = findBlockingRule(blockRules as any, scope);
+      if (blockingRule) {
+        throw new Error(buildViolationDisplay({
+          type: 'BLOCKED',
+          model: item.product_code || item.model,
+          warn_msg: blockWarnText(blockingRule) ?? undefined
+        }));
       }
 
       const inMonths = outcome.warranty_unit === 'year'

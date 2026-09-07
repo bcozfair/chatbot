@@ -13,13 +13,16 @@ export {
   loadQuotationRules,
   resolveQuotationRule,
   resolveDeliveryOutOfStockDays,
-  findBlockingRule,
   findCompanyRule,
-  buildBlockedMessage,
-  buildBlockedPdfMessage,
   QUOTATION_RULE_DEFAULTS,
   DELIVERY_QTY_BREAKPOINTS,
   type QuotationRule,
   type QuotationRuleOutcome,
   type DeliveryQtyTier
 } from './quotationRules.js';
+export {
+  loadProductBlockRules,
+  findBlockingRule,
+  blockWarnText,
+  type ProductBlockRule
+} from './blockRules.js';
