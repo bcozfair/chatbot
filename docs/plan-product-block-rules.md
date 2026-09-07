@@ -81,7 +81,7 @@ specificity ปัจจุบัน: `series=4, brand=2, production=1` — [sco
 
 ---
 
-## 2. เฟส 1 — ขยาย rule engine เป็น 5 ระดับ
+## 2. เฟส 1 — ขยาย rule engine เป็น 5 ระดับ  ✅ **ทำแล้ว**
 
 **ไม่แตะ DB · ไม่เปลี่ยนพฤติกรรม · merge เดี่ยว ๆ ได้**
 
@@ -184,6 +184,32 @@ npm run diag:pdf-render
 | กฎ `{series}` ยังชนะ `{production,brand}` | ✅ เหมือนเดิม (4 > 3) |
 | แถวไม่มี `model`/`internal_reference` เลย → specificity เท่าเดิมทุกค่า | ✅ 0-7 เท่าเดิม |
 | `normalizeProductScope` อ่าน `product_code` เป็น model ได้ | ✅ |
+
+### 2.5 ผลการทดสอบจริง (รันแล้ว)
+
+รันในคอนเทนเนอร์ชั่วคราวจาก image `primus-chatbot-app` (ต่อ network + DB จริงแบบอ่านอย่างเดียว)
+แล้วลบคอนเทนเนอร์ทิ้ง — ไม่แตะคอนเทนเนอร์ที่รันอยู่
+
+| ชุด | ผล |
+| --- | --- |
+| `npx tsc --noEmit` | ✅ ไม่มี error (ยืนยันว่าการเพิ่ม field ใน `ProductScope` ไม่พังที่ไหนเลย) |
+| `ruleEngineSmoke.ts` | ✅ ผ่านทั้งหมด — รวมเคสใหม่ 14 เคส ไม่มี FAIL |
+| `ruleResolutionDiff.ts` | ✅ **929 scope ที่มีสินค้าจริง · ไม่มี scope ใดเปลี่ยนผลลัพธ์** เทียบกับ `legacyMatch()` |
+| `quoteValidationSmoke.ts` | ✅ ผ่านทั้งหมด |
+| `pdfRenderSmoke.ts` | ✅ ผ่านทั้งหมด |
+
+เคสกันถอยหลังที่เพิ่มเข้าไปนอกเหนือจากตารางข้างบน:
+
+- ไล่ bitmask ครบทั้ง 8 ค่าของกฎ 3 ระดับเดิม เทียบกับสูตรเก่าแบบ hard-code ⇒ `0..7` ตรงกันทุกค่า
+- `'import'` prefix-match ไม่ลามไป `model` / `internal_reference` (exact เท่านั้น)
+- กฎที่ระบุ `model` แต่สินค้าไม่มี `model` ⇒ ไม่ match (fail-closed ไม่ใช่ fail-open)
+
+**หมายเหตุที่ต่างจากแผน:** `normalizeProductScope` ใช้ `src?.model || src?.product_code`
+(ไม่ใช่ `??`) เพื่อให้ `model: ''` ตกไปใช้ `product_code` — ตรงกับสำนวนที่ใช้อยู่แล้วทั่วโค้ด
+(`services/shippingFee.ts:128`, `utils/flexTemplates.ts:653`)
+
+ยังไม่แตะ `src?.code` ตามที่ §7.0 ตัดสินไว้ — 2 จุดที่ query alias `model AS code`
+จะแก้ที่ตัว query ในเฟส 3 ไม่ใช่ให้ engine เดา
 
 ---
 

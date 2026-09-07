@@ -29,7 +29,7 @@ ok('calcVat 7%', calcVat(1000) === 70);
 ok('calcGrandTotal', calcGrandTotal(1000) === 1070);
 
 // ── 2. scope matching (pure) ───────────────────────────────────────────
-type TestRule = { id: number; production?: string; brand?: string; series?: string };
+type TestRule = { id: number; production?: string; brand?: string; series?: string; model?: string; internal_reference?: string };
 
 const scope = normalizeProductScope({ production: 'Import(PM)', brand: 'ACME', series: 'X1' });
 ok("wildcard ว่าง match ทุกอย่าง", selectRule<TestRule>([{ id: 1 }], scope)?.id === 1);
@@ -42,6 +42,51 @@ ok('exact ชนะ prefix', selectRule(
 ok('ลำดับ array ไม่มีผล (deterministic)', selectRule(
   [{ id: 21, production: 'Import(PM)' }, { id: 20, production: 'Import' }], scope)?.id === 21);
 ok('specificity bitmask', scopeSpecificity({ series: 's' }) === 4 && scopeSpecificity({ production: 'p', brand: 'b' }) === 3);
+
+// ── 2a. 5 ระดับ: model / internal_reference (เพิ่มเฟส 1) ────────────────
+// บิตใหม่ต้องอยู่เหนือของเดิม — ค่าเดิม 1/2/4 ห้ามขยับ ไม่งั้นกฏ 3 ระดับที่ใช้อยู่จริงสลับลำดับ
+ok('specificity เดิมไม่ขยับ (0..7 เท่าเดิมทุกค่า)', (() => {
+  const legacy = (r: any) => (r.series ? 4 : 0) + (r.brand ? 2 : 0) + (r.production ? 1 : 0);
+  for (let m = 0; m < 8; m++) {
+    const r = { production: (m & 1) ? 'p' : '', brand: (m & 2) ? 'b' : '', series: (m & 4) ? 's' : '' };
+    if (scopeSpecificity(r) !== legacy(r)) return false;
+  }
+  return true;
+})());
+ok('specificity model=8 / ref=16',
+  scopeSpecificity({ model: 'm' }) === 8
+  && scopeSpecificity({ internal_reference: 'r' }) === 16
+  && scopeSpecificity({ production: 'p', brand: 'b', series: 's', model: 'm', internal_reference: 'r' }) === 31);
+
+const scope5 = normalizeProductScope({
+  production: 'Import(PM)', brand: 'ACME', series: 'X1',
+  model: 'X1-100', internal_reference: 'FTBK1X1100000'
+});
+ok('model exact match', selectRule<TestRule>([{ id: 30, model: 'X1-100' }], scope5)?.id === 30);
+ok('model ไม่ตรง = ไม่ match', selectRule<TestRule>([{ id: 31, model: 'X1-999' }], scope5) === null);
+ok('internal_reference exact match',
+  selectRule<TestRule>([{ id: 32, internal_reference: 'FTBK1X1100000' }], scope5)?.id === 32);
+ok('internal_reference ไม่ตรง = ไม่ match',
+  selectRule<TestRule>([{ id: 33, internal_reference: 'FTBK1ZZZ00000' }], scope5) === null);
+ok('model ชนะ production+brand+series (8 > 7)', selectRule<TestRule>(
+  [{ id: 40, production: 'Import', brand: 'ACME', series: 'X1' }, { id: 41, model: 'X1-100' }], scope5)?.id === 41);
+ok('internal_reference ชนะทุกระดับที่กว้างกว่า (16 > 15)', selectRule<TestRule>(
+  [{ id: 50, production: 'Import', brand: 'ACME', series: 'X1', model: 'X1-100' },
+   { id: 51, internal_reference: 'FTBK1X1100000' }], scope5)?.id === 51);
+ok('series ยังชนะ production+brand เหมือนเดิม', selectRule<TestRule>(
+  [{ id: 60, production: 'Import', brand: 'ACME' }, { id: 61, series: 'X1' }], scope5)?.id === 61);
+ok('กฏที่ไม่มี model/ref เลย → ผลเท่าเดิมทุกประการ', selectRule<TestRule>(
+  [{ id: 70, production: 'Import' }, { id: 71, production: 'Import(PM)' }], scope5)?.id === 71);
+ok("'import' prefix ยังไม่ลามไปที่ model/ref (exact เท่านั้น)",
+  selectRule<TestRule>([{ id: 80, model: 'X1' }], scope5) === null);
+ok('normalizeProductScope อ่าน product_code เป็น model ได้',
+  normalizeProductScope({ product_code: 'X1-100' }).model === 'x1-100'
+  && normalizeProductScope({ model: 'X1-100', product_code: 'ZZ' }).model === 'x1-100');
+ok('scope ที่ไม่มี model/ref → กฏ 3 ระดับเดิมยังทำงาน',
+  selectRule<TestRule>([{ id: 90, series: 'X1' }], scope)?.id === 90
+  && scope.model === '' && scope.internal_reference === '');
+ok('กฏระบุ model แต่สินค้าไม่มี model → ไม่ match (fail-closed)',
+  selectRule<TestRule>([{ id: 91, model: 'X1-100' }], scope) === null);
 
 // ── 2b. tier วันจัดส่งตามจำนวน (pure) ───────────────────────────────────
 const tierOutcome = {
