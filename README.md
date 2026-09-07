@@ -84,7 +84,6 @@ start_date, end_date (TIMESTAMPTZ), is_active (BOOLEAN), created_at, updated_at
 ```
 id (SERIAL PK), production (TEXT), brand (TEXT), series (TEXT),
 warranty_years (INT DEFAULT 1), warranty_unit (month/year DEFAULT year),
-is_locked (BOOLEAN DEFAULT false),
 delivery_in_stock_days (INT DEFAULT 3), delivery_out_of_stock_days (INT DEFAULT 7),
 delivery_days_qty_10/20/50/100 (INT NULL) — วันจัดส่งเมื่อสั่ง >= N ชิ้นและสต็อกไม่พอ
                                             (NULL = ไม่ใช้ tier ขั้นนั้น)
@@ -214,7 +213,8 @@ user_id, message_id, type, content, reply_token, reply_content, created_at
 | ประวัติใบเสนอราคา | `Quotations.tsx` | ตาราง pagination, filter status/วันที่/search/สถานะการส่งออก, expand แสดงสินค้า, download PDF, export Odoo (กันส่งออกซ้ำ + ประวัติชุด + ถอยเครื่องหมาย) |
 | โปรโมชัน | `Promotions.tsx` | CRUD promotion, multi-select product/customer/ref tags, sort, toggle active, import/export CSV |
 | ลายเซ็นพนักงาน | `Salespersons.tsx` | ดู list พนักงาน, upload sale_sig/admin_sig (PNG/JPG ≤5MB), preview, delete, sort |
-| เงื่อนไขใบเสนอราคา | `QuotationRules.tsx` | CRUD rules, ComboBox dropdown ที่ filter brand/series ตาม production ที่เลือก, is_locked toggle, warranty_unit (month/year) |
+| เงื่อนไขใบเสนอราคา | `QuotationRules.tsx` | CRUD rules, ComboBox dropdown ที่ filter brand/series ตาม production ที่เลือก, warranty_unit (month/year) |
+| บล็อกสินค้า | `BlockRules.tsx` | CRUD กฎห้ามเสนอราคา 5 ระดับ (production > brand > series > model > internal_reference) + ข้อความที่เซลล์เห็น |
 
 **Auth Context** (`AuthContext.tsx`): เก็บ JWT + user info ใน localStorage, expose `useAuth()` hook
 
@@ -319,7 +319,8 @@ user_id, message_id, type, content, reply_token, reply_content, created_at
 - `admin_users` — ผู้ดูแลระบบ (id, username, password_hash, name, role)
 - `quotations` — ใบเสนอราคา (id, user_id, quotation_no, status, customer_name, items JSONB, total_sum, salesperson_name, salesperson_phone, salesperson_employee_code, delivery_days_override)
 - `promotions` — โปรโมชัน (id, code, name, discount_type, discount_value, product_code, customer_type, customer_refs, min_qty, start_date, end_date)
-- `quotation_rules` — เงื่อนไขใบเสนอ (id, production, brand, series, warranty_years, warranty_unit, is_locked, delivery_in_stock_days, delivery_out_of_stock_days, delivery_days_qty_10/20/50/100)
+- `quotation_rules` — เงื่อนไขใบเสนอ (id, production, brand, series, warranty_years, warranty_unit, delivery_in_stock_days, delivery_out_of_stock_days, delivery_days_qty_10/20/50/100)
+- `product_block_rules` — กฎห้ามเสนอราคา (id, production, brand, series, model, internal_reference, warn_msg, is_active) — บล็อกสินค้าอยู่ที่นี่ที่เดียว
 - `salesperson` — พนักงานขายที่ลงทะเบียนใน LINE (user_id, name, phone, salesperson_id, branch_code)
 
 **ตาราง Odoo sync (read-only views):**
@@ -359,12 +360,13 @@ user_id, message_id, type, content, reply_token, reply_content, created_at
 
 ### Frontend Admin (React + Vite)
 
-**5 tabs:**
+**6 tabs:**
 1. **Dashboard** — welcome card + quick links
 2. **ประวัติใบเสนอราคา** — ตาราง paginate + filter + sort + export Odoo (ตั้งต้นเฉพาะใบที่ยังไม่เคยส่ง) + download PDF
 3. **จัดการโปรโมชัน** — CRUD โปรโมชัน
 4. **จัดการลายเซ็นพนักงาน** — อัปโหลดลายเซ็น sale_sigs + admin_sigs
-5. **เงื่อนไขใบเสนอราคา** — CRUD quotation_rules (warranty, delivery days, is_locked)
+5. **เงื่อนไขใบเสนอราคา** — CRUD quotation_rules (warranty, delivery days)
+6. **บล็อกสินค้า** — CRUD product_block_rules (ห้ามเสนอราคา 5 ระดับ + ข้อความ)
 
 Auth: JWT เก็บใน localStorage, `AuthContext` wrap app ทั้งหมด
 
@@ -395,7 +397,8 @@ Auth: JWT เก็บใน localStorage, `AuthContext` wrap app ทั้ง�
 1. **`dbClient.ts`** มี query builder ที่ทำ column mapping อัตโนมัติ (`branch_code` ↔ `branch`, `code` ↔ `model`, etc.) — ต้องเข้าใจ mapping ก่อนแก้ไขตาราง
 2. **LIFF ID** ดึงจาก `/api/liff/config?page=` เสมอ — ไม่ hardcode
 3. **ลายเซ็น** ใช้ `salesperson_employee_code` (ไม่ใช่ LINE user_id) เป็นชื่อไฟล์
-4. **Production 2** (`is_locked = true`) ห้ามออกใบเสนอราคา — ตรวจทั้ง frontend + backend
+4. **การบล็อกสินค้า** อยู่ที่ `product_block_rules` ที่เดียว (5 ระดับ) — ตรวจทั้ง frontend + backend
+   (เดิมคือ `quotation_rules.is_locked` ลบไปแล้วในเฟส 5 · ดู `docs/plan-product-block-rules.md`)
 5. **quotation_no** format: `QP-YYMMXXX` (Primus) / `QT-YYMMXXX` (Themtech) นับ sequence ต่อเดือน
 6. **`public/`** เป็น build output — ห้ามแก้ตรง, แก้ที่ `frontend/src/`
 7. **`linebot/`, `lineliff/`** ยังมีอยู่ในโปรเจกต์แต่ห้ามแตะ

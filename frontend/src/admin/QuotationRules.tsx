@@ -30,12 +30,6 @@ interface QuotationRule {
   quote_company: 'PM' | 'THT' | null;
   warranty_years: number;
   warranty_unit: 'month' | 'year';
-  /**
-   * ⚠️ เลิกใช้แล้ว — กฎบล็อกย้ายไปแท็บ "บล็อกสินค้า" (product_block_rules)
-   * ยังส่งค่าเดิมกลับไปตอนบันทึกเพื่อไม่ให้ค่าใน DB ถูกล้างระหว่าง soak
-   * ลบพร้อมคอลัมน์ในเฟส 5
-   */
-  is_locked: boolean;
   delivery_in_stock_days: number;
   delivery_out_of_stock_days: number;
   // วันจัดส่งเมื่อสั่งจำนวนมากและสต็อกไม่พอ — null = ไม่ใช้ tier ขั้นนั้น
@@ -103,7 +97,6 @@ export function QuotationRules() {
     quote_company: '' as 'PM' | 'THT' | '',
     warranty_years: 1,
     warranty_unit: 'year' as 'month' | 'year',
-    is_locked: false,
     delivery_in_stock_days: 3,
     delivery_out_of_stock_days: 7,
     // เก็บเป็น string เพราะ '' = เว้นว่าง = ไม่ใช้ tier (ต่างจาก 0 ที่แปลว่าส่งวันเดียวกัน)
@@ -242,7 +235,6 @@ export function QuotationRules() {
       quote_company: '',
       warranty_years: 1,
       warranty_unit: 'year',
-      is_locked: false,
       delivery_in_stock_days: 3,
       delivery_out_of_stock_days: 7,
       delivery_days_qty_10: '',
@@ -262,7 +254,6 @@ export function QuotationRules() {
       quote_company: rule.quote_company || '',
       warranty_years: rule.warranty_years,
       warranty_unit: rule.warranty_unit || 'year',
-      is_locked: rule.is_locked,
       delivery_in_stock_days: rule.delivery_in_stock_days,
       delivery_out_of_stock_days: rule.delivery_out_of_stock_days,
       delivery_days_qty_10: rule.delivery_days_qty_10 != null ? String(rule.delivery_days_qty_10) : '',
@@ -320,7 +311,6 @@ export function QuotationRules() {
       quote_company: formData.quote_company || null,
       warranty_years: formData.warranty_years,
       warranty_unit: formData.warranty_unit,
-      is_locked: formData.is_locked,
       delivery_in_stock_days: formData.delivery_in_stock_days,
       delivery_out_of_stock_days: formData.delivery_out_of_stock_days,
       // '' → null = ไม่ใช้ tier ขั้นนั้น

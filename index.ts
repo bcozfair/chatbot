@@ -2815,7 +2815,9 @@ function parseDeliveryQtyDays(raw: any): number | null | undefined {
 
 // 3. POST /api/admin/quotation-rules - สร้างกฎเงื่อนไขใหม่
 app.post('/api/admin/quotation-rules', adminAuthMiddleware, requireRole('admin'), express.json(), async (req: any, res: any) => {
-  const { production, brand, series, quote_company, warranty_years, warranty_unit, is_locked, delivery_in_stock_days, delivery_out_of_stock_days,
+  // frontend เก่าที่ค้างในเบราว์เซอร์ยังส่ง is_locked มาได้ — ไม่รับมาแล้ว ปล่อยให้ตกไปเฉย ๆ
+  // (คอลัมน์ถูกลบในเฟส 5 · การบล็อกอยู่ที่ product_block_rules ทั้งหมด)
+  const { production, brand, series, quote_company, warranty_years, warranty_unit, delivery_in_stock_days, delivery_out_of_stock_days,
     delivery_days_qty_10, delivery_days_qty_20, delivery_days_qty_50, delivery_days_qty_100 } = req.body;
 
   if (warranty_unit && !['month', 'year'].includes(warranty_unit)) {
@@ -2842,9 +2844,9 @@ app.post('/api/admin/quotation-rules', adminAuthMiddleware, requireRole('admin')
 
     const insertQuery = `
       INSERT INTO quotation_rules
-        (production, brand, series, quote_company, warranty_years, warranty_unit, is_locked, delivery_in_stock_days, delivery_out_of_stock_days,
+        (production, brand, series, quote_company, warranty_years, warranty_unit, delivery_in_stock_days, delivery_out_of_stock_days,
          delivery_days_qty_10, delivery_days_qty_20, delivery_days_qty_50, delivery_days_qty_100)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
       RETURNING *
     `;
     const result = await pool.query(insertQuery, [
@@ -2854,7 +2856,6 @@ app.post('/api/admin/quotation-rules', adminAuthMiddleware, requireRole('admin')
       quote_company || null,
       warranty_years !== undefined ? parseInt(warranty_years) : 1,
       warranty_unit || 'year',
-      is_locked || false,
       delivery_in_stock_days !== undefined ? parseInt(delivery_in_stock_days) : 3,
       delivery_out_of_stock_days !== undefined ? parseInt(delivery_out_of_stock_days) : 7,
       ...qtyDays
@@ -2870,7 +2871,8 @@ app.post('/api/admin/quotation-rules', adminAuthMiddleware, requireRole('admin')
 // 4. PUT /api/admin/quotation-rules/:id - แก้ไขกฎเงื่อนไข
 app.put('/api/admin/quotation-rules/:id', adminAuthMiddleware, requireRole('admin'), express.json(), async (req: any, res: any) => {
   const { id } = req.params;
-  const { production, brand, series, quote_company, warranty_years, warranty_unit, is_locked, delivery_in_stock_days, delivery_out_of_stock_days,
+  // is_locked ไม่รับแล้วเช่นเดียวกับ POST — ดูคำอธิบายที่นั่น
+  const { production, brand, series, quote_company, warranty_years, warranty_unit, delivery_in_stock_days, delivery_out_of_stock_days,
     delivery_days_qty_10, delivery_days_qty_20, delivery_days_qty_50, delivery_days_qty_100 } = req.body;
 
   if (warranty_unit && !['month', 'year'].includes(warranty_unit)) {
@@ -2904,15 +2906,14 @@ app.put('/api/admin/quotation-rules/:id', adminAuthMiddleware, requireRole('admi
         quote_company = $4,
         warranty_years = $5,
         warranty_unit = $6,
-        is_locked = $7,
-        delivery_in_stock_days = $8,
-        delivery_out_of_stock_days = $9,
-        delivery_days_qty_10 = $10,
-        delivery_days_qty_20 = $11,
-        delivery_days_qty_50 = $12,
-        delivery_days_qty_100 = $13,
+        delivery_in_stock_days = $7,
+        delivery_out_of_stock_days = $8,
+        delivery_days_qty_10 = $9,
+        delivery_days_qty_20 = $10,
+        delivery_days_qty_50 = $11,
+        delivery_days_qty_100 = $12,
         updated_at = CURRENT_TIMESTAMP
-      WHERE id = $14
+      WHERE id = $13
       RETURNING *
     `;
     const result = await pool.query(updateQuery, [
@@ -2922,7 +2923,6 @@ app.put('/api/admin/quotation-rules/:id', adminAuthMiddleware, requireRole('admi
       quote_company || null,
       warranty_years !== undefined ? parseInt(warranty_years) : 1,
       warranty_unit || 'year',
-      is_locked || false,
       delivery_in_stock_days !== undefined ? parseInt(delivery_in_stock_days) : 3,
       delivery_out_of_stock_days !== undefined ? parseInt(delivery_out_of_stock_days) : 7,
       ...qtyDays,

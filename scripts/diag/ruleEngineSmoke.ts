@@ -137,7 +137,7 @@ const { rows: prods } = await pool.query(
 for (const p of prods) {
   const out = resolveQuotationRule(reloaded, normalizeProductScope(p));
   console.log(`   ${p.model} [${p.production} > ${p.brand} > ${p.series || '-'}]`,
-    `→ rule#${out.matched_rule_id ?? 'default'} warranty=${out.warranty_display} in=${out.delivery_in_stock_days} out=${out.delivery_out_of_stock_days} locked=${out.is_locked}`);
+    `→ rule#${out.matched_rule_id ?? 'default'} warranty=${out.warranty_display} in=${out.delivery_in_stock_days} out=${out.delivery_out_of_stock_days}`);
 }
 ok('resolveQuotationRule ทำงานกับสินค้าจริง', prods.length > 0);
 ok('findCompanyRule เรียกได้', (() => {
