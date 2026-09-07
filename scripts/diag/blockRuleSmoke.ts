@@ -11,6 +11,9 @@
 //   (ง) บรรทัดค่าขนส่งต้องถูกข้าม — มี internal_reference จริง กฎระดับ ref จึงครอบมันได้
 //       ถ้าโดน = ออกใบไม่ได้ทั้งใบ ทั้งที่ PDF ข้ามบรรทัดนี้อยู่แล้ว
 //   (จ) การ์ดสรุปต้องซ่อนปุ่มยืนยันเมื่อมีสินค้าถูกระงับ — เดิมปุ่มยังโผล่ กดแล้วเด้งแน่นอน
+//   (ฉ) สินค้าที่ model ติดช่องว่างหัว/ท้ายจาก Odoo ต้องถูกบล็อกเหมือนกัน — เคยหลุดจริง
+//       ด่านกลาง trim รหัสก่อนไป WHERE model = ANY() ที่ไม่ trim → ไม่เจอแถว → ปล่อยผ่านเงียบ ๆ
+//       (เจอตอนตรวจหลัง deploy 2026-09-07 · หลุด 3 ตัว รวมตัวที่ตั้งกฎระดับ ref ไว้เจาะจง)
 //
 //  ให้รันซ้ำทุกครั้งที่แตะ blockRules.ts · checkBlockedProducts · buildViolationDisplay
 //  · flexTemplates · pdfGenerator   คู่กับ npm run diag:block-parity
@@ -153,6 +156,32 @@ try {
     const withNormal = { ...base, items: [{ ...toItem(normal[0]), price: 999999, stock: 10 }] };
     const flexOk = JSON.stringify(await getQuotationSummaryMessage([withNormal]));
     ok('สินค้าปกติยังมีปุ่มยืนยันตามเดิม', flexOk.includes('ยืนยันออกใบเสนอราคา'));
+  }
+
+  // ── (ฉ) model ที่ติดช่องว่างหัว/ท้าย ต้องตัดสินเหมือนกันทั้งเทียบแบบดิบและแบบ trim ──
+  const { rows: wsRows } = await client.query(`
+    SELECT DISTINCT ON (btrim(model))
+           model AS raw_model, btrim(model) AS model, name,
+           brand, series, production, internal_reference
+      FROM products
+     WHERE model IS NOT NULL AND model <> btrim(model)
+     ORDER BY btrim(model), quantity_on_hand_unreserved DESC
+  `);
+  if (wsRows.length === 0) {
+    console.log('   (ไม่มีสินค้าที่ model ติดช่องว่าง — ข้ามข้อ (ฉ))');
+  } else {
+    let wsBad = 0;
+    for (const p of wsRows) {
+      const want = !!findBlockingRule(rules, normalizeProductScope(p));
+      for (const code of [p.raw_model, p.model]) {
+        const got = (await checkBlockedProducts([{ product_code: code, quantity: 1 }])).length > 0;
+        if (got !== want) {
+          wsBad++;
+          console.log(`     ✗ [${code}] ควรได้ ${want ? 'บล็อก' : 'ผ่าน'} แต่ด่านกลางให้ ${got ? 'บล็อก' : 'ผ่าน'}`);
+        }
+      }
+    }
+    ok(`model ติดช่องว่าง ${wsRows.length} ตัว ด่านกลางตัดสินตรงกับกฎทั้งแบบดิบและแบบ trim`, wsBad === 0);
   }
 
   console.log(failures === 0 ? '\n✅ ผ่านทั้งหมด' : `\n❌ ไม่ผ่าน ${failures} ข้อ`);

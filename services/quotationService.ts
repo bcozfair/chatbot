@@ -900,17 +900,24 @@ export async function checkBlockedProducts(items: any[] | null): Promise<BlockVi
   ));
   if (codes.length === 0) return [];
 
-  // DISTINCT ON (model) + ORDER BY เดียวกับ getProductInfo — สินค้ารหัสเดียวกันมีได้หลายแถว
+  // DISTINCT ON (btrim(model)) + ORDER BY เดียวกับ getProductInfo — สินค้ารหัสเดียวกันมีได้หลายแถว
   // ต้องเลือกแถวเดิมกับที่จุดอื่นเลือก ไม่งั้น scope อาจต่างกันแล้วผลบล็อกไม่ตรงกัน
+  //
+  // ⚠️ ต้องเทียบด้วย btrim ทั้งสองฝั่ง ห้ามใช้ `model = ANY($1)` เฉย ๆ
+  // ข้อมูลจาก Odoo มีสินค้าที่ model ติดช่องว่างหัว/ท้ายมาจริง (เช่น 'FP-108-1 220 V.U1BW ')
+  // รหัสที่ส่งเข้ามาถูก trim ไปแล้วข้างบน เทียบตรง ๆ จะไม่เจอแถว → ไม่มี scope → หลุดด่านเงียบ ๆ
+  // เจอตอนตรวจหลัง deploy 2026-09-07: สินค้าที่ต้องถูกบล็อก 3 ตัวออกใบได้ตามปกติ
+  // ยอมแลกเป็น seq scan (~33ms บนสินค้า 51k แถว) เพราะด่านที่ปล่อยของหลุดแย่กว่าด่านที่ช้าขึ้น 30ms
   const { rows } = await pool.query(`
-    SELECT DISTINCT ON (model)
-           model, model AS code, name, brand, series, production, internal_reference
+    SELECT DISTINCT ON (btrim(model))
+           btrim(model) AS code, btrim(model) AS model,
+           name, brand, series, production, internal_reference
       FROM products
-     WHERE model = ANY($1)
-     ORDER BY model, quantity_on_hand_unreserved DESC
+     WHERE btrim(model) = ANY($1)
+     ORDER BY btrim(model), quantity_on_hand_unreserved DESC
   `, [codes]);
 
-  const prodMap = new Map(rows.map((r: any) => [r.model, r]));
+  const prodMap = new Map(rows.map((r: any) => [r.code, r]));
   const violations: BlockViolation[] = [];
 
   for (const item of targets) {

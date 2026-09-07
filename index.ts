@@ -658,8 +658,12 @@ app.get('/api/products/:code/blocked', async (req: any, res: any) => {
 
     // ดึงข้อมูลสินค้า — ต้องมี model + internal_reference ด้วย ไม่งั้นกฎ 2 ระดับล่างจะไม่มีวัน match
     // (พลาดตรงนี้แล้วจะเงียบสนิท: API ตอบ blocked:false ตามปกติ ไม่มี error ให้เห็น)
+    // เทียบด้วย btrim ทั้งสองฝั่ง — model จาก Odoo มีที่ติดช่องว่างหัว/ท้ายมาจริง
+    // (ดูคำอธิบายเต็มที่ checkBlockedProducts) ถ้าเทียบตรง ๆ จะตอบ blocked:false เงียบ ๆ
     const { rows } = await pool.query(
-      'SELECT model, model AS code, brand, series, production, internal_reference FROM products WHERE model = $1 ORDER BY quantity_on_hand_unreserved DESC LIMIT 1',
+      `SELECT btrim(model) AS code, btrim(model) AS model, brand, series, production, internal_reference
+         FROM products WHERE btrim(model) = btrim($1)
+        ORDER BY quantity_on_hand_unreserved DESC LIMIT 1`,
       [code]
     );
     const prod = rows[0] || null;
