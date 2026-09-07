@@ -3,12 +3,15 @@ import { useAuth } from '../../context/AuthContext';
 import { PageHeader } from '../PageHeader';
 import { DateInput } from '../DateInput';
 import {
-  BarChart3, Download, Loader2, AlertCircle, TrendingUp, TrendingDown, Minus, Info, RefreshCw,
+  BarChart3, Download, Loader2, TrendingUp, TrendingDown, Minus, Info, RefreshCw,
 } from 'lucide-react';
 import { useHashState } from './useHashState';
 import {
-  errMsg, formatDate, formatMs, formatNumber, formatBytes, delta, downloadCsv,
+  errMsg, formatDate, formatMs, formatNumber, formatBytes, delta, downloadCsv, inputCls,
 } from './format';
+import { ErrorBox, FilterCard, FilterField, FilterRow, SortHeader } from './ui';
+import { useTableSort } from './useTableSort';
+import type { SortAccessors } from './useTableSort';
 
 /**
  * หน้า "รายงานการใช้งาน" — ปริมาณการใช้งานย้อนหลัง วัน/สัปดาห์/เดือน/ปี
@@ -103,6 +106,24 @@ function bucketLabel(b: string, g: TrafficResponse['granularity']): string {
   return formatDate(b);
 }
 
+/**
+ * คอลัมน์ที่เรียงได้ของตารางรายละเอียด — วางนอกคอมโพเนนต์ให้ identity คงที่
+ * ตารางนี้โหลดมาครบทุกแถวอยู่แล้ว (ไม่แบ่งหน้า) จึงเรียงในหน้าได้ ไม่ต้องยิงถาม server ใหม่
+ */
+const BUCKET_SORTS: SortAccessors<Bucket> = {
+  bucket: b => b.bucket,
+  requests: b => b.requests,
+  webhook_events: b => b.webhook_events,
+  quotations_created: b => b.quotations_created,
+  messages_in: b => b.messages_in,
+  errors_4xx: b => b.errors_4xx,
+  errors_5xx: b => b.errors_5xx,
+  avg_ms: b => b.avg_ms,
+  p95_worst_day: b => b.p95_worst_day,
+  audit_changes: b => b.audit_changes,
+  bytes_out: b => (b.bytes_out === null ? null : Number(b.bytes_out)),
+};
+
 // ── ชิ้นส่วนหน้าจอ ───────────────────────────────────────────────────────────
 
 const Kpi: React.FC<{
@@ -139,7 +160,13 @@ const Kpi: React.FC<{
 
 /**
  * กราฟแท่งปริมาณ + แถบข้อผิดพลาดซ้อน — วาดด้วย div ล้วน ไม่ดึงไลบรารีกราฟเข้ามา
- * ข้อมูลมีมิติเดียว (จำนวนต่อช่วงเวลา) ซึ่งไม่คุ้มกับการเพิ่ม dependency ให้ frontend bundle
+ *
+ * ที่นี่ยังเป็น "แท่ง" ไม่ใช่กราฟเส้นแบบหน้าบันทึกการเรียก API เพราะแต่ละแท่งคือช่วงเวลา
+ * ที่แยกจากกันจริง ๆ (วัน/สัปดาห์/เดือน) และ "กดเลือกได้" ทีละช่วง — เส้นต่อเนื่องจะสื่อว่า
+ * ค่าระหว่างสองจุดมีความหมาย ซึ่งไม่จริงสำหรับข้อมูลรายวัน
+ *
+ * ค่าที่ชี้อยู่แสดงเป็นแถบอ่านค่าเหนือกราฟ ไม่ใช่กล่องลอยเหนือแท่ง เพราะกล่องลอยจะถูก
+ * ตัดขอบโดยกล่องเลื่อนแนวนอน (overflow-x ทำให้แกน y กลายเป็น auto ตามสเปก CSS)
  */
 const Bars: React.FC<{
   buckets: Bucket[];
@@ -147,9 +174,37 @@ const Bars: React.FC<{
   onPick: (b: Bucket) => void;
 }> = ({ buckets, granularity, onPick }) => {
   const max = Math.max(1, ...buckets.map(b => b.requests + b.webhook_events));
+  const [hovered, setHovered] = useState<string | null>(null);
+  const shown = buckets.find(b => b.bucket === hovered) ?? null;
 
   return (
-    <div className="overflow-x-auto">
+    <div onPointerLeave={() => setHovered(null)}>
+      {/* แถบอ่านค่า — ที่ว่างถูกจองไว้เสมอ (min-h) กราฟจึงไม่ขยับตอนเลื่อนเมาส์เข้าออก */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] mb-2 min-h-6">
+        {shown ? (
+          <>
+            <span className="font-semibold text-slate-800">{bucketLabel(shown.bucket, granularity)}</span>
+            <span className="inline-flex items-center gap-1.5 text-slate-500">
+              <span className="w-2 h-2 rounded-full" style={{ background: BRAND }} />
+              เรียกทั้งหมด
+              <span className="font-medium text-slate-800 tabular-nums">
+                {formatNumber(shown.requests + shown.webhook_events)}
+              </span>
+            </span>
+            <span className="inline-flex items-center gap-1.5 text-slate-500">
+              <span className="w-2 h-2 rounded-full bg-red-500" />
+              ข้อผิดพลาด
+              <span className="font-medium text-slate-800 tabular-nums">
+                {formatNumber(shown.errors_4xx + shown.errors_5xx)}
+              </span>
+            </span>
+          </>
+        ) : (
+          <span className="text-slate-400">ชี้ที่แท่งเพื่อดูตัวเลข · กดเพื่อดูรายละเอียดของช่วงนั้น</span>
+        )}
+      </div>
+
+      <div className="overflow-x-auto">
       <div className="flex items-end gap-1 min-w-max h-52 px-1">
         {buckets.map(b => {
           const total = b.requests + b.webhook_events;
@@ -160,13 +215,14 @@ const Bars: React.FC<{
             <button
               key={b.bucket}
               onClick={() => onPick(b)}
-              className="group relative flex flex-col justify-end w-8 shrink-0 focus:outline-none
-                         focus-visible:ring-2 focus-visible:ring-[var(--brand-fg)] rounded-t"
-              title={`${bucketLabel(b.bucket, granularity)}\nเรียกทั้งหมด ${formatNumber(total)}\nข้อผิดพลาด ${formatNumber(errors)}`}
+              onPointerEnter={() => setHovered(b.bucket)}
+              onFocus={() => setHovered(b.bucket)}
+              className={`group relative flex flex-col justify-end w-8 shrink-0 focus:outline-none
+                          focus-visible:ring-2 focus-visible:ring-[var(--brand-fg)] rounded-t transition-opacity
+                          ${hovered && hovered !== b.bucket ? 'opacity-45' : 'opacity-100'}`}
               aria-label={`${bucketLabel(b.bucket, granularity)} เรียก ${total} ครั้ง ข้อผิดพลาด ${errors} ครั้ง`}
             >
-              <div className="w-full rounded-t transition-opacity group-hover:opacity-80"
-                   style={{ height: h - eh, background: BRAND }} />
+              <div className="w-full rounded-t" style={{ height: h - eh, background: BRAND }} />
               {eh > 0 && <div className="w-full bg-red-500 rounded-t" style={{ height: eh }} />}
             </button>
           );
@@ -180,6 +236,7 @@ const Bars: React.FC<{
             {granularity === 'year' ? b.bucket.slice(2, 4) : b.bucket.slice(5).replace('-', '/')}
           </div>
         ))}
+      </div>
       </div>
     </div>
   );
@@ -202,6 +259,11 @@ export const Traffic: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [picked, setPicked] = useState<Bucket | null>(null);
+
+  // ตารางรายละเอียดเรียงในหน้าได้ — ข้อมูลมาครบทุกแถวแล้ว ไม่ได้แบ่งหน้าจาก server
+  // ตั้งต้นเรียงตามช่วงเวลาจากใหม่ไปเก่า ให้ตรงกับสิ่งที่คนคาดหวังจากตารางบันทึก
+  const bucketRows = useMemo(() => data?.buckets ?? [], [data]);
+  const tableSort = useTableSort(bucketRows, BUCKET_SORTS, { col: 'bucket', dir: 'desc' });
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -290,64 +352,56 @@ export const Traffic: React.FC = () => {
       </PageHeader>
 
       {/* ── ตัวเลือกช่วงเวลา ── */}
-      <div className="bg-card border border-slate-200 rounded-2xl p-4 flex flex-wrap items-end gap-3">
-        <div className="flex rounded-xl border border-slate-200 overflow-hidden">
-          {GRANULARITIES.map(g => (
-            <button
-              key={g.key}
-              onClick={() => pickGranularity(g.key)}
-              className={`px-3.5 py-2 text-sm font-medium transition ${
-                granularity === g.key ? 'text-white' : 'text-slate-600 hover:bg-slate-50'}`}
-              style={granularity === g.key ? { background: BRAND } : undefined}
-              aria-pressed={granularity === g.key}
-            >
-              {g.label}
-            </button>
-          ))}
-        </div>
+      <FilterCard>
+        <FilterRow>
+          <FilterField label="มุมมอง" width="w-auto">
+            <div className="flex rounded-xl border border-slate-200 overflow-hidden h-[42px]">
+              {GRANULARITIES.map(g => (
+                <button
+                  key={g.key}
+                  onClick={() => pickGranularity(g.key)}
+                  className={`px-3.5 text-sm font-medium transition ${
+                    granularity === g.key ? 'text-white' : 'text-slate-600 hover:bg-slate-50'}`}
+                  style={granularity === g.key ? { background: BRAND } : undefined}
+                  aria-pressed={granularity === g.key}
+                >
+                  {g.label}
+                </button>
+              ))}
+            </div>
+          </FilterField>
 
-        <div className="flex items-end gap-2">
-          <div>
-            <label className="block text-xs text-slate-500 mb-1">ตั้งแต่</label>
-            <DateInput value={state.dateFrom} onChange={v => set({ dateFrom: v })} />
-          </div>
-          <div>
-            <label className="block text-xs text-slate-500 mb-1">ถึง</label>
-            <DateInput value={state.dateTo} onChange={v => set({ dateTo: v })} />
-          </div>
-        </div>
+          <FilterField label="ตั้งแต่" width="w-36">
+            <DateInput className={inputCls} value={state.dateFrom}
+                       onChange={v => set({ dateFrom: v })} aria-label="ตั้งแต่วันที่" />
+          </FilterField>
+          <FilterField label="ถึง" width="w-36">
+            <DateInput className={inputCls} value={state.dateTo}
+                       onChange={v => set({ dateTo: v })} aria-label="ถึงวันที่" />
+          </FilterField>
 
-        <div className="flex gap-1">
-          <button onClick={() => shiftRange(-1)}
-                  className="px-3 py-2 rounded-xl border border-slate-200 text-sm text-slate-600 hover:bg-slate-50">
-            ← ช่วงก่อน
-          </button>
-          <button onClick={() => shiftRange(1)}
-                  className="px-3 py-2 rounded-xl border border-slate-200 text-sm text-slate-600 hover:bg-slate-50">
-            ช่วงถัดไป →
-          </button>
-        </div>
+          <FilterField label="เลื่อนช่วง" width="w-auto">
+            <div className="flex gap-1">
+              <button onClick={() => shiftRange(-1)}
+                      className="h-[42px] px-3 rounded-xl border border-slate-200 text-sm text-slate-600 hover:bg-slate-50">
+                ← ช่วงก่อน
+              </button>
+              <button onClick={() => shiftRange(1)}
+                      className="h-[42px] px-3 rounded-xl border border-slate-200 text-sm text-slate-600 hover:bg-slate-50">
+                ช่วงถัดไป →
+              </button>
+            </div>
+          </FilterField>
 
-        {data?.coverage.first_day && (
-          <div className="text-xs text-slate-400 ml-auto">
-            มีข้อมูลตั้งแต่ {formatDate(data.coverage.first_day)} ถึง {formatDate(data.coverage.last_day)}
-          </div>
-        )}
-      </div>
+          {data?.coverage.first_day && (
+            <div className="text-xs text-slate-400 ml-auto pb-3">
+              มีข้อมูลตั้งแต่ {formatDate(data.coverage.first_day)} ถึง {formatDate(data.coverage.last_day)}
+            </div>
+          )}
+        </FilterRow>
+      </FilterCard>
 
-      {error && (
-        <div className="bg-red-50 border border-red-200 rounded-2xl p-4 flex items-start gap-2">
-          <AlertCircle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
-          <div className="flex-1">
-            <div className="text-sm font-medium text-red-800">โหลดรายงานไม่สำเร็จ</div>
-            <div className="text-xs text-red-600 mt-0.5">{error}</div>
-          </div>
-          <button onClick={() => { void load(); }}
-                  className="px-3 py-1.5 rounded-lg bg-white border border-red-200 text-sm text-red-700">
-            ลองใหม่
-          </button>
-        </div>
-      )}
+      {error && <ErrorBox message={error} onRetry={() => { void load(); }} />}
 
       {loading && !data && (
         <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
@@ -464,23 +518,32 @@ export const Traffic: React.FC = () => {
           <div className="bg-card border border-slate-200 rounded-2xl overflow-hidden">
             <div className="overflow-x-auto hidden md:block">
               <table className="w-full text-sm">
-                <thead className="bg-slate-50 text-xs text-slate-500">
+                <thead className="bg-slate-50">
                   <tr>
-                    <th className="text-left font-medium px-4 py-2.5">ช่วง</th>
-                    <th className="text-right font-medium px-3 py-2.5">เรียก API</th>
-                    <th className="text-right font-medium px-3 py-2.5">งานบอท</th>
-                    <th className="text-right font-medium px-3 py-2.5">ใบเสนอราคา</th>
-                    <th className="text-right font-medium px-3 py-2.5">ข้อความเข้า</th>
-                    <th className="text-right font-medium px-3 py-2.5">4xx</th>
-                    <th className="text-right font-medium px-3 py-2.5">5xx</th>
-                    <th className="text-right font-medium px-3 py-2.5">เฉลี่ย</th>
-                    <th className="text-right font-medium px-3 py-2.5" title={data.notes.p95}>p95 สูงสุด</th>
-                    <th className="text-right font-medium px-3 py-2.5">การแก้ไข</th>
-                    <th className="text-right font-medium px-4 py-2.5">ข้อมูลออก</th>
+                    {([
+                      ['ช่วง', 'bucket', 'left'],
+                      ['เรียก API', 'requests', 'right'],
+                      ['งานบอท', 'webhook_events', 'right'],
+                      ['ใบเสนอราคา', 'quotations_created', 'right'],
+                      ['ข้อความเข้า', 'messages_in', 'right'],
+                      ['4xx', 'errors_4xx', 'right'],
+                      ['5xx', 'errors_5xx', 'right'],
+                      ['เฉลี่ย', 'avg_ms', 'right'],
+                      ['p95 สูงสุด', 'p95_worst_day', 'right'],
+                      ['การแก้ไข', 'audit_changes', 'right'],
+                      ['ข้อมูลออก', 'bytes_out', 'right'],
+                    ] as const).map(([label, col, align]) => (
+                      <SortHeader
+                        key={col} label={label} col={col} align={align}
+                        active={tableSort.col} dir={tableSort.dir}
+                        title={col === 'p95_worst_day' ? data.notes.p95 : undefined}
+                        onSort={(c) => tableSort.toggle(c, c !== 'bucket')}
+                      />
+                    ))}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {data.buckets.map(b => (
+                  {tableSort.sorted.map(b => (
                     <tr key={b.bucket}
                         className={`hover:bg-slate-50 cursor-pointer ${picked?.bucket === b.bucket ? 'bg-slate-50' : ''}`}
                         onClick={() => setPicked(picked?.bucket === b.bucket ? null : b)}>
@@ -507,7 +570,7 @@ export const Traffic: React.FC = () => {
 
             {/* จอแคบ: ยุบเป็นการ์ด */}
             <div className="md:hidden divide-y divide-slate-100">
-              {data.buckets.map(b => (
+              {tableSort.sorted.map(b => (
                 <div key={b.bucket} className="p-3.5">
                   <div className="flex justify-between items-baseline">
                     <span className="text-sm font-medium text-slate-700">{bucketLabel(b.bucket, granularity)}</span>

@@ -152,7 +152,10 @@ logsRouter.get('/audit', safe('GET /audit', async (req, res) => {
   const f = auditFilters(q);
   const { limit, offset } = paging(q);
 
-  const [data, total] = await Promise.all([listAuditLogs(f, limit, offset), countAuditLogs(f)]);
+  // dir ถูกกรองด้วย timeDir ใน repository — ค่าที่ไม่ใช่ 'asc' ตกกลับเป็นใหม่ไปเก่า
+  const [data, total] = await Promise.all([
+    listAuditLogs(f, limit, offset, q.dir), countAuditLogs(f),
+  ]);
   audit(req, 'log.view', 'audit_log');
   res.json({ data, total, limit, offset, ...f });
 }));
@@ -196,7 +199,7 @@ logsRouter.get('/system', safe('GET /system', async (req, res) => {
   const { limit, offset } = paging(q);
 
   const [data, total, facets] = await Promise.all([
-    listSystemLogs(f, limit, offset),
+    listSystemLogs(f, limit, offset, q.dir),
     countSystemLogs(f),
     getSystemLogFacets(f),
   ]);
@@ -236,9 +239,9 @@ logsRouter.get('/export/:kind', safe('GET /export/:kind', async (req, res) => {
 
   let rows: unknown[];
   if (kind === 'audit') {
-    rows = await listAuditLogs(auditFilters(q), EXPORT_LIMIT, 0);
+    rows = await listAuditLogs(auditFilters(q), EXPORT_LIMIT, 0, q.dir);
   } else if (kind === 'system') {
-    rows = await listSystemLogs(systemFilters(q), EXPORT_LIMIT, 0);
+    rows = await listSystemLogs(systemFilters(q), EXPORT_LIMIT, 0, q.dir);
   } else if (kind === 'traffic') {
     const { dateFrom, dateTo } = dateRange(q, 365);
     rows = await listTrafficBuckets(

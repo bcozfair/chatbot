@@ -3,14 +3,18 @@ import { useAuth } from '../../context/AuthContext';
 import { PageHeader } from '../PageHeader';
 import { DateInput } from '../DateInput';
 import {
-  Terminal, Download, Loader2, AlertCircle, AlertTriangle, Search,
-  ChevronLeft, ChevronRight, ChevronDown, ChevronRight as ChevronRightSmall, Link2,
+  Terminal, Download, Loader2, AlertTriangle,
+  ChevronDown, ChevronRight as ChevronRightSmall, Link2,
 } from 'lucide-react';
 import { useHashState } from './useHashState';
 import {
   errMsg, formatDateTime, relativeTime, formatNumber, levelStyle,
-  downloadCsv, inputCls, PAGE_SIZE_OPTIONS,
+  downloadCsv, inputCls,
 } from './format';
+import {
+  EmptyState, ErrorBox, FilterCard, FilterField, FilterFooter, FilterRow,
+  Pagination, SearchField, SelectField, SkeletonRows, TimeSortToggle,
+} from './ui';
 import { RequestTimeline } from './RequestTimeline';
 
 /**
@@ -155,6 +159,8 @@ export const SystemLogs: React.FC = () => {
     q: '',
     page: '1',
     size: '50',
+    // ว่าง = ใหม่ไปเก่า (ค่าตั้งต้น) จึงไม่ถูกเขียนลง URL เว้นแต่ผู้ใช้สลับเป็น asc เอง
+    dir: '',
   });
 
   const [rows, setRows] = useState<SystemRow[]>([]);
@@ -178,6 +184,8 @@ export const SystemLogs: React.FC = () => {
     });
     if (state.minLevel) qs.set('minLevel', state.minLevel);
     if (state.source) qs.set('source', state.source);
+    // เรียงที่ SQL ด้วยเหตุผลเดียวกับหน้าบันทึกการแก้ไข (แบ่งหน้าจาก server)
+    if (state.dir === 'asc') qs.set('dir', 'asc');
     if (state.q.trim()) qs.set('q', state.q.trim());
     return qs;
   }, [state, page, size]);
@@ -254,49 +262,45 @@ export const SystemLogs: React.FC = () => {
       {jobs.length > 0 && <WorkerBanner jobs={jobs} />}
 
       {/* ── ตัวกรอง ── */}
-      <div className="bg-card border border-slate-200 rounded-2xl p-4 space-y-3">
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="flex-1 min-w-56">
-            <label className="block text-xs text-slate-500 mb-1">ค้นหาในข้อความ</label>
-            <div className="relative">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-              <input
-                ref={searchRef}
-                className={`${inputCls} pl-10`}
-                placeholder="พิมพ์เพื่อค้นหา… (กด / เพื่อโฟกัส)"
-                value={state.q}
-                onChange={e => set({ q: e.target.value, page: '1' })}
-              />
-            </div>
-          </div>
-          <div>
-            <label className="block text-xs text-slate-500 mb-1">ตั้งแต่</label>
-            <DateInput value={state.dateFrom} onChange={v => set({ dateFrom: v, page: '1' })} />
-          </div>
-          <div>
-            <label className="block text-xs text-slate-500 mb-1">ถึง</label>
-            <DateInput value={state.dateTo} onChange={v => set({ dateTo: v, page: '1' })} />
-          </div>
-          <div>
-            <label className="block text-xs text-slate-500 mb-1">ระดับ</label>
-            <select className={inputCls} value={state.minLevel}
-                    onChange={e => set({ minLevel: e.target.value, page: '1' })}>
+      <FilterCard>
+        <FilterRow>
+          <FilterField label="ค้นหาในข้อความ" grow>
+            <SearchField
+              ref={searchRef}
+              value={state.q}
+              onChange={v => set({ q: v, page: '1' })}
+              placeholder="พิมพ์เพื่อค้นหา… (กด / เพื่อโฟกัส)"
+            />
+          </FilterField>
+          <FilterField label="ตั้งแต่" width="w-36">
+            <DateInput className={inputCls} value={state.dateFrom}
+                       onChange={v => set({ dateFrom: v, page: '1' })} aria-label="ตั้งแต่วันที่" />
+          </FilterField>
+          <FilterField label="ถึง" width="w-36">
+            <DateInput className={inputCls} value={state.dateTo}
+                       onChange={v => set({ dateTo: v, page: '1' })} aria-label="ถึงวันที่" />
+          </FilterField>
+          <FilterField label="ระดับ" width="w-44">
+            <SelectField value={state.minLevel} onChange={v => set({ minLevel: v, page: '1' })}>
               {MIN_LEVELS.map(l => <option key={l.key} value={l.key}>{l.label}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="block text-xs text-slate-500 mb-1">โมดูล</label>
-            <select className={inputCls} value={state.source}
-                    onChange={e => set({ source: e.target.value, page: '1' })}>
+            </SelectField>
+          </FilterField>
+          <FilterField label="โมดูล" width="w-44">
+            <SelectField value={state.source} onChange={v => set({ source: v, page: '1' })}>
               <option value="">ทั้งหมด</option>
               {sourceFacets.filter(f => f.value !== '(ไม่ระบุ)').map(f => (
                 <option key={f.value} value={f.value}>{f.value} ({f.n})</option>
               ))}
-            </select>
-          </div>
-        </div>
+            </SelectField>
+          </FilterField>
+        </FilterRow>
 
-        <div className="flex flex-wrap items-center gap-2 text-xs">
+        {/* จำนวนแยกตามระดับ — เป็น "ภาพรวมของช่วงที่กรองอยู่" ไม่ใช่ปุ่มกรอง จึงอยู่แถวล่างคู่กับยอดรวม */}
+        <FilterFooter onReset={reset} loading={loading} total={total} unit="บรรทัด">
+          <TimeSortToggle
+            dir={state.dir === 'asc' ? 'asc' : 'desc'}
+            onChange={d => set({ dir: d === 'asc' ? 'asc' : '', page: '1' })}
+          />
           {levelFacets.map(f => {
             const s = levelStyle(f.value);
             return (
@@ -307,50 +311,21 @@ export const SystemLogs: React.FC = () => {
               </span>
             );
           })}
-          <button onClick={reset} className="text-slate-400 hover:text-slate-600 underline underline-offset-2">
-            ล้างตัวกรอง
-          </button>
-          <span className="ml-auto text-slate-500 tabular-nums">
-            {loading ? 'กำลังโหลด…' : `${formatNumber(total)} บรรทัด`}
-          </span>
-        </div>
-      </div>
+        </FilterFooter>
+      </FilterCard>
 
-      {error && (
-        <div className="bg-red-50 border border-red-200 rounded-2xl p-4 flex items-start gap-2">
-          <AlertCircle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
-          <div className="flex-1">
-            <div className="text-sm font-medium text-red-800">โหลดข้อมูลไม่สำเร็จ</div>
-            <div className="text-xs text-red-600 mt-0.5">{error}</div>
-          </div>
-          <button onClick={() => { void load(); }}
-                  className="px-3 py-1.5 rounded-lg bg-white border border-red-200 text-sm text-red-700">
-            ลองใหม่
-          </button>
-        </div>
-      )}
+      {error && <ErrorBox message={error} onRetry={() => { void load(); }} />}
 
       {/* ── รายการ ── */}
       <div className="bg-card border border-slate-200 rounded-2xl overflow-hidden">
-        {loading && rows.length === 0 && (
-          <div className="divide-y divide-slate-100">
-            {Array.from({ length: 8 }).map((_, i) => (
-              <div key={i} className="p-3.5 animate-pulse flex gap-3">
-                <div className="h-4 w-16 bg-slate-200 rounded" />
-                <div className="h-4 flex-1 bg-slate-100 rounded" />
-              </div>
-            ))}
-          </div>
-        )}
+        {loading && rows.length === 0 && <SkeletonRows rows={8} />}
 
         {!loading && rows.length === 0 && !error && (
-          <div className="py-16 text-center">
-            <Terminal className="w-9 h-9 text-slate-300 mx-auto" />
-            <div className="mt-2 text-sm text-slate-500">ไม่มีบันทึกในช่วงที่เลือก</div>
-            <div className="mt-1 text-xs text-slate-400">
-              ระบบเก็บเฉพาะระดับที่ตั้งไว้ใน SYSTEM_LOG_DB_LEVEL — ระดับต่ำกว่านั้นยังดูได้จาก docker logs
-            </div>
-          </div>
+          <EmptyState
+            icon={Terminal}
+            title="ไม่มีบันทึกในช่วงที่เลือก"
+            hint="ระบบเก็บเฉพาะระดับที่ตั้งไว้ใน SYSTEM_LOG_DB_LEVEL — ระดับต่ำกว่านั้นยังดูได้จาก docker logs"
+          />
         )}
 
         {rows.length > 0 && (
@@ -421,35 +396,12 @@ export const SystemLogs: React.FC = () => {
           </div>
         )}
 
-        {total > size && (
-          <div className="flex items-center justify-between px-4 py-3 border-t border-slate-100">
-            <select
-              className="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-card text-slate-600"
-              value={size}
-              onChange={e => set({ size: e.target.value, page: '1' })}
-            >
-              {PAGE_SIZE_OPTIONS.map(n => <option key={n} value={n}>{n} ต่อหน้า</option>)}
-            </select>
-            <div className="flex items-center gap-2">
-              <button
-                disabled={page <= 1}
-                onClick={() => set({ page: String(page - 1) })}
-                className="p-1.5 rounded-lg border border-slate-200 disabled:opacity-40 hover:bg-slate-50"
-                aria-label="หน้าก่อนหน้า"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-              <span className="text-xs text-slate-500 tabular-nums">หน้า {page} / {pages}</span>
-              <button
-                disabled={page >= pages}
-                onClick={() => set({ page: String(page + 1) })}
-                className="p-1.5 rounded-lg border border-slate-200 disabled:opacity-40 hover:bg-slate-50"
-                aria-label="หน้าถัดไป"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
+        {total > 0 && (
+          <Pagination
+            page={Math.min(page, pages)} pages={pages} size={size} total={total} unit="บรรทัด"
+            onPage={p => set({ page: String(p) })}
+            onSize={s => set({ size: String(s), page: '1' })}
+          />
         )}
       </div>
 

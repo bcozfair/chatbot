@@ -972,11 +972,34 @@ function buildApiLogWhere(f: ApiLogFilters): { where: string; params: any[] } {
 }
 
 /** รายการ log สำหรับตาราง — ไม่คืนคอลัมน์ที่หน้ารายการไม่ใช้ เพื่อลดขนาด payload */
+/**
+ * คอลัมน์ที่ยอมให้เรียงได้ — เป็นรายชื่อขาว ไม่ใช่การตรวจรูปแบบ
+ *
+ * ค่าที่มาจาก query string ห้ามไปโผล่ใน SQL โดยตรงเด็ดขาด แม้จะ "ดูเหมือนชื่อคอลัมน์"
+ * ORDER BY ผูก parameter ($1) ไม่ได้ตามไวยากรณ์ของ Postgres ทางเดียวที่ปลอดภัยคือ
+ * แปลงคีย์ที่รู้จักเป็นสตริงที่เราเขียนไว้เองเท่านั้น คีย์ที่ไม่รู้จักตกกลับค่าตั้งต้น
+ */
+const API_LOG_SORTS: Record<string, string> = {
+  created_at: 'created_at',
+  duration_ms: 'duration_ms',
+  status_code: 'status_code',
+  resp_bytes: 'resp_bytes',
+  path: 'path',
+  method: 'method',
+};
+
 export async function listApiLogs(
-  f: ApiLogFilters, limit: number, offset: number
+  f: ApiLogFilters, limit: number, offset: number,
+  sort?: string, dir?: string
 ): Promise<any[]> {
   try {
     const { where, params } = buildApiLogWhere(f);
+    const col = API_LOG_SORTS[String(sort)] ?? 'created_at';
+    const d = String(dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+    // NULLS LAST ทั้งสองทิศ — resp_bytes เป็น null ได้ (เช่นแถว TASK) แถวที่ "ไม่มีค่า"
+    // ไม่ควรขึ้นมาเป็นอันดับต้นตอนเรียงจากน้อยไปมาก เพราะมันไม่ใช่ค่าที่น้อยที่สุด
+    // ต่อท้ายด้วย id DESC เสมอ ให้ลำดับของแถวที่ค่าเท่ากันคงที่ทุกหน้า (ไม่งั้นแถวจะข้ามหน้าไปมา)
+    const orderBy = `ORDER BY ${col} ${d} NULLS LAST, id DESC`;
     // ไม่ JOIN admin_users แต่ใช้ scalar subquery — admin_users มีคอลัมน์ id/created_at ชื่อซ้ำกัน
     // การ JOIN จะทำให้ชื่อคอลัมน์กำกวมและต้องเติม alias ให้ทุกที่รวมถึงใน where ที่ประกอบมาจาก
     // buildApiLogWhere ด้วย · admin_users มีแค่ไม่กี่แถว subquery จึงถูกกว่าความเสี่ยงนั้นมาก
@@ -988,7 +1011,7 @@ export async function listApiLogs(
               line_user_id, ip, inflight, db_waiting, queue_waited_ms,${API_LOG_DOC_OWNER}
          FROM api_logs
          ${where}
-        ORDER BY created_at DESC, id DESC
+        ${orderBy}
         LIMIT ${limit} OFFSET ${offset}`,
       params);
     return rows;
@@ -1076,6 +1099,13 @@ export async function getApiLogStats(dateFrom: string, dateTo: string): Promise<
               COALESCE(max(db_waiting), 0)::int AS max_db_waiting,
               count(*) FILTER (WHERE db_waiting > 0)::int AS db_wait_hits,
               count(*) FILTER (WHERE status_code >= 400)::int AS errors,
+              -- สัดส่วนตามกลุ่ม status สำหรับกราฟโดนัท — เป็น FILTER บนการสแกนเดิม
+              -- ไม่ใช่ query เพิ่ม จึงไม่มีต้นทุนรอบใหม่ · หมายเหตุ: แถว TASK ใช้ 499/504
+              -- เป็นรหัสสมมุติของ "คิวตัน/หมดเวลา" จึงถูกนับรวมใน 4xx/5xx ตามเจตนา
+              count(*) FILTER (WHERE status_code < 300)::int AS s2xx,
+              count(*) FILTER (WHERE status_code >= 300 AND status_code < 400)::int AS s3xx,
+              count(*) FILTER (WHERE status_code >= 400 AND status_code < 500)::int AS s4xx,
+              count(*) FILTER (WHERE status_code >= 500)::int AS s5xx,
               count(*) FILTER (WHERE method = 'TASK' AND status_code = 499)::int AS webhook_dropped,
               count(*) FILTER (WHERE method = 'TASK' AND status_code = 504)::int AS webhook_timeout,
               COALESCE(percentile_disc(0.95) WITHIN GROUP (ORDER BY duration_ms), 0)::int AS p95,

@@ -1,29 +1,35 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { DateInput } from './DateInput';
+import { PageHeader } from './PageHeader';
+import { RequestTimeline } from './logs/RequestTimeline';
+import { useHashState } from './logs/useHashState';
 import {
-  Activity,
-  Gauge,
-  Search,
-  Filter,
-  Calendar,
-  Loader2,
-  ChevronLeft,
-  ChevronRight,
-  ChevronDown,
-  ChevronUp,
-  AlertCircle,
-  AlertTriangle,
-  Clock,
-  Copy,
-  Check,
-  X,
+  errMsg, formatBytes, formatDateTime, formatMs, formatNumber,
+  inputCls, monoChipCls, numCls, tdCls, thCls,
+} from './logs/format';
+import {
+  CheckField, Duration, EmptyState, ErrorBox, FilterCard, FilterChip, FilterField,
+  FilterFooter, FilterRow, MethodTag, Pagination, SearchField, SelectField,
+  SkeletonRows, SortHeader, StatTile, StatusPill, TableCard, TableScroll,
+} from './logs/ui';
+import { useTableSort } from './logs/useTableSort';
+import type { SortAccessors } from './logs/useTableSort';
+import { AreaChart, ChartLegend, Donut } from './logs/charts';
+import {
+  Activity, AlertTriangle, Check, ChevronDown, ChevronUp, Copy, Info, Link2,
+  Loader2, RefreshCw, SlidersHorizontal,
 } from 'lucide-react';
 
 /**
- * หน้าดูบันทึกการเรียก API — ตอบ 2 คำถาม
- *   แท็บ "ภาพรวม"  → endpoint ไหนช้า ช่วงไหนโหลดหนัก ทรัพยากรพอไหม
- *   แท็บ "รายการ"  → ใครเรียกอะไร เมื่อไหร่ ได้ status อะไร
+ * หน้าดูบันทึกการเรียก API — ใครเรียกอะไร เมื่อไหร่ ได้ status อะไร และช้าตรงไหน
+ *
+ * โครงของหน้า (เรียงจากบนลงล่างตามลำดับที่คนใช้จริง):
+ *   1. แถบภาพรวม — ตัวเลขสรุป + ปริมาณรายชั่วโมง ตอบว่า "ช่วงนี้ระบบปกติไหม" ใน 2 วินาที
+ *   2. ตัวกรอง   — ช่องที่ใช้บ่อยอยู่แถวเดียว ที่เหลือพับไว้ใต้ "ตัวกรองขั้นสูง"
+ *   3. รายการ    — ตารางหลัก กดแถวเพื่อกางรายละเอียด
+ *   ส่วนวิเคราะห์เชิงลึก (endpoint ที่กินเวลารวม / 20 อันดับช้าสุด) พับไว้ใน (1)
+ *   เพราะเป็นงานที่ทำเดือนละครั้งตอนจะ optimize ไม่ใช่ของที่ต้องเห็นทุกครั้งที่เปิดหน้า
  *
  * ตารางนี้ไม่เก็บ request body โดยตั้งใจ (ดูเหตุผลใน migrations/changes/2026-08-10_01_api_logs.sql)
  * จึงไม่มีอะไรให้กางดูนอกจากข้อมูลของ request เอง
@@ -34,7 +40,17 @@ import {
  */
 
 const BRAND = 'var(--brand-fg)';
-const PAGE_SIZE_OPTIONS = [20, 50, 100, 200];
+
+/** ค่าตั้งต้นของตัวกรอง — คีย์ที่ยังเป็นค่านี้จะไม่ถูกเขียนลง URL (ลิงก์ที่ส่งต่อจึงสั้นและอ่านออก) */
+const DEFAULTS = {
+  q: '', method: '', status: '', minDuration: '',
+  requestId: '', lineUserId: '', ip: '',
+  dateFrom: '', dateTo: '', page: '1', size: '50',
+  sort: 'created_at', dir: 'desc',
+};
+
+/** เกณฑ์ของคำว่า "ช้า" ในช่องติ๊กด่วน — ตรงกับเกณฑ์ที่ Duration เริ่มเปลี่ยนสี */
+const SLOW_MS = '1000';
 
 interface ApiLogBase {
   id: string;
@@ -73,11 +89,6 @@ interface ApiLogDetail extends ApiLogBase {
   related: RelatedRow[];
 }
 
-/** ข้อความ error จาก catch — catch ให้ unknown เสมอ ห้ามใช้ any (กติกา lint ของ frontend) */
-function errMsg(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}
-
 interface RouteStat {
   route: string; count: number; p50: number; p95: number; p99: number;
   max_ms: number; total_ms: string; errors: number;
@@ -90,20 +101,12 @@ interface Saturation {
   total: number; max_inflight: number; max_db_waiting: number; db_wait_hits: number;
   errors: number; webhook_dropped: number; webhook_timeout: number;
   p95: number; max_queue_waited: number;
+  /** จำนวนแยกตามกลุ่ม status สำหรับกราฟโดนัท — เก่ากว่า migration นี้จะไม่มีค่ามาให้ */
+  s2xx?: number; s3xx?: number; s4xx?: number; s5xx?: number;
 }
 interface Stats {
   byRoute: RouteStat[]; byHour: HourStat[]; slowest: ApiLogBase[];
   saturation: Saturation | null; dateFrom: string; dateTo: string;
-}
-
-// ปัก Asia/Bangkok ไว้เสมอ ไม่ใช้ TimeZone ของเบราว์เซอร์ — ต้องตรงกับตัวกรองวันที่ฝั่ง SQL
-// ที่ตีความเป็นวันตามเวลาไทย ไม่งั้นเครื่องที่ตั้งโซนอื่นจะเห็นวันในตารางไม่ตรงกับช่วงที่กรอง
-function formatDateTime(s: string) {
-  if (!s) return '-';
-  return new Date(s).toLocaleString('th-TH', {
-    timeZone: 'Asia/Bangkok', year: '2-digit', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-  });
 }
 
 /**
@@ -116,63 +119,100 @@ function decodePath(p: string): string {
   try { return decodeURIComponent(p); } catch { return p; }
 }
 
-function formatMs(ms: number) {
-  if (ms >= 10_000) return `${(ms / 1000).toFixed(1)} วิ`;
-  if (ms >= 1000) return `${(ms / 1000).toFixed(2)} วิ`;
-  return `${ms} ms`;
+/** '2026-09-07 11:00' → '07/09 11:00 น.' — ปีไม่ต้องแสดง กราฟนี้ยาวสุด 90 วัน */
+function hourLabel(h: string): string {
+  const [d, t] = h.split(' ');
+  const [, mo, day] = d.split('-');
+  return `${day}/${mo} ${t} น.`;
 }
 
-function formatBytes(b: number | null) {
-  if (b === null || b === undefined) return '-';
-  if (b >= 1024 * 1024) return `${(b / 1024 / 1024).toFixed(1)} MB`;
-  if (b >= 1024) return `${(b / 1024).toFixed(1)} KB`;
-  return `${b} B`;
+/** Date → '2026-09-07 11:00' — อ่าน/เขียนด้วย UTC ล้วนโดยตั้งใจ (ดู fillHours) */
+function hourKey(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:00`;
 }
 
-function statusStyle(code: number) {
-  if (code >= 500) return 'bg-red-50 border-red-200 text-red-700';
-  if (code >= 400) return 'bg-amber-50 border-amber-200 text-amber-700';
-  if (code >= 300) return 'bg-blue-50 border-blue-200 text-blue-700';
-  return 'bg-emerald-50 border-emerald-200 text-emerald-700';
+/**
+ * เติมชั่วโมงที่ไม่มี request เลยให้เป็น 0
+ *
+ * SQL คืนเฉพาะชั่วโมงที่มีแถว (GROUP BY) ⇒ ตี 1 ถึงตี 5 ที่ไม่มีใครใช้งานจะ "หายไปทั้งชั่วโมง"
+ * ตอนเป็นกราฟแท่งความผิดนี้มองไม่เห็นเพราะแท่งเรียงชิดกันอยู่แล้ว แต่กราฟเส้นจะลากตรง
+ * ข้ามช่วงที่เงียบ กลายเป็นบอกว่ากลางดึกมีทราฟฟิกพอ ๆ กับตอนเย็น ซึ่งไม่จริง
+ *
+ * สตริงจาก SQL เป็นเวลาไทยที่จัดรูปมาแล้ว จึงอ่านเป็น UTC และเดินทีละชั่วโมงแบบ UTC
+ * ห้ามใช้ตัวช่วยเวลาท้องถิ่น — เครื่องที่ตั้งโซนอื่นจะได้ชั่วโมงเลื่อนไปทั้งแถว
+ */
+function fillHours(rows: HourStat[]): HourStat[] {
+  if (rows.length < 2) return rows;
+  const found = new Map(rows.map(r => [r.hour, r]));
+  const cursor = new Date(`${rows[0].hour.replace(' ', 'T')}:00Z`);
+  const end = new Date(`${rows[rows.length - 1].hour.replace(' ', 'T')}:00Z`).getTime();
+  const out: HourStat[] = [];
+  // เพดานกันลูปหลุด: 90 วัน = 2,160 จุด ซึ่งยังน้อยกว่านี้มาก
+  while (cursor.getTime() <= end && out.length < 5000) {
+    const key = hourKey(cursor);
+    out.push(found.get(key) ?? {
+      hour: key, count: 0, p95: 0, max_inflight: null, max_db_waiting: null, errors: 0,
+    });
+    cursor.setUTCHours(cursor.getUTCHours() + 1);
+  }
+  return out;
 }
 
-/** สีของ duration — ให้สายตาจับ endpoint ที่ช้าได้ทันทีโดยไม่ต้องอ่านตัวเลข */
-function durationStyle(ms: number) {
-  if (ms >= 10_000) return 'text-red-600 font-semibold';
-  if (ms >= 3_000) return 'text-amber-600 font-medium';
-  if (ms >= 1_000) return 'text-slate-700';
-  return 'text-slate-500';
-}
-
-function shortUser(id: string | null) {
+function shortUser(id: string | null): string | null {
   if (!id) return null;
   return id.length > 14 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id;
 }
 
 const METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'TASK'];
 
-const inputCls =
-  'w-full bg-card border border-slate-200 focus:border-[var(--brand-fg)] focus:ring-2 focus:ring-[var(--brand-fg)]/10' +
-  ' focus:outline-none rounded-xl px-4 py-2.5 text-sm text-slate-800 transition-all';
+/** คอลัมน์ที่เรียงได้ของตาราง "endpoint ที่กินเวลาเครื่องรวม" — total_ms มาเป็นสตริง (bigint) ต้องแปลงก่อนเทียบ */
+const ROUTE_SORTS: SortAccessors<RouteStat> = {
+  route: r => r.route,
+  count: r => r.count,
+  p50: r => r.p50,
+  p95: r => r.p95,
+  p99: r => r.p99,
+  max_ms: r => r.max_ms,
+  errors: r => r.errors,
+  total_ms: r => Number(r.total_ms),
+};
+
+/** คอลัมน์ที่เรียงได้ของตาราง 20 อันดับช้าสุด — "ผู้เรียก" รวมสามแหล่งเป็นข้อความเดียวเพื่อให้เรียงได้ */
+const SLOWEST_SORTS: SortAccessors<ApiLogBase> = {
+  created_at: r => r.created_at,
+  path: r => r.path,
+  caller: r => r.admin_username ?? r.line_user_id ?? null,
+  status_code: r => r.status_code,
+  duration_ms: r => r.duration_ms,
+};
+
+/** คอลัมน์ที่เริ่มด้วยการเรียงจากน้อยไปมาก — ที่เหลือเป็นตัวเลข เริ่มจากมากไปน้อย */
+const TEXT_COLS = new Set(['route', 'path', 'caller', 'method']);
 
 export function ApiLogs() {
   const { token } = useAuth();
-  const [tab, setTab] = useState<'overview' | 'list'>('overview');
+  const { state, set, reset } = useHashState('apilogs', DEFAULTS);
+  const searchRef = useRef<HTMLInputElement>(null);
 
-  // ช่วงวันร่วมกันทั้งสองแท็บ — ว่าง = ให้ backend ใส่ค่าตั้งต้น 7 วันล่าสุดให้
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
+  const page = Math.max(1, parseInt(state.page) || 1);
+  const size = parseInt(state.size) || 50;
+
+  /** เปิด/ปิดส่วนวิเคราะห์เชิงลึก และตัวกรองขั้นสูง — เป็นสภาพการมองเห็น ไม่ใช่ตัวกรอง จึงไม่ลง URL */
+  const [showAnalysis, setShowAnalysis] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [timelineFor, setTimelineFor] = useState<string | null>(null);
 
   const authFetch = useCallback(
     (url: string) => fetch(url, { headers: { Authorization: `Bearer ${token}` } }),
     [token]);
 
-  const dateQs = `${dateFrom ? `&dateFrom=${dateFrom}` : ''}${dateTo ? `&dateTo=${dateTo}` : ''}`;
-
   // ── ภาพรวม ────────────────────────────────────────────────────────────────
   const [stats, setStats] = useState<Stats | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
   const [statsError, setStatsError] = useState<string | null>(null);
+
+  const dateQs = `${state.dateFrom ? `&dateFrom=${state.dateFrom}` : ''}${state.dateTo ? `&dateTo=${state.dateTo}` : ''}`;
 
   const loadStats = useCallback(async () => {
     setStatsLoading(true); setStatsError(null);
@@ -188,15 +228,6 @@ export function ApiLogs() {
   const [total, setTotal] = useState(0);
   const [listLoading, setListLoading] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(50);
-  const [pathQuery, setPathQuery] = useState('');
-  const [method, setMethod] = useState('');
-  const [status, setStatus] = useState('all');
-  const [minDuration, setMinDuration] = useState('');
-  const [requestId, setRequestId] = useState('');
-  const [lineUserId, setLineUserId] = useState('');
-  const [ipFilter, setIpFilter] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<ApiLogDetail | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
@@ -205,39 +236,56 @@ export function ApiLogs() {
     setListLoading(true); setListError(null);
     try {
       const qs = new URLSearchParams();
-      qs.set('limit', String(pageSize));
-      qs.set('offset', String((page - 1) * pageSize));
-      if (dateFrom) qs.set('dateFrom', dateFrom);
-      if (dateTo) qs.set('dateTo', dateTo);
-      if (pathQuery.trim()) qs.set('path', pathQuery.trim());
-      if (method) qs.set('method', method);
-      if (status !== 'all') qs.set('status', status);
-      if (minDuration) qs.set('minDuration', minDuration);
-      if (requestId.trim()) qs.set('requestId', requestId.trim());
-      if (lineUserId.trim()) qs.set('lineUserId', lineUserId.trim());
-      if (ipFilter.trim()) qs.set('ip', ipFilter.trim());
+      qs.set('limit', String(size));
+      qs.set('offset', String((page - 1) * size));
+      if (state.dateFrom) qs.set('dateFrom', state.dateFrom);
+      if (state.dateTo) qs.set('dateTo', state.dateTo);
+      if (state.q.trim()) qs.set('path', state.q.trim());
+      if (state.method) qs.set('method', state.method);
+      if (state.status) qs.set('status', state.status);
+      if (state.minDuration) qs.set('minDuration', state.minDuration);
+      if (state.requestId.trim()) qs.set('requestId', state.requestId.trim());
+      if (state.lineUserId.trim()) qs.set('lineUserId', state.lineUserId.trim());
+      if (state.ip.trim()) qs.set('ip', state.ip.trim());
+      // เรียงที่ SQL ไม่ใช่ที่หน้าจอ — ตารางนี้แบ่งหน้าจาก server การเรียงเฉพาะ 50 แถวที่เห็น
+      // จะให้ลำดับที่ผิดโดยดูเหมือนถูก (แถวที่ช้าที่สุดจริง ๆ อาจอยู่หน้า 7)
+      qs.set('sort', state.sort);
+      qs.set('dir', state.dir);
 
       const res = await authFetch(`/api/admin/api-logs?${qs}`);
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
       const json = await res.json();
       setRows(json.data); setTotal(json.total);
     } catch (e: unknown) { setListError(errMsg(e)); } finally { setListLoading(false); }
-  }, [authFetch, page, pageSize, dateFrom, dateTo, pathQuery, method, status, minDuration, requestId, lineUserId, ipFilter]);
+  }, [authFetch, page, size, state.dateFrom, state.dateTo, state.q, state.method,
+      state.status, state.minDuration, state.requestId, state.lineUserId, state.ip,
+      state.sort, state.dir]);
 
   // ทั้งสองตัวยิงผ่าน setTimeout ไม่เรียก setState ตรง ๆ ในตัว effect
   // (loadStats/loadList เซ็ต loading ทันทีที่ถูกเรียก ซึ่งกฎ react-hooks/set-state-in-effect ห้ามไว้
   //  — pattern เดียวกับ Quotations.tsx) และการหน่วงยังช่วยรวบการพิมพ์รัวในช่องค้นหาไปในตัว
   useEffect(() => {
-    if (tab !== 'overview') return;
-    const t = setTimeout(() => { loadStats(); }, 0);
+    const t = setTimeout(() => { void loadStats(); }, 0);
     return () => clearTimeout(t);
-  }, [tab, loadStats]);
+  }, [loadStats]);
 
   useEffect(() => {
-    if (tab !== 'list') return;
-    const t = setTimeout(() => { loadList(); }, 300);
+    const t = setTimeout(() => { void loadList(); }, 300);
     return () => clearTimeout(t);
-  }, [tab, loadList]);
+  }, [loadList]);
+
+  // กด / เพื่อโฟกัสช่องค้นหา — กติกาเดียวกันทั้ง 4 หน้าในกลุ่ม
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = document.activeElement;
+      const typing = el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement
+        || el instanceof HTMLSelectElement;
+      if (e.key === '/' && !typing) { e.preventDefault(); searchRef.current?.focus(); }
+      if (e.key === 'Escape') { setExpandedId(null); setDetail(null); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const openDetail = async (id: string) => {
     if (expandedId === id) { setExpandedId(null); setDetail(null); return; }
@@ -252,160 +300,230 @@ export function ApiLogs() {
     setTimeout(() => setCopied(null), 1500);
   };
 
+  /** จาก "20 อันดับช้าสุด" มาที่รายการ โดยเหลือเงื่อนไขเดียวคือ request นั้น */
   const jumpToRequest = (rid: string) => {
-    setRequestId(rid); setPathQuery(''); setMethod(''); setStatus('all');
-    setMinDuration(''); setLineUserId(''); setPage(1); setTab('list');
+    set({ ...DEFAULTS, requestId: rid });
+    setShowAdvanced(true);
+    setShowAnalysis(false);
   };
 
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  const safePage = Math.min(page, totalPages);
-  const pageNumbers = React.useMemo(() => {
-    const pages: (number | 'ellipsis')[] = [];
-    if (totalPages <= 7) {
-      for (let i = 1; i <= totalPages; i++) pages.push(i);
-      return pages;
-    }
-    pages.push(1);
-    if (safePage > 3) pages.push('ellipsis');
-    for (let i = Math.max(2, safePage - 1); i <= Math.min(totalPages - 1, safePage + 1); i++) pages.push(i);
-    if (safePage < totalPages - 2) pages.push('ellipsis');
-    pages.push(totalPages);
-    return pages;
-  }, [totalPages, safePage]);
-
+  const pages = Math.max(1, Math.ceil(total / size));
   const sat = stats?.saturation;
-  const maxHourCount = Math.max(1, ...(stats?.byHour ?? []).map(h => h.count));
+  /** ชั่วโมงที่จะพล็อต — เติมชั่วโมงที่ไม่มี request ให้เป็น 0 ก่อนเสมอ (ดู fillHours) */
+  const hours = useMemo(() => fillHours(stats?.byHour ?? []), [stats]);
+
+  // สองตารางนี้โหลดมาครบแล้ว (ไม่แบ่งหน้า) จึงเรียงในหน้าได้ตรง ๆ ต่างจากตารางรายการข้างล่าง
+  const byRoute = useMemo(() => stats?.byRoute ?? [], [stats]);
+  const slowest = useMemo(() => stats?.slowest ?? [], [stats]);
+  const routeSort = useTableSort(byRoute, ROUTE_SORTS, { col: 'total_ms', dir: 'desc' });
+  const slowSort = useTableSort(slowest, SLOWEST_SORTS, { col: 'duration_ms', dir: 'desc' });
+
+  /** ทิศของตารางรายการ — เก็บใน hash เป็นสตริง จึงต้องบีบให้เหลือสองค่าก่อนใช้ */
+  const listDir: 'asc' | 'desc' = state.dir === 'asc' ? 'asc' : 'desc';
+  /** กดหัวเดิม = สลับทิศ · กดหัวใหม่ = เริ่มจากทิศที่ใช้บ่อยที่สุดของคอลัมน์นั้น */
+  const sortList = (col: string) => set({
+    sort: col,
+    dir: state.sort === col
+      ? (listDir === 'desc' ? 'asc' : 'desc')
+      : (TEXT_COLS.has(col) ? 'asc' : 'desc'),
+    page: '1',
+  });
   const maxTotalMs = Math.max(1, ...(stats?.byRoute ?? []).map(r => Number(r.total_ms)));
+
+  /** ชิปของตัวกรองที่ค้างอยู่ — โดยเฉพาะตัวที่ถูกพับไว้ ต้องมีอะไรบอกว่ายังกรองอยู่ */
+  const chips = useMemo(() => {
+    const out: { key: keyof typeof DEFAULTS; label: string; value: string }[] = [];
+    if (state.q) out.push({ key: 'q', label: 'path', value: state.q });
+    if (state.method) out.push({ key: 'method', label: 'method', value: state.method });
+    if (state.status) out.push({ key: 'status', label: 'status', value: state.status });
+    if (state.minDuration) out.push({ key: 'minDuration', label: 'ช้ากว่า', value: `${state.minDuration} ms` });
+    if (state.requestId) out.push({ key: 'requestId', label: 'Request ID', value: state.requestId });
+    if (state.lineUserId) out.push({ key: 'lineUserId', label: 'LINE User', value: state.lineUserId });
+    if (state.ip) out.push({ key: 'ip', label: 'IP', value: state.ip });
+    return out;
+  }, [state]);
+
+  const advancedActive = !!(state.requestId || state.lineUserId || state.ip);
 
   return (
     <div className="space-y-4">
-      {/* แท็บ + ช่วงวัน */}
-      <div className="bg-card rounded-2xl border border-slate-200 p-4 md:p-5 space-y-4">
-        <div className="flex flex-wrap items-center gap-3 justify-between">
-          <div className="inline-flex bg-slate-100 rounded-xl p-1">
-            {([['overview', 'ภาพรวม', Gauge], ['list', 'รายการ', Activity]] as const).map(([key, label, Icon]) => (
-              <button
-                key={key}
-                onClick={() => setTab(key)}
-                className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-all ${
-                  tab === key ? 'bg-card shadow-sm text-slate-900 font-medium' : 'text-slate-500 hover:text-slate-700'
-                }`}
-              >
-                <Icon className="w-4 h-4" style={tab === key ? { color: BRAND } : undefined} />
-                {label}
-              </button>
-            ))}
-          </div>
+      <PageHeader icon={Activity} title="บันทึกการเรียก API"
+                  description="ใครเรียกอะไร เมื่อไหร่ ได้ status อะไร และช้าตรงไหน">
+        <button
+          onClick={() => { void loadStats(); void loadList(); }}
+          disabled={statsLoading || listLoading}
+          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium
+                     border border-slate-200 text-slate-600 hover:bg-slate-50 transition disabled:opacity-60"
+        >
+          <RefreshCw className={`w-4 h-4 ${statsLoading || listLoading ? 'animate-spin' : ''}`} />
+          <span className="hidden sm:inline">โหลดใหม่</span>
+        </button>
+      </PageHeader>
 
-          <div className="flex items-center gap-2">
-            <div className="relative">
-              <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 z-10 pointer-events-none" />
-              <DateInput value={dateFrom} onChange={setDateFrom} aria-label="ตั้งแต่วันที่"
-                className={inputCls.replace('px-4', 'pl-10 pr-3')} />
-            </div>
-            <span className="text-slate-400 text-sm">ถึง</span>
-            <div className="relative">
-              <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 z-10 pointer-events-none" />
-              <DateInput value={dateTo} onChange={setDateTo} aria-label="ถึงวันที่"
-                className={inputCls.replace('px-4', 'pl-10 pr-3')} />
-            </div>
-            {(dateFrom || dateTo) && (
-              <button onClick={() => { setDateFrom(''); setDateTo(''); }}
-                className="text-slate-400 hover:text-slate-600 p-2" aria-label="ล้างช่วงวัน">
-                <X className="w-4 h-4" />
-              </button>
-            )}
-          </div>
-        </div>
-        {!dateFrom && !dateTo && (
-          <p className="text-xs text-slate-400">ไม่ระบุช่วงวัน = 7 วันล่าสุด</p>
-        )}
-      </div>
+      {/* ══════════ 1. ภาพรวมของช่วงที่เลือก ══════════ */}
+      {statsError && <ErrorBox message={statsError} onRetry={() => { void loadStats(); }} />}
 
-      {/* ══════════════ ภาพรวม ══════════════ */}
-      {tab === 'overview' && (
+      {sat && (
         <>
-          {statsError && (
-            <div className="flex items-center gap-2 bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 text-sm">
-              <AlertCircle className="w-4 h-4" />{statsError}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <StatTile label="จำนวน request" value={formatNumber(sat.total)}
+                      sub={`${stats?.dateFrom} → ${stats?.dateTo}`} />
+            <StatTile label="p95 ของเวลาตอบ" value={formatMs(sat.p95)}
+                      sub="95% ของ request เร็วกว่านี้" />
+            <StatTile label="อัตรา error"
+                      value={sat.total ? `${(sat.errors * 100 / sat.total).toFixed(1)}%` : '-'}
+                      sub={`${formatNumber(sat.errors)} ครั้ง (4xx/5xx)`}
+                      danger={sat.total > 0 && sat.errors / sat.total > 0.05} />
+            <StatTile label="request พร้อมกันสูงสุด" value={String(sat.max_inflight)}
+                      sub={sat.db_wait_hits > 0
+                        ? `⚠ connection pool ไม่พอ ${formatNumber(sat.db_wait_hits)} ครั้ง`
+                        : 'connection pool เพียงพอตลอดช่วง'}
+                      danger={sat.db_wait_hits > 0} />
+          </div>
+
+          {/* เตือนเรื่อง webhook โดยเฉพาะ — เป็นภาระหนักที่สุดของระบบ
+              บีบเหลือบรรทัดเดียว: ตัวเลขอยู่บนแถบ ส่วนวิธีอ่านตัวเลขย้ายไปอยู่ใน tooltip
+              (คำอธิบายยาว ๆ ที่ต้องอ่านทุกครั้งที่ผ่านตา สุดท้ายกลายเป็นสิ่งที่ไม่มีใครอ่าน) */}
+          {(sat.webhook_dropped > 0 || sat.webhook_timeout > 0 || sat.max_queue_waited > 5000) && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5
+                            flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-amber-700">
+              <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600" />
+              <span className="font-medium text-amber-800">คิวข้อความ LINE</span>
+              <span>รอนานสุด <b>{formatMs(sat.max_queue_waited)}</b></span>
+              {sat.webhook_dropped > 0 && <span>· ถูกทิ้ง <b>{sat.webhook_dropped}</b></span>}
+              {sat.webhook_timeout > 0 && <span>· หมดเวลา <b>{sat.webhook_timeout}</b></span>}
+              <span
+                title="รอคิวนาน = ทรัพยากร/ความขนานไม่พอ · รอคิวสั้นแต่เวลารวมนาน = ตัวงานเองช้า ต้องแก้โค้ด"
+                className="text-amber-600 cursor-help"
+              >
+                <Info className="w-3.5 h-3.5" />
+              </span>
             </div>
           )}
-          {statsLoading && !stats && (
-            <div className="flex justify-center py-16"><Loader2 className="w-6 h-6 animate-spin text-slate-400" /></div>
-          )}
 
-          {sat && (
-            <>
-              {/* การ์ดสรุป */}
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                <StatCard label="จำนวน request" value={sat.total.toLocaleString()} sub={`${stats?.dateFrom} → ${stats?.dateTo}`} />
-                <StatCard label="p95 ของเวลาตอบ" value={formatMs(sat.p95)}
-                  sub="95% ของ request เร็วกว่านี้" />
-                <StatCard label="อัตรา error"
-                  value={sat.total ? `${(sat.errors * 100 / sat.total).toFixed(1)}%` : '-'}
-                  sub={`${sat.errors.toLocaleString()} ครั้ง (4xx/5xx)`}
-                  danger={sat.total > 0 && sat.errors / sat.total > 0.05} />
-                <StatCard label="request พร้อมกันสูงสุด" value={String(sat.max_inflight)}
-                  sub={sat.db_wait_hits > 0
-                    ? `⚠ connection pool ไม่พอ ${sat.db_wait_hits.toLocaleString()} ครั้ง`
-                    : 'connection pool เพียงพอตลอดช่วง'}
-                  danger={sat.db_wait_hits > 0} />
-              </div>
-
-              {/* เตือนเรื่อง webhook โดยเฉพาะ — เป็นภาระหนักที่สุดของระบบ */}
-              {(sat.webhook_dropped > 0 || sat.webhook_timeout > 0 || sat.max_queue_waited > 5000) && (
-                <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 space-y-1">
-                  <div className="flex items-center gap-2 text-amber-800 font-medium text-sm">
-                    <AlertTriangle className="w-4 h-4" />คิวประมวลผลข้อความ LINE
+          {/* กราฟรายชั่วโมง + สัดส่วนสถานะ — ทั้งคู่วาดด้วย SVG เอง (ดูเหตุผลใน charts.tsx) */}
+          <div className="grid grid-cols-1 xl:grid-cols-5 gap-3 items-stretch">
+            {hours.length > 0 && (
+              <div className="xl:col-span-3">
+                <TableCard
+                  className="h-full"
+                  title="ปริมาณรายชั่วโมง (เวลาไทย)"
+                  hint="ชี้ที่กราฟเพื่อดูค่าของชั่วโมงนั้น · ขีดแดงใต้แกน = ชั่วโมงที่ connection pool ไม่พอ"
+                  action={
+                    <ChartLegend items={[
+                      { label: 'สำเร็จ', color: BRAND },
+                      { label: 'ผิดพลาด', color: 'var(--color-red-600)' },
+                    ]} />
+                  }
+                >
+                  <div className="px-2 pt-2 pb-1">
+                    <AreaChart
+                      height={210}
+                      labels={hours.map(h => hourLabel(h.hour))}
+                      marks={hours.map(h => (h.max_db_waiting ?? 0) > 0)}
+                      markHint="ชั่วโมงนี้มี request ที่ต้องรอ connection pool"
+                      series={[
+                        {
+                          key: 'ok', label: 'สำเร็จ', color: BRAND,
+                          values: hours.map(h => Math.max(0, h.count - h.errors)),
+                        },
+                        {
+                          key: 'err', label: 'ผิดพลาด (4xx/5xx)', color: 'var(--color-red-600)',
+                          values: hours.map(h => h.errors),
+                        },
+                      ]}
+                      extra={(i) => {
+                        const h = hours[i];
+                        return `p95 ${formatMs(h.p95)} · พร้อมกันสูงสุด ${h.max_inflight ?? '-'}`
+                          + ((h.max_db_waiting ?? 0) > 0 ? ' · pool ไม่พอ' : '');
+                      }}
+                    />
                   </div>
-                  <p className="text-sm text-amber-700">
-                    {sat.webhook_dropped > 0 && <>ถูกทิ้งเพราะคิวตัน <b>{sat.webhook_dropped}</b> ครั้ง · </>}
-                    {sat.webhook_timeout > 0 && <>หมดเวลาตอบ <b>{sat.webhook_timeout}</b> ครั้ง · </>}
-                    รอคิวนานสุด <b>{formatMs(sat.max_queue_waited)}</b>
-                  </p>
-                  <p className="text-xs text-amber-600">
-                    รอคิวนาน = ต้องเพิ่มทรัพยากร/ความขนาน · ถ้ารอคิวสั้นแต่เวลารวมนาน = ตัวงานเองช้า ต้องแก้โค้ด
-                  </p>
-                </div>
-              )}
+                </TableCard>
+              </div>
+            )}
 
-              {/* endpoint เรียงตามเวลารวม */}
-              <div className="bg-card rounded-2xl border border-slate-200 overflow-hidden">
-                <div className="px-5 py-4 border-b border-slate-100">
-                  <h3 className="font-medium text-slate-800">endpoint ที่กินเวลาเครื่องรวมมากที่สุด</h3>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    เรียงตาม "เวลารวม" ไม่ใช่ตัวที่ช้าที่สุด — ตัวที่กินเวลาเครื่องรวมมากที่สุดคือตัวที่ควร optimize ก่อน
-                  </p>
+            <div className="xl:col-span-2">
+              <TableCard title="สัดส่วนสถานะ" className="h-full flex flex-col"
+                         hint="ชี้ที่วงเพื่อดูตัวเลขของกลุ่มนั้น">
+                {/* จัดกึ่งกลางแนวตั้ง — การ์ดถูกยืดให้สูงเท่ากราฟเส้น วงจึงต้องไม่ลอยไปติดขอบบน */}
+                <div className="p-4 flex-1 flex items-center justify-center">
+                  <Donut
+                    size={150}
+                    centerLabel="request ทั้งหมด"
+                    slices={[
+                      { key: '2xx', label: 'สำเร็จ (2xx)', value: sat.s2xx ?? 0, color: 'var(--brand-fg)' },
+                      { key: '3xx', label: 'เปลี่ยนทาง (3xx)', value: sat.s3xx ?? 0, color: 'var(--color-blue-600)' },
+                      { key: '4xx', label: 'ผิดฝั่งผู้เรียก (4xx)', value: sat.s4xx ?? 0, color: 'var(--color-amber-500)' },
+                      { key: '5xx', label: 'ผิดฝั่งระบบ (5xx)', value: sat.s5xx ?? 0, color: 'var(--color-red-600)' },
+                    ]}
+                  />
                 </div>
-                <div className="overflow-x-auto">
+              </TableCard>
+            </div>
+          </div>
+
+          {/* ปุ่มกางส่วนวิเคราะห์ — แยกออกมาเป็นแถวของตัวเองเพราะมันคุมทั้งสองการ์ดข้างล่าง
+              ไม่ใช่ของการ์ดใดการ์ดหนึ่ง */}
+          <button
+            onClick={() => setShowAnalysis(v => !v)}
+            aria-expanded={showAnalysis}
+            className="w-full inline-flex items-center justify-center gap-1.5 py-2.5 rounded-2xl
+                       border border-dashed border-slate-200 text-xs font-medium
+                       hover:border-slate-300 transition-colors"
+            style={{ color: BRAND }}
+          >
+            {showAnalysis
+              ? 'ซ่อนรายละเอียดประสิทธิภาพ'
+              : 'ดูรายละเอียดประสิทธิภาพ (endpoint ที่กินเวลารวม · 20 อันดับช้าสุด)'}
+            {showAnalysis ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+          </button>
+
+          {/* ── ส่วนวิเคราะห์เชิงลึก (พับไว้) ── */}
+          {showAnalysis && (
+            <>
+              <TableCard
+                title="endpoint ที่กินเวลาเครื่องรวมมากที่สุด"
+                hint='เรียงตาม "เวลารวม" ไม่ใช่ตัวที่ช้าที่สุด — ตัวที่กินเวลาเครื่องรวมมากที่สุดคือตัวที่ควร optimize ก่อน'
+              >
+                <TableScroll>
                   <table className="w-full text-sm">
-                    <thead className="bg-slate-50 text-slate-500 text-xs">
+                    <thead className="bg-slate-50">
                       <tr>
-                        <th className="text-left font-medium px-5 py-2.5">endpoint</th>
-                        <th className="text-right font-medium px-3 py-2.5">ครั้ง</th>
-                        <th className="text-right font-medium px-3 py-2.5">p50</th>
-                        <th className="text-right font-medium px-3 py-2.5">p95</th>
-                        <th className="text-right font-medium px-3 py-2.5">p99</th>
-                        <th className="text-right font-medium px-3 py-2.5">สูงสุด</th>
-                        <th className="text-right font-medium px-3 py-2.5">error</th>
-                        <th className="text-left font-medium px-5 py-2.5 w-48">เวลารวม</th>
+                        {([
+                          ['endpoint', 'route', 'left'],
+                          ['ครั้ง', 'count', 'right'],
+                          ['p50', 'p50', 'right'],
+                          ['p95', 'p95', 'right'],
+                          ['p99', 'p99', 'right'],
+                          ['สูงสุด', 'max_ms', 'right'],
+                          ['error', 'errors', 'right'],
+                          ['เวลารวม', 'total_ms', 'left'],
+                        ] as const).map(([label, col, align]) => (
+                          <SortHeader
+                            key={col} label={label} col={col} align={align}
+                            className={col === 'total_ms' ? 'w-48' : undefined}
+                            active={routeSort.col} dir={routeSort.dir}
+                            onSort={(c) => routeSort.toggle(c, !TEXT_COLS.has(c))}
+                          />
+                        ))}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {stats!.byRoute.map((r) => (
+                      {routeSort.sorted.map((r) => (
                         <tr key={r.route} className="hover:bg-slate-50/60">
-                          <td className="px-5 py-2.5 font-mono text-xs text-slate-700">{decodePath(r.route)}</td>
-                          <td className="px-3 py-2.5 text-right text-slate-600">{r.count.toLocaleString()}</td>
-                          <td className="px-3 py-2.5 text-right text-slate-500">{formatMs(r.p50)}</td>
-                          <td className={`px-3 py-2.5 text-right ${durationStyle(r.p95)}`}>{formatMs(r.p95)}</td>
-                          <td className={`px-3 py-2.5 text-right ${durationStyle(r.p99)}`}>{formatMs(r.p99)}</td>
-                          <td className={`px-3 py-2.5 text-right ${durationStyle(r.max_ms)}`}>{formatMs(r.max_ms)}</td>
-                          <td className="px-3 py-2.5 text-right">
+                          <td className={`${tdCls} font-mono text-xs text-slate-700`}>{decodePath(r.route)}</td>
+                          <td className={`${tdCls} ${numCls} text-slate-600`}>{formatNumber(r.count)}</td>
+                          <td className={`${tdCls} ${numCls} text-slate-500`}>{formatMs(r.p50)}</td>
+                          <td className={`${tdCls} ${numCls}`}><Duration ms={r.p95} /></td>
+                          <td className={`${tdCls} ${numCls}`}><Duration ms={r.p99} /></td>
+                          <td className={`${tdCls} ${numCls}`}><Duration ms={r.max_ms} /></td>
+                          <td className={`${tdCls} ${numCls}`}>
                             {r.errors > 0
                               ? <span className="text-red-600">{r.errors}</span>
                               : <span className="text-slate-300">0</span>}
                           </td>
-                          <td className="px-5 py-2.5">
+                          <td className={tdCls}>
                             <div className="flex items-center gap-2">
                               <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
                                 <div className="h-full rounded-full"
@@ -418,84 +536,52 @@ export function ApiLogs() {
                           </td>
                         </tr>
                       ))}
-                      {stats!.byRoute.length === 0 && (
-                        <tr><td colSpan={8} className="px-5 py-10 text-center text-slate-400">ไม่มีข้อมูลในช่วงนี้</td></tr>
+                      {byRoute.length === 0 && (
+                        <tr><td colSpan={8} className="px-4 py-10 text-center text-slate-400">ไม่มีข้อมูลในช่วงนี้</td></tr>
                       )}
                     </tbody>
                   </table>
-                </div>
-              </div>
+                </TableScroll>
+              </TableCard>
 
-              {/* กราฟรายชั่วโมง — ใช้ div ล้วน ไม่เพิ่ม dependency กราฟเข้าโปรเจกต์ */}
-              {stats!.byHour.length > 0 && (
-                <div className="bg-card rounded-2xl border border-slate-200 p-5">
-                  <h3 className="font-medium text-slate-800">ปริมาณรายชั่วโมง (เวลาไทย)</h3>
-                  <p className="text-xs text-slate-400 mt-0.5 mb-4">
-                    แท่งสูง = คนใช้เยอะ · สีแดง = ชั่วโมงที่ connection pool ไม่พอ
-                  </p>
-                  <div className="flex items-end gap-[2px] h-40 overflow-x-auto pb-1">
-                    {stats!.byHour.map((h) => (
-                      <div key={h.hour} className="flex-1 min-w-[6px] group relative flex flex-col justify-end h-full">
-                        <div
-                          className="w-full rounded-t transition-all"
-                          style={{
-                            height: `${Math.max(2, h.count / maxHourCount * 100)}%`,
-                            background: (h.max_db_waiting ?? 0) > 0 ? 'var(--color-red-600)' : BRAND,
-                            opacity: h.errors > 0 ? 0.65 : 1,
-                          }}
-                        />
-                        <div className="hidden group-hover:block absolute bottom-full left-1/2 -translate-x-1/2 mb-1 z-10
-                                        bg-slate-800 text-slate-50 text-[11px] rounded-lg px-2.5 py-1.5 whitespace-nowrap">
-                          {h.hour} น.<br />
-                          {h.count.toLocaleString()} request · p95 {formatMs(h.p95)}<br />
-                          พร้อมกันสูงสุด {h.max_inflight ?? '-'} · error {h.errors}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="flex justify-between text-[11px] text-slate-400 mt-2">
-                    <span>{stats!.byHour[0]?.hour}</span>
-                    <span>{stats!.byHour[stats!.byHour.length - 1]?.hour}</span>
-                  </div>
-                </div>
-              )}
-
-              {/* 20 อันดับที่ช้าที่สุด */}
-              <div className="bg-card rounded-2xl border border-slate-200 overflow-hidden">
-                <div className="px-5 py-4 border-b border-slate-100">
-                  <h3 className="font-medium text-slate-800">20 request ที่ช้าที่สุดในช่วงนี้</h3>
-                  <p className="text-xs text-slate-400 mt-0.5">กดแถวเพื่อไปดูรายละเอียดในแท็บรายการ</p>
-                </div>
-                <div className="overflow-x-auto">
+              <TableCard title="20 request ที่ช้าที่สุดในช่วงนี้"
+                         hint="กดแถวเพื่อกรองรายการข้างล่างให้เหลือเฉพาะ request นั้น">
+                <TableScroll>
                   <table className="w-full text-sm">
-                    <thead className="bg-slate-50 text-slate-500 text-xs">
+                    <thead className="bg-slate-50">
                       <tr>
-                        <th className="text-left font-medium px-5 py-2.5">เวลา</th>
-                        <th className="text-left font-medium px-3 py-2.5">endpoint</th>
-                        <th className="text-left font-medium px-3 py-2.5">ผู้เรียก</th>
-                        <th className="text-center font-medium px-3 py-2.5">status</th>
-                        <th className="text-right font-medium px-5 py-2.5">ใช้เวลา</th>
+                        {([
+                          ['เวลา', 'created_at', 'left'],
+                          ['endpoint', 'path', 'left'],
+                          ['ผู้เรียก', 'caller', 'left'],
+                          ['status', 'status_code', 'center'],
+                          ['ใช้เวลา', 'duration_ms', 'right'],
+                        ] as const).map(([label, col, align]) => (
+                          <SortHeader
+                            key={col} label={label} col={col} align={align}
+                            active={slowSort.col} dir={slowSort.dir}
+                            onSort={(c) => slowSort.toggle(c, !TEXT_COLS.has(c))}
+                          />
+                        ))}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {stats!.slowest.map((r) => (
+                      {slowSort.sorted.map((r) => (
                         <tr key={r.id} onClick={() => jumpToRequest(r.request_id)}
                           className="hover:bg-slate-50/60 cursor-pointer">
-                          <td className="px-5 py-2.5 text-slate-500 text-xs whitespace-nowrap">{formatDateTime(r.created_at)}</td>
-                          <td className="px-3 py-2.5">
-                            <span className="font-mono text-[11px] text-slate-400 mr-1.5">{r.method}</span>
-                            <span className="font-mono text-xs text-slate-700">{decodePath(r.path)}</span>
+                          <td className={`${tdCls} text-slate-500 text-xs whitespace-nowrap`}>{formatDateTime(r.created_at)}</td>
+                          <td className={tdCls}>
+                            <div className="flex items-center gap-1.5">
+                              <MethodTag method={r.method} />
+                              <span className="font-mono text-xs text-slate-700">{decodePath(r.path)}</span>
+                            </div>
                           </td>
-                          <td className="px-3 py-2.5 text-xs text-slate-500">
+                          <td className={`${tdCls} text-xs text-slate-500`}>
                             {r.admin_username ?? shortUser(r.line_user_id) ?? '-'}
                           </td>
-                          <td className="px-3 py-2.5 text-center">
-                            <span className={`inline-block px-2 py-0.5 rounded-md border text-xs ${statusStyle(r.status_code)}`}>
-                              {r.status_code}
-                            </span>
-                          </td>
-                          <td className={`px-5 py-2.5 text-right tabular-nums ${durationStyle(r.duration_ms)}`}>
-                            {formatMs(r.duration_ms)}
+                          <td className={`${tdCls} text-center`}><StatusPill code={r.status_code} /></td>
+                          <td className={`${tdCls} ${numCls}`}>
+                            <Duration ms={r.duration_ms} />
                             {r.queue_waited_ms !== null && (
                               <div className="text-[11px] text-slate-400 font-normal">
                                 รอคิว {formatMs(r.queue_waited_ms)}
@@ -504,327 +590,343 @@ export function ApiLogs() {
                           </td>
                         </tr>
                       ))}
-                      {stats!.slowest.length === 0 && (
-                        <tr><td colSpan={5} className="px-5 py-10 text-center text-slate-400">ไม่มีข้อมูลในช่วงนี้</td></tr>
+                      {slowest.length === 0 && (
+                        <tr><td colSpan={5} className="px-4 py-10 text-center text-slate-400">ไม่มีข้อมูลในช่วงนี้</td></tr>
                       )}
                     </tbody>
                   </table>
-                </div>
-              </div>
+                </TableScroll>
+              </TableCard>
             </>
           )}
         </>
       )}
 
-      {/* ══════════════ รายการ ══════════════ */}
-      {tab === 'list' && (
-        <>
-          <div className="bg-card rounded-2xl border border-slate-200 p-4 md:p-5 space-y-3">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
-              <div className="relative xl:col-span-2">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
-                <input value={pathQuery} onChange={(e) => { setPathQuery(e.target.value); setPage(1); }}
-                  placeholder="ค้นหา path เช่น /api/quotation"
-                  className={inputCls.replace('px-4', 'pl-10 pr-4')} />
-              </div>
-
-              <div className="relative">
-                <select value={method} onChange={(e) => { setMethod(e.target.value); setPage(1); }}
-                  className={`${inputCls} appearance-none cursor-pointer`}>
-                  <option value="">ทุก method</option>
-                  {METHODS.map(m => <option key={m} value={m}>{m}{m === 'TASK' ? ' (งานเบื้องหลัง)' : ''}</option>)}
-                </select>
-                <Filter className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
-              </div>
-
-              <div className="relative">
-                <select value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }}
-                  className={`${inputCls} appearance-none cursor-pointer`}>
-                  <option value="all">ทุก status</option>
-                  <option value="2xx">2xx สำเร็จ</option>
-                  <option value="4xx">4xx ผิดฝั่งผู้เรียก</option>
-                  <option value="5xx">5xx ผิดฝั่งระบบ</option>
-                </select>
-                <Filter className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
-              </div>
-
-              <div className="relative">
-                <Clock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
-                <input value={minDuration} inputMode="numeric"
-                  onChange={(e) => { setMinDuration(e.target.value.replace(/\D/g, '')); setPage(1); }}
-                  placeholder="ช้ากว่า (ms)"
-                  className={inputCls.replace('px-4', 'pl-10 pr-4')} />
-              </div>
+      {statsLoading && !stats && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="bg-card border border-slate-200 rounded-2xl p-3.5 animate-pulse">
+              <div className="h-3 w-24 bg-slate-100 rounded" />
+              <div className="h-7 w-20 bg-slate-200 rounded mt-2" />
             </div>
+          ))}
+        </div>
+      )}
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <input value={requestId} onChange={(e) => { setRequestId(e.target.value); setPage(1); }}
-                placeholder="Request ID (ค้นได้โดยไม่ต้องรู้วันที่)"
-                className={`${inputCls} font-mono text-xs`} />
-              <input value={lineUserId} onChange={(e) => { setLineUserId(e.target.value); setPage(1); }}
-                placeholder="LINE User ID"
-                className={`${inputCls} font-mono text-xs`} />
-            </div>
+      {/* ══════════ 2. ตัวกรอง ══════════ */}
+      <FilterCard>
+        <FilterRow>
+          <FilterField label="ค้นหา path" grow>
+            <SearchField
+              ref={searchRef}
+              value={state.q}
+              onChange={(v) => set({ q: v, page: '1' })}
+              placeholder="เช่น /api/quotation … (กด / เพื่อโฟกัส)"
+            />
+          </FilterField>
+          <FilterField label="method" width="w-36">
+            <SelectField value={state.method} onChange={(v) => set({ method: v, page: '1' })}>
+              <option value="">ทุก method</option>
+              {METHODS.map(m => <option key={m} value={m}>{m}{m === 'TASK' ? ' (งานเบื้องหลัง)' : ''}</option>)}
+            </SelectField>
+          </FilterField>
+          <FilterField label="สถานะ" width="w-40">
+            <SelectField value={state.status} onChange={(v) => set({ status: v, page: '1' })}>
+              <option value="">ทุก status</option>
+              <option value="2xx">2xx สำเร็จ</option>
+              <option value="4xx">4xx ผิดฝั่งผู้เรียก</option>
+              <option value="5xx">5xx ผิดฝั่งระบบ</option>
+            </SelectField>
+          </FilterField>
+          <FilterField label="ตั้งแต่" width="w-36">
+            <DateInput value={state.dateFrom} onChange={(v) => set({ dateFrom: v, page: '1' })}
+                       className={inputCls} aria-label="ตั้งแต่วันที่" />
+          </FilterField>
+          <FilterField label="ถึง" width="w-36">
+            <DateInput value={state.dateTo} onChange={(v) => set({ dateTo: v, page: '1' })}
+                       className={inputCls} aria-label="ถึงวันที่" />
+          </FilterField>
+          <div className="pb-px">
+            <CheckField
+              checked={!!state.minDuration}
+              onChange={(v) => set({ minDuration: v ? SLOW_MS : '', page: '1' })}
+              label="เฉพาะที่ช้า"
+              hint={`เฉพาะ request ที่ใช้เวลาตั้งแต่ ${SLOW_MS} ms ขึ้นไป (ตั้งค่าละเอียดได้ในตัวกรองขั้นสูง)`}
+            />
+          </div>
+        </FilterRow>
 
+        {showAdvanced && (
+          <FilterRow>
+            <FilterField label="Request ID" grow>
+              <input value={state.requestId} onChange={(e) => set({ requestId: e.target.value, page: '1' })}
+                placeholder="ค้นได้โดยไม่ต้องรู้วันที่"
+                className={`${inputCls} font-mono text-xs`} />
+            </FilterField>
+            <FilterField label="LINE User ID" grow>
+              <input value={state.lineUserId} onChange={(e) => set({ lineUserId: e.target.value, page: '1' })}
+                placeholder="U1234…"
+                className={`${inputCls} font-mono text-xs`} />
+            </FilterField>
             {/* กรองด้วย IP = ดูว่า "เครื่องเดียวกันนี้" เรียกอะไรไปบ้างในช่วงเวลานั้น ซึ่งเป็นวิธีเดียว
                 ที่พอจะบอกได้ว่าคนที่กดลิงก์ PDF สาธารณะเป็นเซลล์เจ้าของใบเองหรือคนอื่น */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <input value={ipFilter} onChange={(e) => { setIpFilter(e.target.value); setPage(1); }}
-                placeholder="IP ต้นทาง (กดที่ IP ในตารางเพื่อกรองได้เลย)"
+            <FilterField label="IP ต้นทาง" grow>
+              <input value={state.ip} onChange={(e) => set({ ip: e.target.value, page: '1' })}
+                placeholder="กดที่ IP ในตารางเพื่อกรองได้เลย"
                 className={`${inputCls} font-mono text-xs`} />
-            </div>
+            </FilterField>
+            <FilterField label="ช้ากว่า (ms)" width="w-32">
+              <input value={state.minDuration} inputMode="numeric"
+                onChange={(e) => set({ minDuration: e.target.value.replace(/\D/g, ''), page: '1' })}
+                placeholder="1000"
+                className={inputCls} />
+            </FilterField>
+          </FilterRow>
+        )}
 
-            {(pathQuery || method || status !== 'all' || minDuration || requestId || lineUserId || ipFilter) && (
-              <button
-                onClick={() => {
-                  setPathQuery(''); setMethod(''); setStatus('all');
-                  setMinDuration(''); setRequestId(''); setLineUserId(''); setIpFilter(''); setPage(1);
-                }}
-                className="text-sm text-slate-500 hover:text-slate-700 inline-flex items-center gap-1.5">
-                <X className="w-3.5 h-3.5" />ล้างตัวกรอง
-              </button>
-            )}
-            {requestId && (
-              <p className="text-xs text-slate-400">
-                ค้นด้วย Request ID จะข้ามเงื่อนไขช่วงวันทั้งหมด
-              </p>
-            )}
-          </div>
+        <FilterFooter onReset={chips.length ? reset : undefined}
+                      loading={listLoading} total={total} unit="รายการ">
+          <button
+            onClick={() => setShowAdvanced(v => !v)}
+            aria-expanded={showAdvanced}
+            className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg border transition-colors ${
+              advancedActive
+                ? ''
+                : 'border-slate-200 text-slate-500 hover:text-slate-700 hover:border-slate-300'
+            }`}
+            style={advancedActive
+              ? { backgroundColor: 'var(--brand-soft)', borderColor: 'var(--brand-border)', color: BRAND }
+              : undefined}
+          >
+            <SlidersHorizontal className="w-3.5 h-3.5" />
+            ตัวกรองขั้นสูง
+            {showAdvanced ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+          </button>
 
-          {listError && (
-            <div className="flex items-center gap-2 bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 text-sm">
-              <AlertCircle className="w-4 h-4" />{listError}
-            </div>
+          {chips.map(c => (
+            <FilterChip key={c.key} label={c.label} value={c.value}
+                        onRemove={() => set({ [c.key]: '', page: '1' })} />
+          ))}
+
+          {state.requestId && (
+            <span className="text-slate-400">ค้นด้วย Request ID จะข้ามเงื่อนไขช่วงวันทั้งหมด</span>
           )}
+        </FilterFooter>
+      </FilterCard>
 
-          <div className="bg-card rounded-2xl border border-slate-200 overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-slate-50 text-slate-500 text-xs">
-                  <tr>
-                    <th className="text-left font-medium px-5 py-3">เวลา</th>
-                    <th className="text-left font-medium px-3 py-3">endpoint</th>
-                    <th className="text-left font-medium px-3 py-3">ผู้เรียก</th>
-                    <th className="text-center font-medium px-3 py-3">status</th>
-                    <th className="text-right font-medium px-3 py-3">ใช้เวลา</th>
-                    <th className="text-right font-medium px-3 py-3">ขนาด</th>
-                    <th className="w-10" />
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {listLoading && rows.length === 0 && (
-                    <tr><td colSpan={7} className="px-5 py-16 text-center">
-                      <Loader2 className="w-6 h-6 animate-spin text-slate-400 mx-auto" />
-                    </td></tr>
-                  )}
-                  {!listLoading && rows.length === 0 && (
-                    <tr><td colSpan={7} className="px-5 py-16 text-center text-slate-400">ไม่พบรายการตามเงื่อนไขนี้</td></tr>
-                  )}
-                  {rows.map((r) => (
-                    <React.Fragment key={r.id}>
-                      <tr onClick={() => openDetail(r.id)} className="hover:bg-slate-50/60 cursor-pointer">
-                        <td className="px-5 py-2.5 text-slate-500 text-xs whitespace-nowrap">{formatDateTime(r.created_at)}</td>
-                        <td className="px-3 py-2.5">
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-mono text-[11px] text-slate-400">{r.method}</span>
-                            <span className="font-mono text-xs text-slate-700 break-all">{decodePath(r.path)}</span>
+      {/* ══════════ 3. รายการ ══════════ */}
+      {listError && <ErrorBox message={listError} onRetry={() => { void loadList(); }} />}
+
+      <TableCard>
+        {listLoading && rows.length === 0 && <SkeletonRows rows={8} />}
+
+        {!listLoading && rows.length === 0 && !listError && (
+          <EmptyState
+            icon={Activity}
+            title="ไม่พบรายการตามเงื่อนไขนี้"
+            hint={chips.length > 0
+              ? 'มีตัวกรองค้างอยู่ — ลองเอาชิปเงื่อนไขข้างบนออกทีละอัน'
+              : 'ไม่ระบุช่วงวัน = 7 วันล่าสุด · ถ้าเพิ่งติดตั้งระบบ ข้อมูลอาจยังไม่ถูกบันทึก'}
+          />
+        )}
+
+        {rows.length > 0 && (
+          <TableScroll>
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50">
+                <tr>
+                  <SortHeader label="เวลา" col="created_at" active={state.sort} dir={listDir} onSort={sortList} />
+                  <SortHeader label="endpoint" col="path" active={state.sort} dir={listDir} onSort={sortList} />
+                  {/* "ผู้เรียก" เรียงไม่ได้โดยตั้งใจ — ค่าในช่องนี้มาจากสามแหล่ง (แอดมิน / LINE /
+                      เจ้าของเอกสาร) การเรียงจะได้ลำดับที่ไม่มีความหมายและชวนให้เข้าใจผิดว่าเทียบกันได้ */}
+                  <th className={thCls}>ผู้เรียก</th>
+                  <SortHeader label="สถานะ" col="status_code" align="center"
+                              active={state.sort} dir={listDir} onSort={sortList} />
+                  <SortHeader label="ใช้เวลา" col="duration_ms" align="right"
+                              active={state.sort} dir={listDir} onSort={sortList} />
+                  <SortHeader label="ขนาด" col="resp_bytes" align="right"
+                              active={state.sort} dir={listDir} onSort={sortList} />
+                  <th className={`${thCls} w-8`} />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {rows.map((r) => (
+                  <React.Fragment key={r.id}>
+                    <tr onClick={() => { void openDetail(r.id); }}
+                        className="hover:bg-slate-50/60 cursor-pointer">
+                      <td className={`${tdCls} text-slate-500 text-xs whitespace-nowrap`}>
+                        {formatDateTime(r.created_at)}
+                      </td>
+                      <td className={tdCls}>
+                        <div className="flex items-center gap-1.5">
+                          <MethodTag method={r.method} />
+                          <span className="font-mono text-xs text-slate-700 break-all">{decodePath(r.path)}</span>
+                        </div>
+                        {r.route_group !== r.path && (
+                          <div className="font-mono text-[11px] text-slate-400 mt-0.5 pl-[3.125rem]">
+                            {decodePath(r.route_group)}
                           </div>
-                          {r.route_group !== r.path && (
-                            <div className="font-mono text-[11px] text-slate-400 mt-0.5">{decodePath(r.route_group)}</div>
-                          )}
-                        </td>
-                        <td className="px-3 py-2.5 text-xs">
-                          {r.admin_username
-                            ? <span className="text-slate-700">{r.admin_username}</span>
-                            : r.line_user_id
-                              ? <span className="font-mono text-slate-500">{shortUser(r.line_user_id)}</span>
-                              : r.doc_owner_user_id
-                                // ลิงก์สาธารณะ ไม่มีล็อกอิน = ไม่รู้ว่าใครกด บอกได้แค่ว่าเอกสารของใคร
-                                ? <span className="text-slate-400" title="เอกสารของเซลล์คนนี้ — ไม่ได้แปลว่าเป็นคนกดลิงก์ ลิงก์นี้เปิดได้โดยไม่ต้องล็อกอิน">
-                                    เอกสารของ {r.doc_owner_name ?? shortUser(r.doc_owner_user_id)}
-                                  </span>
-                                : <span className="text-slate-300">-</span>}
-                          {r.ip && (
-                            <button
-                              onClick={(e) => { e.stopPropagation(); setIpFilter(r.ip!); setPage(1); }}
-                              title="กรองเฉพาะ request ที่มาจาก IP นี้"
-                              className="font-mono text-[11px] text-slate-400 hover:text-slate-700 hover:underline mt-0.5 block">
-                              {r.ip}
-                            </button>
-                          )}
-                        </td>
-                        <td className="px-3 py-2.5 text-center">
-                          <span className={`inline-block px-2 py-0.5 rounded-md border text-xs ${statusStyle(r.status_code)}`}>
-                            {r.status_code}
+                        )}
+                      </td>
+                      <td className={`${tdCls} text-xs`}>
+                        {r.admin_username
+                          ? <span className="text-slate-700">{r.admin_username}</span>
+                          : r.line_user_id
+                            ? <span className="font-mono text-slate-500">{shortUser(r.line_user_id)}</span>
+                            : r.doc_owner_user_id
+                              // ลิงก์สาธารณะ ไม่มีล็อกอิน = ไม่รู้ว่าใครกด บอกได้แค่ว่าเอกสารของใคร
+                              ? <span className="text-slate-400" title="เอกสารของเซลล์คนนี้ — ไม่ได้แปลว่าเป็นคนกดลิงก์ ลิงก์นี้เปิดได้โดยไม่ต้องล็อกอิน">
+                                  เอกสารของ {r.doc_owner_name ?? shortUser(r.doc_owner_user_id)}
+                                </span>
+                              : <span className="text-slate-300">-</span>}
+                        {r.ip && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); set({ ip: r.ip!, page: '1' }); setShowAdvanced(true); }}
+                            title="กรองเฉพาะ request ที่มาจาก IP นี้"
+                            className="font-mono text-[11px] text-slate-400 hover:text-slate-700 hover:underline mt-0.5 block">
+                            {r.ip}
+                          </button>
+                        )}
+                      </td>
+                      <td className={`${tdCls} text-center`}><StatusPill code={r.status_code} /></td>
+                      <td className={`${tdCls} ${numCls} whitespace-nowrap`}>
+                        <Duration ms={r.duration_ms} />
+                        {/* /callback ตอบ 200 กลับ LINE ทันทีก่อนเริ่มทำงาน ตัวเลขนี้จึงเป็นเวลารับ ไม่ใช่เวลาทำงาน */}
+                        {r.path === '/callback' && (
+                          <span className="ml-1.5 inline-block px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 text-[10px] font-normal"
+                            title="ตอบ 200 กลับ LINE ทันทีก่อนเริ่มทำงาน — เวลาทำงานจริงอยู่ที่แถว TASK ที่ Request ID เดียวกัน">
+                            ACK
                           </span>
-                        </td>
-                        <td className={`px-3 py-2.5 text-right tabular-nums whitespace-nowrap ${durationStyle(r.duration_ms)}`}>
-                          {formatMs(r.duration_ms)}
-                          {/* /callback ตอบ 200 กลับ LINE ทันทีก่อนเริ่มทำงาน ตัวเลขนี้จึงเป็นเวลารับ ไม่ใช่เวลาทำงาน */}
-                          {r.path === '/callback' && (
-                            <span className="ml-1.5 inline-block px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 text-[10px] font-normal"
-                              title="ตอบ 200 กลับ LINE ทันทีก่อนเริ่มทำงาน — เวลาทำงานจริงอยู่ที่แถว TASK ที่ Request ID เดียวกัน">
-                              ACK
-                            </span>
-                          )}
-                          {r.queue_waited_ms !== null && (
-                            <div className="text-[11px] text-slate-400 font-normal">รอคิว {formatMs(r.queue_waited_ms)}</div>
-                          )}
-                        </td>
-                        <td className="px-3 py-2.5 text-right text-xs text-slate-400">{formatBytes(r.resp_bytes)}</td>
-                        <td className="px-3 py-2.5 text-slate-300">
-                          {expandedId === r.id ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                        </td>
-                      </tr>
+                        )}
+                        {r.queue_waited_ms !== null && (
+                          <div className="text-[11px] text-slate-400 font-normal">รอคิว {formatMs(r.queue_waited_ms)}</div>
+                        )}
+                      </td>
+                      <td className={`${tdCls} ${numCls} text-xs text-slate-400`}>{formatBytes(r.resp_bytes)}</td>
+                      <td className={`${tdCls} text-slate-300`}>
+                        {expandedId === r.id ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                      </td>
+                    </tr>
 
-                      {expandedId === r.id && (
-                        <tr>
-                          <td colSpan={7} className="bg-slate-50/70 px-5 py-4">
-                            {!detail
-                              ? <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
-                              : (
-                                <div className="space-y-3">
-                                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
-                                    <Field label="Request ID">
-                                      <button onClick={() => copy(detail.request_id)}
-                                        className="font-mono inline-flex items-center gap-1.5 text-slate-700 hover:text-slate-900">
-                                        {detail.request_id}
-                                        {copied === detail.request_id
-                                          ? <Check className="w-3 h-3 text-emerald-600" />
-                                          : <Copy className="w-3 h-3 text-slate-400" />}
-                                      </button>
-                                    </Field>
-                                    <Field label="route ที่ระบบรู้จัก">
-                                      <span className="font-mono">{detail.route ?? <span className="text-slate-400">— (ย่อจาก path ตอนแสดงผล)</span>}</span>
-                                    </Field>
-                                    <Field label="request พร้อมกันตอนนั้น">{detail.inflight ?? '-'}</Field>
-                                    <Field label="คิวรอ DB ตอนนั้น">
-                                      {detail.db_waiting === null ? '-' :
-                                        detail.db_waiting > 0
-                                          ? <span className="text-red-600">{detail.db_waiting} (pool ไม่พอ)</span>
-                                          : '0'}
-                                    </Field>
-                                    <Field label="LINE User ID">
-                                      <span className="font-mono break-all">{detail.line_user_id ?? '-'}</span>
-                                    </Field>
-                                    <Field label="ผู้ใช้ระบบ">
-                                      {detail.admin_username ?? (detail.admin_user_id ? `#${detail.admin_user_id} (ถูกลบแล้ว)` : '-')}
-                                    </Field>
-                                    <Field label="IP ต้นทาง">
-                                      <span className="font-mono">{detail.ip ?? '-'}</span>
-                                    </Field>
-                                    <Field label="เจ้าของเอกสาร (ไม่ใช่คนกดลิงก์)">
-                                      {detail.doc_owner_user_id
-                                        ? <span title={detail.doc_owner_user_id}>
-                                            {detail.doc_owner_name ?? shortUser(detail.doc_owner_user_id)}
-                                          </span>
-                                        : '-'}
-                                    </Field>
-                                    <Field label="ขนาดที่ตอบกลับ">{formatBytes(detail.resp_bytes)}</Field>
-                                    <Field label="เวลารอคิว">
-                                      {detail.queue_waited_ms === null ? '-' : formatMs(detail.queue_waited_ms)}
-                                    </Field>
-                                  </div>
+                    {expandedId === r.id && (
+                      <tr>
+                        <td colSpan={7} className="bg-slate-50/70 px-4 py-4">
+                          {!detail
+                            ? <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
+                            : (
+                              <div className="space-y-3">
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+                                  <Field label="Request ID">
+                                    <button onClick={() => copy(detail.request_id)}
+                                      className="font-mono inline-flex items-center gap-1.5 text-slate-700 hover:text-slate-900">
+                                      {detail.request_id}
+                                      {copied === detail.request_id
+                                        ? <Check className="w-3 h-3 text-emerald-600" />
+                                        : <Copy className="w-3 h-3 text-slate-400" />}
+                                    </button>
+                                  </Field>
+                                  <Field label="route ที่ระบบรู้จัก">
+                                    <span className="font-mono">{detail.route ?? <span className="text-slate-400">— (ย่อจาก path ตอนแสดงผล)</span>}</span>
+                                  </Field>
+                                  <Field label="request พร้อมกันตอนนั้น">{detail.inflight ?? '-'}</Field>
+                                  <Field label="คิวรอ DB ตอนนั้น">
+                                    {detail.db_waiting === null ? '-' :
+                                      detail.db_waiting > 0
+                                        ? <span className="text-red-600">{detail.db_waiting} (pool ไม่พอ)</span>
+                                        : '0'}
+                                  </Field>
+                                  <Field label="LINE User ID">
+                                    <span className="font-mono break-all">{detail.line_user_id ?? '-'}</span>
+                                  </Field>
+                                  <Field label="ผู้ใช้ระบบ">
+                                    {detail.admin_username ?? (detail.admin_user_id ? `#${detail.admin_user_id} (ถูกลบแล้ว)` : '-')}
+                                  </Field>
+                                  <Field label="IP ต้นทาง">
+                                    <span className="font-mono">{detail.ip ?? '-'}</span>
+                                  </Field>
+                                  <Field label="เจ้าของเอกสาร (ไม่ใช่คนกดลิงก์)">
+                                    {detail.doc_owner_user_id
+                                      ? <span title={detail.doc_owner_user_id}>
+                                          {detail.doc_owner_name ?? shortUser(detail.doc_owner_user_id)}
+                                        </span>
+                                      : '-'}
+                                  </Field>
+                                  <Field label="ขนาดที่ตอบกลับ">{formatBytes(detail.resp_bytes)}</Field>
+                                  <Field label="เวลารอคิว">
+                                    {detail.queue_waited_ms === null ? '-' : formatMs(detail.queue_waited_ms)}
+                                  </Field>
+                                </div>
 
+                                <div className="text-xs">
+                                  <div className="text-slate-400 mb-1">path เต็ม</div>
+                                  <code className={`block ${monoChipCls} px-3 py-2 break-all`}>
+                                    {decodePath(detail.path)}
+                                  </code>
+                                </div>
+
+                                {detail.related?.length > 0 && (
                                   <div className="text-xs">
-                                    <div className="text-slate-400 mb-1">path เต็ม</div>
-                                    <code className="block bg-card border border-slate-200 rounded-lg px-3 py-2 break-all text-slate-700">
-                                      {decodePath(detail.path)}
-                                    </code>
-                                  </div>
-
-                                  {detail.related?.length > 0 && (
-                                    <div className="text-xs">
-                                      <div className="text-slate-400 mb-1">
-                                        แถวอื่นที่ Request ID เดียวกัน (งานเบื้องหลังของ request นี้)
-                                      </div>
-                                      <div className="space-y-1">
-                                        {detail.related.map((rel) => (
-                                          <div key={rel.id}
-                                            className="flex items-center gap-3 bg-card border border-slate-200 rounded-lg px-3 py-2">
-                                            <span className="font-mono text-[11px] text-slate-400 w-12">{rel.method}</span>
-                                            <span className="font-mono text-slate-700 flex-1 break-all">{decodePath(rel.path)}</span>
-                                            <span className={`px-2 py-0.5 rounded-md border ${statusStyle(rel.status_code)}`}>
-                                              {rel.status_code}
-                                            </span>
-                                            <span className={`tabular-nums ${durationStyle(rel.duration_ms)}`}>
-                                              {formatMs(rel.duration_ms)}
-                                            </span>
-                                            {rel.queue_waited_ms !== null && (
-                                              <span className="text-slate-400">รอคิว {formatMs(rel.queue_waited_ms)}</span>
-                                            )}
-                                          </div>
-                                        ))}
-                                      </div>
+                                    <div className="text-slate-400 mb-1">
+                                      แถวอื่นที่ Request ID เดียวกัน (งานเบื้องหลังของ request นี้)
                                     </div>
-                                  )}
+                                    <div className="space-y-1">
+                                      {detail.related.map((rel) => (
+                                        <div key={rel.id}
+                                          className="flex items-center gap-3 bg-card border border-slate-200 rounded-lg px-3 py-2">
+                                          <MethodTag method={rel.method} />
+                                          <span className="font-mono text-slate-700 flex-1 break-all">{decodePath(rel.path)}</span>
+                                          <StatusPill code={rel.status_code} />
+                                          <Duration ms={rel.duration_ms} />
+                                          {rel.queue_waited_ms !== null && (
+                                            <span className="text-slate-400">รอคิว {formatMs(rel.queue_waited_ms)}</span>
+                                          )}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
 
-                                  <p className="text-[11px] text-slate-400">
+                                <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[11px] text-slate-400">
+                                  <button
+                                    onClick={() => setTimelineFor(detail.request_id)}
+                                    className="inline-flex items-center gap-1 hover:underline"
+                                    style={{ color: BRAND }}
+                                  >
+                                    <Link2 className="w-3.5 h-3.5" />
+                                    ดูทุกอย่างของ request นี้ (รวมการแก้ไข + บันทึกระบบ)
+                                  </button>
+                                  <span>
                                     ระบบไม่เก็บเนื้อหาที่ส่งมากับ request (ทั้ง body และ query) โดยตั้งใจ
                                     เพื่อให้ log เบาและไม่มีข้อมูลส่วนบุคคลของลูกค้า
-                                  </p>
+                                  </span>
                                 </div>
-                              )}
-                          </td>
-                        </tr>
-                      )}
-                    </React.Fragment>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                              </div>
+                            )}
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                ))}
+              </tbody>
+            </table>
+          </TableScroll>
+        )}
 
-            {/* เลขหน้า */}
-            <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 border-t border-slate-100 text-sm">
-              <div className="flex items-center gap-2 text-slate-500">
-                <span>
-                  แสดง {total === 0 ? 0 : (safePage - 1) * pageSize + 1}
-                  -{Math.min(safePage * pageSize, total)} จาก {total.toLocaleString()}
-                </span>
-                <select value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
-                  className="bg-card border border-slate-200 rounded-lg px-2 py-1 text-xs cursor-pointer">
-                  {PAGE_SIZE_OPTIONS.map(n => <option key={n} value={n}>{n} ต่อหน้า</option>)}
-                </select>
-              </div>
+        {total > 0 && (
+          <Pagination
+            page={Math.min(page, pages)}
+            pages={pages}
+            size={size}
+            total={total}
+            onPage={(p) => set({ page: String(p) })}
+            onSize={(s) => set({ size: String(s), page: '1' })}
+          />
+        )}
+      </TableCard>
 
-              <div className="flex items-center gap-1">
-                <button disabled={safePage <= 1} onClick={() => setPage(p => p - 1)}
-                  className="p-1.5 rounded-lg hover:bg-slate-100 disabled:opacity-30 disabled:hover:bg-transparent"
-                  aria-label="หน้าก่อนหน้า">
-                  <ChevronLeft className="w-4 h-4" />
-                </button>
-                {pageNumbers.map((p, i) =>
-                  p === 'ellipsis'
-                    ? <span key={`e${i}`} className="px-2 text-slate-300">…</span>
-                    : <button key={p} onClick={() => setPage(p)}
-                        className={`min-w-[32px] h-8 rounded-lg text-xs transition-all ${
-                          p === safePage ? 'text-white' : 'text-slate-600 hover:bg-slate-100'}`}
-                        style={p === safePage ? { background: 'var(--brand)' } : undefined}>
-                        {p}
-                      </button>
-                )}
-                <button disabled={safePage >= totalPages} onClick={() => setPage(p => p + 1)}
-                  className="p-1.5 rounded-lg hover:bg-slate-100 disabled:opacity-30 disabled:hover:bg-transparent"
-                  aria-label="หน้าถัดไป">
-                  <ChevronRight className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          </div>
-        </>
+      {timelineFor && (
+        <RequestTimeline requestId={timelineFor} onClose={() => setTimelineFor(null)} />
       )}
-    </div>
-  );
-}
-
-function StatCard({ label, value, sub, danger }: {
-  label: string; value: string; sub?: string; danger?: boolean;
-}) {
-  return (
-    <div className={`bg-card rounded-2xl border p-4 ${danger ? 'border-red-200' : 'border-slate-200'}`}>
-      <div className="text-xs text-slate-500">{label}</div>
-      <div className={`text-2xl font-semibold mt-1 ${danger ? 'text-red-600' : 'text-slate-800'}`}>{value}</div>
-      {sub && <div className={`text-[11px] mt-1 ${danger ? 'text-red-500' : 'text-slate-400'}`}>{sub}</div>}
     </div>
   );
 }

@@ -4076,8 +4076,10 @@ app.get('/api/admin/api-logs', adminAuthMiddleware, requireRole('admin'), async 
       minDuration: q.minDuration ? parseInt(q.minDuration) : undefined,
     };
 
+    // sort/dir ถูกกรองด้วยรายชื่อขาวใน listApiLogs — ค่าที่ไม่รู้จักตกกลับ created_at DESC
     const [data, total] = await Promise.all([
-      listApiLogs(filters, limit, offset),
+      listApiLogs(filters, limit, offset, q.sort ? String(q.sort) : undefined,
+                  q.dir ? String(q.dir) : undefined),
       countApiLogs(filters),
     ]);
     res.json({ data, total, limit, offset, dateFrom, dateTo });

@@ -18,10 +18,8 @@ import { ProductMoqRules } from './ProductMoqRules';
 import { BlockRules } from './BlockRules';
 import { ShippingFee } from './ShippingFee';
 import { SyncPanel } from './SyncPanel';
-import { ApiLogs } from './ApiLogs';
-import { Traffic } from './logs/Traffic';
-import { AuditLogs } from './logs/AuditLogs';
-import { SystemLogs } from './logs/SystemLogs';
+import { LogsShell } from './logs/LogsShell';
+import type { LogTab } from './logs/LogsShell';
 import {
   LogOut,
   User as UserIcon,
@@ -78,20 +76,16 @@ const NAV_ITEMS: { key: MainTab; label: string; icon: typeof LayoutDashboard; ro
 ];
 
 /**
- * กลุ่ม "บันทึกและรายงาน" — 4 หน้าที่ตอบคนละคำถามแต่ใช้ request_id ตัวเดียวกันโยงถึงกันได้
+ * กลุ่ม "Activity Log" — 4 หน้าที่ตอบคนละคำถามแต่ใช้ request_id ตัวเดียวกันโยงถึงกันได้
  *
- * "บันทึกการเรียก API" คือหน้าเดิมที่ย้ายเข้ามาอยู่ในกลุ่ม ไม่ได้ถูกแก้แม้แต่บรรทัดเดียว
- * (ApiLogs.tsx ใช้งานได้ดีอยู่แล้ว — การขยับเพื่อความสวยของโค้ดคือความเสี่ยงเปล่า)
+ * เมนูข้างซ้ายเป็น "ปุ่มเดียว" ไม่มีเมนูย่อยพับได้อีกแล้ว — การสลับระหว่าง 4 หน้าอยู่ที่
+ * แถบแท็บใน LogsShell ที่เดียว · เมนูย่อยกับแท็บที่ทำงานซ้ำกันคือการให้ผู้ใช้ต้องจำสองทาง
+ * ไปที่เดียวกัน และทำให้ sidebar ยาวขึ้นโดยไม่ได้อะไรกลับมา
  */
-const LOGS_SUBITEMS: { key: MainTab; label: string }[] = [
-  { key: 'traffic', label: 'รายงานการใช้งาน' },
-  { key: 'apilogs', label: 'บันทึกการเรียก API' },
-  { key: 'auditlogs', label: 'บันทึกการแก้ไข' },
-  { key: 'systemlogs', label: 'บันทึกระบบ' },
-];
+const LOG_TABS = new Set<MainTab>(['traffic', 'apilogs', 'auditlogs', 'systemlogs']);
 
-/** แท็บที่อยู่ใต้กลุ่ม "บันทึกและรายงาน" — ใช้ตัดสินว่าหัวข้อกลุ่มควรขึ้นสถานะ active ไหม */
-const LOG_TABS = new Set<MainTab>(LOGS_SUBITEMS.map((i) => i.key));
+/** แท็บที่เปิดให้เมื่อกดเมนูครั้งแรก — ตรงกับแท็บซ้ายสุดใน LogsShell */
+const LOG_TAB_DEFAULT: MainTab = 'traffic';
 
 const SETTINGS_SUBITEMS: { key: SubTab; label: string }[] = [
   { key: 'quotation', label: 'เงื่อนไขหลัก' },
@@ -123,8 +117,9 @@ function AdminContent() {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [settingsExpanded, setSettingsExpanded] = useState(true);
-  // ตั้งต้นปิด — คนส่วนใหญ่เข้ามาทำงานประจำวัน ไม่ได้มาดู log ทุกครั้ง
-  const [logsExpanded, setLogsExpanded] = useState(false);
+  // แท็บล่าสุดในกลุ่ม Activity Log — ออกไปหน้าอื่นแล้วกดเมนูกลับมา ต้องได้แท็บเดิม
+  // ไม่ใช่เด้งกลับหน้าแรกทุกครั้ง (คนที่ตามเรื่องอยู่มักวนกลับมาที่หน้าเดิมซ้ำ ๆ)
+  const [lastLogTab, setLastLogTab] = useState<MainTab>(LOG_TAB_DEFAULT);
   // ตอน sidebar ย่อ: กดไอคอนตั้งค่า → เปิด flyout เลือก sub-tab (nav มี overflow-y-auto จึงต้องลอยแบบ fixed)
   const [settingsFlyoutTop, setSettingsFlyoutTop] = useState<number | null>(null);
   const settingsBtnRef = useRef<HTMLButtonElement>(null);
@@ -212,7 +207,7 @@ function AdminContent() {
     setMobileOpen(false);
     closeSettingsFlyout();
     if (tab === 'settings') setSettingsExpanded(true);
-    if (LOG_TABS.has(tab)) setLogsExpanded(true);
+    if (LOG_TABS.has(tab)) setLastLogTab(tab);
   };
 
   const goToSubTab = (tab: SubTab) => {
@@ -313,48 +308,19 @@ function AdminContent() {
           <>
         <div className="h-px bg-slate-100 my-2.5 mx-1.5" />
 
-        {/* บันทึกและรายงาน — กลุ่มพับได้ แบบเดียวกับกลุ่มตั้งค่า */}
+        {/* Activity Log — เมนูเดียว หน้าตาเท่ากับเมนูหลักอันอื่น
+            การเลือกว่าเป็นหน้าไหนใน 4 หน้าอยู่ที่แถบแท็บใน LogsShell ทั้งหมด */}
         <button
-          onClick={() => (collapsed ? goTo('traffic') : setLogsExpanded((v) => !v))}
-          title={collapsed ? 'บันทึกและรายงาน' : undefined}
-          aria-expanded={collapsed ? undefined : logsExpanded}
+          onClick={() => goTo(lastLogTab)}
+          title={collapsed ? 'Activity Log' : undefined}
           className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${
             collapsed ? 'justify-center' : ''
           } ${LOG_TABS.has(effectiveTab) ? '' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'}`}
           style={LOG_TABS.has(effectiveTab) ? { backgroundColor: BRAND_SOFT_STRONG, color: BRAND } : undefined}
         >
           <ClipboardList className="w-[18px] h-[18px] shrink-0" />
-          {!collapsed && (
-            <>
-              <span className="whitespace-nowrap flex-1 text-left">บันทึกและรายงาน</span>
-              <ChevronDown
-                className={`w-3.5 h-3.5 shrink-0 transition-transform ${logsExpanded ? '' : '-rotate-90'}`}
-              />
-            </>
-          )}
+          {!collapsed && <span className="whitespace-nowrap">Activity Log</span>}
         </button>
-
-        {!collapsed && logsExpanded && (
-          <div className="pl-4 mt-0.5 space-y-0.5">
-            {LOGS_SUBITEMS.map(({ key, label }) => {
-              const active = effectiveTab === key;
-              return (
-                <button
-                  key={key}
-                  onClick={() => goTo(key)}
-                  className={`w-full text-left pl-6 pr-3 py-2 rounded-lg text-xs font-medium transition-all border-l-2 ${
-                    active
-                      ? 'border-current'
-                      : 'border-transparent text-slate-400 hover:text-slate-700 hover:bg-slate-50'
-                  }`}
-                  style={active ? { color: BRAND, borderColor: BRAND, backgroundColor: BRAND_SOFT } : undefined}
-                >
-                  {label}
-                </button>
-              );
-            })}
-          </div>
-        )}
 
         <div className="h-px bg-slate-100 my-2.5 mx-1.5" />
 
@@ -536,21 +502,11 @@ function AdminContent() {
             <div className="animate-fade-in">
               <Quotations />
             </div>
-          ) : effectiveTab === 'apilogs' ? (
+          ) : LOG_TABS.has(effectiveTab) ? (
+            /* 4 หน้าในกลุ่ม "บันทึกและรายงาน" ใช้กรอบเดียวกัน — แถบแท็บอยู่ใน LogsShell
+               เมนูย่อยข้างซ้ายกับแท็บชี้ที่เดียวกัน (goTo ตัวเดียวกัน) ไม่มี state ซ้อน */
             <div className="animate-fade-in">
-              <ApiLogs />
-            </div>
-          ) : effectiveTab === 'traffic' ? (
-            <div className="animate-fade-in">
-              <Traffic />
-            </div>
-          ) : effectiveTab === 'auditlogs' ? (
-            <div className="animate-fade-in">
-              <AuditLogs />
-            </div>
-          ) : effectiveTab === 'systemlogs' ? (
-            <div className="animate-fade-in">
-              <SystemLogs />
+              <LogsShell tab={effectiveTab as LogTab} onTab={goTo} />
             </div>
           ) : effectiveTab === 'dashboard' ? (
             <div className="grid grid-cols-1 gap-6">
