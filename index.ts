@@ -277,6 +277,9 @@ app.post('/callback', line.middleware(lineConfig), (req: any, res: any) => {
           const total = now - receivedAt;
           const m = queueMetrics;
           const processed = now - startedAt;
+          // ตัวลบต้องเป็น busyMs (เวลาจริงที่มี LLM ค้างอยู่) ไม่ใช่ ms ที่เป็นผลรวมของทุก call
+          // — ยิงขนานทีไรผลรวมจะโตเกินเวลาที่ผ่านไปจริง แล้ว own ติดลบ (เคยเจอ -1,996ms)
+          const ownMs = processed - llm.busyMs;
           // P4a — แยก "รอ LLM" ออกจาก "งานของเราเอง (DB + LINE API + โค้ด)" ในบรรทัดเดียวกัน
           // own สูง = ไปไล่โค้ด/query · llm สูง = ไปลดจำนวนการเรียกหรือแก้ prompt
           // calls บอกด้วยว่าเรียกซ้อนกันกี่ครั้งต่อ 1 ข้อความ ซึ่งเป็นตัวคูณที่มองไม่เห็นมาตลอด
@@ -285,7 +288,10 @@ app.post('/callback', line.middleware(lineConfig), (req: any, res: any) => {
           console.log(
             `[queue] reqId=${reqId ?? '-'} ${who} waited=${waited}ms processed=${processed}ms` +
             ` llm=${llm.ms}ms/${llm.calls}call${llm.errors > 0 ? `/${llm.errors}err` : ''}` +
-            ` own=${processed - llm.ms}ms total=${total}ms` +
+            // busy โผล่เฉพาะตอนที่ยิงขนานจริง (busy < ms) — บอกว่าเวลาที่รอ LLM จริง ๆ คือเท่าไร
+            // และอธิบายเองว่าทำไม llm + own ถึงไม่เท่ากับ processed ในบรรทัดนั้น
+            `${llm.busyMs !== llm.ms ? ` busy=${llm.busyMs}ms` : ''}` +
+            ` own=${ownMs}ms total=${total}ms` +
             // cache ของ DeepSeek — พิมพ์เฉพาะตอนมีการเรียกจริง ไม่งั้นบรรทัดรกด้วย 0/0 ของ event ที่ไม่เรียก LLM
             `${llm.promptTokens > 0 ? ` tok=${llm.promptTokens}/cached=${llm.cachedTokens}` : ''}` +
             `${total > BUDGET_MS ? ' ⚠️เกินงบ' : ''}` +
@@ -296,7 +302,7 @@ app.post('/callback', line.middleware(lineConfig), (req: any, res: any) => {
             requestId: reqId, lineUserId: queueKey, outcome, waitedMs: waited, totalMs: total,
             // ตัวเลขชุดเดียวกับบรรทัด [queue] ข้างบนเป๊ะ ๆ — บรรทัดนั้นหายทุกครั้งที่ recreate
             // container ส่วนแถวนี้อยู่ยาวตาม retention ของ api_logs
-            llmMs: llm.ms, llmCalls: llm.calls, ownMs: processed - llm.ms,
+            llmMs: llm.ms, llmCalls: llm.calls, ownMs,
             llmPromptTokens: llm.promptTokens, llmCachedTokens: llm.cachedTokens,
           });
         }

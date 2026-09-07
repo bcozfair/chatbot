@@ -47,6 +47,9 @@ export const LLM_MODEL = 'deepseek-v4-flash';
 export async function createChatCompletion(params: Record<string, any>): Promise<any> {
   const timing = llmTimingStore.getStore();
   const t0 = timing ? Date.now() : 0;
+  // เปิดช่วง busy ตอนเป็น call แรกที่ยังค้างอยู่ — call ที่ซ้อนเข้ามาระหว่างช่วงนี้ไม่เปิดช่วงใหม่
+  // ⇒ เวลาที่ทับกันถูกนับครั้งเดียว (ดูเหตุผลที่ฟิลด์ busyMs)
+  if (timing && timing.inFlight++ === 0) timing.busyStart = t0;
   try {
     const res: any = await openai.chat.completions.create({
       model: LLM_MODEL,
@@ -69,7 +72,14 @@ export async function createChatCompletion(params: Record<string, any>): Promise
   } finally {
     // นับทั้งครั้งที่สำเร็จและครั้งที่พัง — ครั้งที่พังคือครั้งที่กินเวลานานที่สุด (timeout 20 วิ + retry)
     // ถ้าไม่นับ ตัวเลขจะสวยกว่าความจริงพอดีตอนที่ระบบมีปัญหา ซึ่งเป็นตอนที่ต้องการตัวเลขที่สุด
-    if (timing) { timing.ms += Date.now() - t0; timing.calls++; }
+    if (timing) {
+      const t1 = Date.now();
+      timing.ms += t1 - t0;
+      timing.calls++;
+      // ปิดช่วง busy ตอน call สุดท้ายที่ค้างอยู่จบ ⇒ busyMs = union ของช่วงเวลา ไม่ใช่ผลรวม
+      // call ที่ยังค้างตอนงานหมดเวลา (abort) จะไม่ถูกนับ — เหมือน ms ที่ไม่นับเช่นกัน
+      if (--timing.inFlight === 0) timing.busyMs += t1 - timing.busyStart;
+    }
   }
 }
 
@@ -93,6 +103,17 @@ export interface LlmTiming {
   calls: number;
   errors: number;
   /**
+   * เวลาตามนาฬิกาจริงที่ "มี LLM ค้างอยู่อย่างน้อย 1 call" — ช่วงที่ยิงซ้อนกันนับครั้งเดียว
+   *
+   * ทำไมต้องมีคู่กับ ms: ms เป็นผลรวมของทุก call ⇒ ตอนยิงขนาน (Promise.all) มันโตเกินเวลาจริง
+   * ที่ผ่านไปได้ ทำให้ own_ms = processed - ms ติดลบ (เจอจริงใน api_logs 1 ใน 72 แถว: -1,996ms)
+   * ตัวนี้ไม่มีทางเกินเวลาที่ผ่านไปจริงตามนิยาม ⇒ ใช้เป็นตัวลบของ own_ms ได้ตรง ๆ
+   *
+   * เก็บ ms ไว้เหมือนเดิมเพราะตอบคนละคำถาม: ms/calls = "เฉลี่ยต่อ call นานแค่ไหน" (ไปแก้ prompt)
+   * ส่วน busyMs = "งานนี้เสียเวลาไปกับการรอ LLM จริง ๆ เท่าไร" (ไปเทียบกับงานฝั่งเรา)
+   */
+  busyMs: number;
+  /**
    * G#2 — prompt token รวมทุก call และส่วนที่ DeepSeek คืนมาจากแคช
    *
    * แคชเป็นของฝั่ง DeepSeek เอง เข้าเมื่อ prefix ตรงกันเป๊ะและยาวพอ (วัดจริง 2026-09-04:
@@ -103,12 +124,15 @@ export interface LlmTiming {
    */
   promptTokens: number;
   cachedTokens: number;
+  /** ใช้ภายใน createChatCompletion เท่านั้น — ตัวนับ call ที่ยังไม่จบ / เวลาเริ่มช่วง busy ปัจจุบัน */
+  inFlight: number;
+  busyStart: number;
 }
 
 const llmTimingStore = new AsyncLocalStorage<LlmTiming>();
 
 export function newLlmTiming(): LlmTiming {
-  return { ms: 0, calls: 0, errors: 0, promptTokens: 0, cachedTokens: 0 };
+  return { ms: 0, calls: 0, errors: 0, busyMs: 0, promptTokens: 0, cachedTokens: 0, inFlight: 0, busyStart: 0 };
 }
 
 /**
