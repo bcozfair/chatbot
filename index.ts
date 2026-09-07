@@ -85,6 +85,12 @@ import { getJwtSecret } from './config/jwt.js';
 import { getAppUrl } from './config/appUrl.js';
 import { adminAuthMiddleware, requireRole, type Role } from './config/auth.js';
 import {
+  listOdooQuotationMakers,
+  isValidQuotationMaker,
+  getAdminQuotationMaker,
+  setAdminQuotationMaker,
+} from './services/webIdentity.js';
+import {
   getClientIp,
   checkLoginRateLimit,
   recordFailedLogin,
@@ -2179,11 +2185,17 @@ app.get('/api/admin/salespersons', adminAuthMiddleware, requireRole('admin'), as
   console.log(">>> GET /api/admin/salespersons received!");
   try {
     // quotation_count ใช้เตือนตอนลบ — ลบพนักงานแล้ว FK ตั้ง quotations.user_id = NULL (ON DELETE SET NULL)
+    //
+    // ตัดแถวพร็อกซีของหน้าเว็บแอดมิน (`web:<admin_id>:<sp_user_id>`) ออก — แถวพวกนั้นไม่ใช่พนักงานจริง
+    // แต่ก๊อป name/salesperson_id มาจากเซลส์ตัวจริง ⇒ ถ้าไม่กรอง หน้า "จัดการข้อมูลพนักงาน"
+    // จะเห็นชื่อซ้ำและขึ้นเตือนรหัสพนักงานซ้ำทุกคู่ (แผน web-quote-request §2.8)
+    // ผลที่ยอมรับแล้ว: quotation_count ของเซลส์จะไม่นับใบที่แอดมินออกในนามเขา
     const result = await pool.query(`
       SELECT s.user_id, s.name, s.status, s.phone, s.salesperson_id, s.branch,
              s.employee_quotation_id, s.created_at, s.updated_at,
              (SELECT count(*) FROM quotations q WHERE q.user_id = s.user_id) AS quotation_count
         FROM salesperson s
+       WHERE s.user_id NOT LIKE 'web:%'
        ORDER BY s.name ASC`);
 
     const saleSigsDir = path.join(process.cwd(), 'data', 'sale_sigs');
@@ -2290,6 +2302,68 @@ app.delete('/api/admin/salespersons/:userId', adminAuthMiddleware, requireRole('
   } catch (err: any) {
     console.error("DELETE salesperson error:", err);
     res.status(500).json({ error: err.message || 'Internal Server Error' });
+  }
+});
+
+// ═══════════════ หน้าเว็บขอใบเสนอราคา — ตัวตนผู้จัดทำ (เฟส B) ═══════════════
+// แผน: docs/plan-web-quote-request.md §2 · ตรรกะทั้งหมดอยู่ที่ services/webIdentity.ts
+//
+// ทุก route ในกลุ่ม /api/admin/webchat/* ต้องผ่าน adminAuthMiddleware + requireRole เสมอ
+// — เฟสหลังเปิดโหมด "เตือนแต่ไม่บล็อก" ⇒ ใครยิงกลุ่มนี้ได้ = ออกใบข้ามกฎได้ทุกข้อ
+// เส้นนี้จึงต้องรัดกว่าเส้น LIFF เดิม ไม่ใช่เท่ากัน (§ขั้น 8 ของแผน)
+
+/** รายชื่อผู้จัดทำที่ Odoo รู้จักจริง — ให้ dropdown ฝั่งหน้าเว็บใช้เลือก (ห้ามพิมพ์เอง) */
+app.get('/api/admin/webchat/makers', adminAuthMiddleware, requireRole('admin', 'subadmin'), async (req: any, res: any) => {
+  try {
+    res.json({ makers: await listOdooQuotationMakers() });
+  } catch (err: any) {
+    console.error('GET /api/admin/webchat/makers error:', err);
+    res.status(500).json({ error: 'ไม่สามารถดึงรายชื่อผู้จัดทำได้' });
+  }
+});
+
+/** ชื่อผู้จัดทำที่แอดมินคนที่ล็อกอินอยู่ตั้งไว้ — null = ยังไม่ได้ตั้ง หน้าเว็บต้องบล็อกไม่ให้เริ่มแชท */
+app.get('/api/admin/webchat/me', adminAuthMiddleware, requireRole('admin', 'subadmin'), async (req: any, res: any) => {
+  try {
+    const admin = req.admin;
+    const maker = await getAdminQuotationMaker(admin.id);
+    res.json({
+      admin_id: admin.id,
+      name: admin.name,
+      role: admin.role,
+      employee_quotation_id: maker,
+      is_ready: maker !== null
+    });
+  } catch (err: any) {
+    console.error('GET /api/admin/webchat/me error:', err);
+    res.status(500).json({ error: 'ไม่สามารถดึงข้อมูลผู้จัดทำได้' });
+  }
+});
+
+/**
+ * ตั้งชื่อผู้จัดทำของตัวเอง — รับได้เฉพาะชื่อที่มีอยู่จริงในรายชื่อจาก Odoo
+ *
+ * ตรวจซ้ำฝั่ง server แม้ UI จะเป็น dropdown อยู่แล้ว เพราะชื่อนี้ถูกส่งเข้าไฟล์ export ตรง ๆ
+ * (ช่อง J) — ปล่อยชื่อที่ Odoo ไม่รู้จักหลุดเข้าไป = ไฟล์ import ฝั่งโน้นพัง
+ * แอดมินตั้งได้เฉพาะของตัวเอง (`req.admin.id`) ไม่มีทางตั้งให้คนอื่นผ่าน route นี้
+ */
+app.put('/api/admin/webchat/me', adminAuthMiddleware, requireRole('admin', 'subadmin'), express.json(), async (req: any, res: any) => {
+  try {
+    const raw = req.body?.employee_quotation_id;
+    if (typeof raw !== 'string' || raw.trim() === '') {
+      return res.status(400).json({ error: 'ต้องระบุชื่อผู้จัดทำ (employee_quotation_id)' });
+    }
+    if (!(await isValidQuotationMaker(raw))) {
+      return res.status(400).json({
+        error: 'ชื่อผู้จัดทำนี้ไม่มีอยู่ในรายชื่อจาก Odoo — เลือกจากรายการที่ระบบให้เท่านั้น',
+        hint: 'รายชื่ออัปเดตตามรอบ npm run sync:saleorders'
+      });
+    }
+    const saved = await setAdminQuotationMaker(req.admin.id, raw);
+    res.json({ success: true, employee_quotation_id: saved });
+  } catch (err: any) {
+    console.error('PUT /api/admin/webchat/me error:', err);
+    res.status(500).json({ error: 'ไม่สามารถบันทึกชื่อผู้จัดทำได้' });
   }
 });
 

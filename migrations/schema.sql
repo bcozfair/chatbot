@@ -69,6 +69,7 @@ CREATE TABLE public.admin_users (
     role character varying(20) DEFAULT 'admin'::character varying NOT NULL,
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    employee_quotation_id character varying(255),
     CONSTRAINT admin_users_role_check CHECK (role IN ('admin', 'subadmin', 'user'))
 );
 
