@@ -697,15 +697,17 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
         await import('../services/rules/index.js');
       const blockRules = await loadProductBlockRules();
       if (blockRules.length > 0) {
-        // DISTINCT ON (model) + ORDER BY เดียวกับ checkBlockedProducts — ต้องเลือกแถวเดียวกัน
-        // ไม่งั้นการ์ดกับด่านจริงอาจตัดสินคนละอย่างสำหรับสินค้าตัวเดียวกัน
+        // DISTINCT ON (btrim(model)) + ORDER BY เดียวกับ checkBlockedProducts — ต้องเลือกแถวเดียวกัน
+        // และเทียบด้วย btrim เหมือนกัน ไม่งั้นการ์ดกับด่านจริงตัดสินคนละอย่างสำหรับสินค้าตัวเดียวกัน
+        // (สินค้าที่ model ติดช่องว่างจาก Odoo — ดูคำอธิบายเต็มที่ checkBlockedProducts)
         const { rows: scopeRows } = await pool.query(`
-          SELECT DISTINCT ON (model)
-                 model, model AS code, brand, series, production, internal_reference
+          SELECT DISTINCT ON (btrim(model))
+                 btrim(model) AS code, btrim(model) AS model,
+                 brand, series, production, internal_reference
             FROM products
-           WHERE model = ANY($1)
-           ORDER BY model, quantity_on_hand_unreserved DESC
-        `, [productCodes]);
+           WHERE btrim(model) = ANY($1)
+           ORDER BY btrim(model), quantity_on_hand_unreserved DESC
+        `, [productCodes.map((c: string) => String(c).trim())]);
         const { buildViolationDisplay } = await import('../services/quotationService.js');
         for (const p of scopeRows) {
           const rule = findBlockingRule(blockRules, normalizeProductScope(p));
@@ -1020,7 +1022,7 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
 
       // แถบ "ถูกระงับ" มาก่อนแถบสต๊อก — เป็นเรื่องที่เซลล์แก้เองไม่ได้ ต้องเห็นก่อน
       // ค่าขนส่งข้ามเสมอ ตรงกับที่ด่านกลางและ PDF ข้ามบรรทัดนี้
-      const blockedText = isShippingFeeLine ? undefined : blockedMap[itemKey];
+      const blockedText = isShippingFeeLine ? undefined : blockedMap[String(itemKey).trim()];
       if (blockedText) {
         hasBlockedItem = true;
         summaryText += `   ${blockedText}\n`;
