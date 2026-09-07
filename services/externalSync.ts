@@ -90,6 +90,7 @@ export const TABLE_REGISTRY: SyncTableDef[] = [
   { table: 'shipping_fee_config',      mode: 'snapshot', pk: ['id'],                 pollHintSeconds: 900 },
   { table: 'product_stock_rules',      mode: 'snapshot', pk: ['internal_reference'], pollHintSeconds: 900 },
   { table: 'product_moq_rules',        mode: 'snapshot', pk: ['internal_reference'], pollHintSeconds: 900 },
+  { table: 'product_block_rules',      mode: 'snapshot', pk: ['id'],                 pollHintSeconds: 900 },
   { table: 'product_optional_links',   mode: 'snapshot', pk: ['id'],                 pollHintSeconds: 900 },
   { table: 'sync_settings',            mode: 'snapshot', pk: ['id'],                 pollHintSeconds: 900 },
   { table: 'sync_state',               mode: 'snapshot', pk: ['resource'],           pollHintSeconds: 900 },
