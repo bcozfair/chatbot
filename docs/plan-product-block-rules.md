@@ -144,6 +144,27 @@ return (rule.internal_reference ? 16 : 0)
 2. **`RULES_ORDER_BY` ใน `quotationRules.ts`** อ้าง `series/brand/production` เท่านั้น — **ไม่ต้องแก้**
    เพราะตารางนั้นไม่มีคอลัมน์ใหม่ (และ ORDER BY นี้ไม่ได้ใช้ตัดสินจริงอยู่แล้ว)
 3. **ไม่แตะ `productionMatchKind`** — prefix-match `'import'` ยังใช้กับ production เท่านั้นเหมือนเดิม
+4. **บิตใหม่ต้องอยู่ "เหนือ" ของเดิม** (`ref=16, model=8`) ห้ามแทรกกลาง
+   ค่า series=4 / brand=2 / production=1 ต้องคงเดิมเป๊ะ ลำดับของกฎ 3 ระดับเดิมจึงไม่ขยับแม้แต่คู่เดียว
+
+### 2.3.1 ตรวจแล้ว: engine นี้มีตารางเดียวที่ใช้จริง
+
+`grep -rn "selectRule\|ruleMatchesScope\|scopeSpecificity"` ได้ผลว่า **มีแค่ `quotationRules.ts`**
+ที่เรียก `selectRule()` (3 จุด: `resolveQuotationRule`, `findBlockingRule`, `findCompanyRule`)
+
+อีก 2 ตารางที่ใช้ `RuleCacheKey` ร่วมกันไม่ได้ผ่าน engine เลย — ทั้งคู่เป็นแถวเดียว `WHERE id = 1`:
+
+| ตาราง | อ่านที่ | ผ่าน scope matching? |
+| --- | --- | --- |
+| `shipping_fee_config` | [services/shippingFee.ts:69](../services/shippingFee.ts#L69) | ❌ `id = 1` |
+| `quotation_credit_policy` | [services/creditHoldService.ts:70](../services/creditHoldService.ts#L70) | ❌ `id = 1` |
+
+⇒ การขยาย `ScopeKey` เป็น 5 ระดับกระทบได้แค่ `quotation_rules` ตารางเดียว
+และตารางนั้นไม่มีคอลัมน์ `model` / `internal_reference` → `undefined` → `ruleMatchesScope` ข้าม
+และ `scopeSpecificity` บวก 0 ⇒ **ผลลัพธ์เดิมทุกบิต**
+
+`grep` ยังยืนยันว่า**ไม่มีที่ไหนสร้าง `ProductScope` เป็น object literal ตรง ๆ เลย** (สร้างผ่าน
+`normalizeProductScope()` ทั้งหมด) การเพิ่ม field จึงไม่ทำ TypeScript พังสักจุด
 
 ### 2.4 พิสูจน์ว่าไม่พัง
 
@@ -185,32 +206,51 @@ CREATE TABLE public.product_block_rules (
     created_at         timestamptz NOT NULL DEFAULT now(),
     updated_at         timestamptz NOT NULL DEFAULT now(),
     -- กันแถวว่างทั้งแถว ซึ่งจะบล็อกสินค้าทั้งคลัง
+    --
+    -- ⚠️ ต้องใช้ NULLIF(btrim(...),'') ไม่ใช่ IS NOT NULL เฉย ๆ
+    -- engine ฝั่ง TS ตัดสิน wildcard ด้วย truthy (`if (rule.production)`) แปลว่า '' = wildcard เท่ากับ NULL
+    -- ถ้า CHECK ดูแค่ IS NOT NULL แถวที่ทุกช่องเป็น '' จะผ่าน constraint
+    -- แล้วกลายเป็นกฎ wildcard ที่บล็อกสินค้าทุกตัวในระบบ
     CONSTRAINT product_block_rules_scope_not_empty CHECK (
-        production IS NOT NULL OR brand IS NOT NULL OR series IS NOT NULL
-        OR model IS NOT NULL OR internal_reference IS NOT NULL
+        NULLIF(btrim(production), '')         IS NOT NULL
+     OR NULLIF(btrim(brand), '')              IS NOT NULL
+     OR NULLIF(btrim(series), '')             IS NOT NULL
+     OR NULLIF(btrim(model), '')              IS NOT NULL
+     OR NULLIF(btrim(internal_reference), '') IS NOT NULL
     )
 );
 
 -- กฎซ้ำ scope เดียวกันไม่มีประโยชน์ และทำให้ผลลัพธ์ขึ้นกับ id
+-- lower(btrim(...)) เพราะ engine เทียบแบบ trim + lowercase — 'ACME' กับ 'acme ' คือกฎเดียวกัน
+-- ถ้าใช้ COALESCE เฉย ๆ จะสร้างกฎซ้ำที่ระบบมองว่าเหมือนกันได้ แล้วผลลัพธ์ไปขึ้นกับ id
 CREATE UNIQUE INDEX product_block_rules_scope_uniq
     ON public.product_block_rules (
-        COALESCE(production, ''), COALESCE(brand, ''), COALESCE(series, ''),
-        COALESCE(model, ''), COALESCE(internal_reference, '')
+        lower(btrim(COALESCE(production, ''))),
+        lower(btrim(COALESCE(brand, ''))),
+        lower(btrim(COALESCE(series, ''))),
+        lower(btrim(COALESCE(model, ''))),
+        lower(btrim(COALESCE(internal_reference, '')))
     );
 
 -- ย้ายกฎบล็อกเดิมเข้ามา (ตอนนี้ยังไม่มีใครอ่านตารางนี้)
+-- NULLIF(btrim(..)) ตอน SELECT ด้วย เพื่อไม่ให้ '' หรือ '  ' หลุดเข้าตารางใหม่
 INSERT INTO public.product_block_rules (production, brand, series)
-SELECT production, brand, series
+SELECT NULLIF(btrim(production), ''), NULLIF(btrim(brand), ''), NULLIF(btrim(series), '')
   FROM public.quotation_rules
  WHERE is_locked = true
-   AND (production IS NOT NULL OR brand IS NOT NULL OR series IS NOT NULL);
+   AND (NULLIF(btrim(production), '') IS NOT NULL
+     OR NULLIF(btrim(brand), '')      IS NOT NULL
+     OR NULLIF(btrim(series), '')     IS NOT NULL);
 
 -- ถ้ามีแถว is_locked ที่ scope ว่างทั้งหมด = บล็อกทั้งคลัง ต้องหยุดให้คนมาดู ไม่ใช่ข้ามเงียบ ๆ
 DO $$
 DECLARE n int;
 BEGIN
   SELECT count(*) INTO n FROM public.quotation_rules
-   WHERE is_locked = true AND production IS NULL AND brand IS NULL AND series IS NULL;
+   WHERE is_locked = true
+     AND NULLIF(btrim(production), '') IS NULL
+     AND NULLIF(btrim(brand), '')      IS NULL
+     AND NULLIF(btrim(series), '')     IS NULL;
   IF n > 0 THEN
     RAISE EXCEPTION 'พบกฎ is_locked ที่ scope ว่างทั้งแถว % แถว — ต้องตัดสินใจก่อนย้าย', n;
   END IF;
@@ -222,8 +262,28 @@ COMMIT;
 **ต้องเช็คก่อนรัน** (บน DB จริง):
 
 ```sql
-SELECT id, production, brand, series FROM quotation_rules WHERE is_locked = true;
+SET statement_timeout = '10s';
+SELECT id,
+       production, brand, series,
+       (NULLIF(btrim(production),'') IS NULL
+        AND NULLIF(btrim(brand),'')  IS NULL
+        AND NULLIF(btrim(series),'') IS NULL) AS blocks_everything
+  FROM quotation_rules WHERE is_locked = true;
 ```
+
+### 3.1 ต้องขึ้นทะเบียนตารางใหม่กับ externalSync ด้วย
+
+[services/externalSync.ts:88-92](../services/externalSync.ts#L88) มีรายชื่อตารางที่ sync ออกไปปลายทาง
+ตารางกฎอื่นอยู่ในนั้นครบ (`product_moq_rules`, `product_stock_rules`, `quotation_rules`)
+ถ้าลืมเพิ่มตัวใหม่ ระบบยังทำงานถูกทุกอย่าง — แต่ข้อมูลกฎบล็อกจะไม่ถูกส่งออกเลย และไม่มี error ให้เห็น
+
+```ts
+{ table: 'product_block_rules',      mode: 'snapshot', pk: ['id'],                 pollHintSeconds: 900 },
+```
+
+ทำในเฟส 2 พร้อมกับ migration (แถวยังว่างอยู่ ยังไม่มีผลอะไร)
+
+---
 
 > **`is_locked` ยังอยู่ในตารางเดิมตลอดเฟส 2-4** — ตั้งใจให้ rollback ได้ด้วยการ revert โค้ดอย่างเดียว
 > ไม่ต้องแตะ DB · จะลบตอนเฟส 5
@@ -312,6 +372,17 @@ if (blockingRule) throw new Error(buildBlockedPdfMessage(blockingRule, item.prod
 ทุก write path **ต้องเรียก `invalidateRuleCache('product_block_rules')`** — ลืมแล้วแอดมินกดบันทึกแต่ไม่มีผล 60 วิ
 ทุกตัว `adminAuthMiddleware, requireRole('admin')` เหมือน moq-rules
 
+**normalize ค่าก่อน insert/update ทุกครั้ง** — ห้ามส่ง `''` หรือ `'  '` ลง DB:
+
+```ts
+const nz = (v: unknown) => { const t = String(v ?? '').trim(); return t === '' ? null : t; };
+// ...แล้วใช้ nz(production), nz(brand), nz(series), nz(model), nz(internal_reference)
+```
+
+ของเดิมที่ [index.ts:2807](../index.ts#L2807) ใช้ `production || null` ซึ่งกัน `''` ได้ แต่ไม่กัน `'  '`
+(กฎที่มีแต่ช่องว่างจะไม่ match อะไรเลย = กฎตายเงียบ ๆ) — ตัวใหม่ใช้ `nz()` ให้ตรงกับ `CHECK` ในเฟส 2
+API ต้อง `return 400` เมื่อทุกช่องเป็น null แทนที่จะปล่อยให้ constraint โยน 500
+
 ---
 
 ## 5. เฟส 4 — หน้าแอดมิน `BlockRules.tsx`
@@ -367,6 +438,37 @@ ALTER TABLE public.quotation_rules DROP COLUMN is_locked;
 
 ## 7. การทดสอบ
 
+### 7.0 ⚠️ 4 จุดที่พังแบบ "เงียบ" — ไม่มี error ให้เห็น แต่บล็อกไม่ทำงาน
+
+ทั้ง 4 จุดเป็น **fail-open**: ระบบตอบ `blocked: false` / ปล่อยใบเสนอราคาผ่าน โดยไม่มี log ผิดปกติ
+ต้องมีเคส diag ยืนยันทีละจุด ห้ามอาศัยการอ่านโค้ดอย่างเดียว
+
+| # | จุด | ถ้าลืม | ตรวจด้วย |
+| --- | --- | --- | --- |
+| 1 | [index.ts:627](../index.ts#L627) fast-path `if (!rules.some(r => r.is_locked === true))` | ตารางใหม่มีกฎ แต่ endpoint ตอบ `blocked:false` ทุกครั้ง | เคส LIFF ข้อ 7.3.1 |
+| 2 | [quotationService.ts:874](../services/quotationService.ts#L874) fast-path เดียวกัน | ด่านกลางปล่อยผ่านหมด | `diag:quote-validation` |
+| 3 | [index.ts:632](../index.ts#L632) query `SELECT model AS code, ...` — **ไม่มี `model` และ `internal_reference`** | กฎ 2 ระดับใหม่ไม่มีวัน match ที่ด่าน LIFF | เคส blockRuleSmoke ระดับ ref |
+| 4 | [getProductInfo()](../services/quotationService.ts#L838) — ไม่ SELECT `internal_reference` | กฎ ref ไม่ทำงานที่ด่านกลาง | เคส blockRuleSmoke ระดับ ref |
+
+จุด 3 กับ 4 เป็นเรื่องเดียวกัน: `model` ถูก alias เป็น `code` ทิ้งไปในทั้งสอง query
+`normalizeProductScope()` จะอ่านไม่เจอ → `scope.model = ''` → กฎระดับ model/ref ไม่ match
+**แก้ที่ query ให้คืน `model` ตรง ๆ อย่าไปเดา field `code` ใน `normalizeProductScope`** —
+`code` ในบริบทอื่นของระบบไม่ได้แปลว่า model เสมอไป
+
+> ด่านที่ 3 ([pdfGenerator.ts:191](../pdfGenerator.ts#L191)) ไม่มีปัญหานี้ —
+> item จาก snapshot มี `model` และ `internal_reference` ครบอยู่แล้ว
+> ([buildItemSnapshots](../services/quotationService.ts#L318))
+> แต่ใบเก่าที่ freeze ไว้ก่อนมี `internal_reference` จะบล็อกได้แค่ถึงระดับ model — ยอมรับได้
+> เพราะด่าน 1/2 จับไปก่อนแล้ว ด่าน 3 เป็นแค่ fail-safe
+
+### 7.0.1 เก็บ baseline ก่อนแตะโค้ด
+
+รันชุดใน 7.2 **ก่อน** เริ่มเฟส 1 แล้วเก็บ output ไว้เทียบ
+โดยเฉพาะ `ruleResolutionDiff` ซึ่งเทียบ engine ปัจจุบันกับ matcher เดิม
+([scripts/diag/ruleResolutionCore.ts](../scripts/diag/ruleResolutionCore.ts) เก็บสำเนา matcher เก่าไว้ verbatim)
+— **ห้ามแก้ `legacyMatch()`** เด็ดขาด มันคือหลักฐานว่า `quotation_rules` ยังตัดสินเหมือนเดิม
+ถ้าเฟส 1 ทำอะไรพัง สคริปต์นี้จะเห็นทันที
+
 ### 7.1 ชุดใหม่ `scripts/diag/blockRuleSmoke.ts` (+ `"diag:block-rule"` ใน package.json)
 
 | กลุ่ม | เคส |
@@ -410,6 +512,8 @@ npx tsx scripts/diag/ruleResolutionDiff.ts
 | แอดมินสร้างกฎ brand แล้วบล็อกสินค้าหลายร้อยตัวโดยไม่รู้ | กลาง | (ทำทีหลังได้) endpoint `preview` บอกจำนวนสินค้าที่กฎครอบ ก่อนกดบันทึก |
 | ลืม `invalidateRuleCache` ใน write path ใหม่ | ต่ำ | เคส cache ใน `blockRuleSmoke.ts` |
 | ข้อความบล็อกที่เซลล์เห็นเปลี่ยนรูปแบบ | ต่ำ | แจ้งทีมขายก่อนขึ้นเฟส 3 |
+| ลืมเพิ่ม `product_block_rules` ใน `externalSync` | ต่ำ | ข้อ 3.1 — ระบบไม่พัง แต่ข้อมูลไม่ถูกส่งออกและไม่มี error |
+| frontend เก่าที่ค้างในเบราว์เซอร์ยังส่ง `is_locked` หลัง drop คอลัมน์ | ต่ำ | เฟส 5 ต้องห่างจากเฟส 4 อย่างน้อย 1 สัปดาห์ · backend เลิกอ่าน field นี้ตั้งแต่เฟส 4 (ส่งมาก็แค่ถูกละเลย ไม่ 500) |
 | ระหว่างเฟส 2-4 มีข้อมูล 2 ที่ (`is_locked` + ตารางใหม่) | ต่ำ | เฟส 3 ขึ้นแล้วไม่มีใครอ่าน `is_locked` อีก · เฟส 4 เอา UI ออกทันทีในรอบเดียวกัน |
 
 ---
