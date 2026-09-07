@@ -45,7 +45,6 @@ export function outcomeOf(rule: any | null): QuotationRuleOutcome {
       warranty_years: 1,
       warranty_unit: 'year',
       warranty_display: '1 ปี',
-      is_locked: false,
       delivery_in_stock_days: 3,
       delivery_out_of_stock_days: 7,
       quote_company: null,
@@ -58,7 +57,6 @@ export function outcomeOf(rule: any | null): QuotationRuleOutcome {
     warranty_years: rule.warranty_years,
     warranty_unit: unit,
     warranty_display: unit === 'month' ? `${rule.warranty_years} เดือน` : `${rule.warranty_years} ปี`,
-    is_locked: !!rule.is_locked,
     delivery_in_stock_days: rule.delivery_in_stock_days,
     delivery_out_of_stock_days: rule.delivery_out_of_stock_days,
     quote_company: rule.quote_company ?? null,
@@ -79,7 +77,7 @@ export function outcomeOf(rule: any | null): QuotationRuleOutcome {
  */
 export function diffOutcome(a: QuotationRuleOutcome, b: QuotationRuleOutcome): string[] {
   const fields: Array<keyof QuotationRuleOutcome> = [
-    'warranty_years', 'warranty_unit', 'warranty_display', 'is_locked',
+    'warranty_years', 'warranty_unit', 'warranty_display',
     'delivery_in_stock_days', 'delivery_out_of_stock_days', 'quote_company', 'matched_rule_id'
   ];
   return fields.filter(f => a[f] !== b[f]).map(f => `${f}: ${a[f]} → ${b[f]}`);

@@ -782,7 +782,6 @@ CREATE TABLE public.quotation_rules (
     brand text,
     series text,
     warranty_years integer DEFAULT 1 NOT NULL,
-    is_locked boolean DEFAULT false NOT NULL,
     delivery_in_stock_days integer DEFAULT 3 NOT NULL,
     delivery_out_of_stock_days integer DEFAULT 7 NOT NULL,
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,

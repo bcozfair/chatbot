@@ -26,12 +26,6 @@ export const DELIVERY_QTY_COLUMNS: Record<number, DeliveryQtyColumn> = {
 export interface QuotationRule extends ScopedRule {
   warranty_years: number;
   warranty_unit: 'year' | 'month';
-  /**
-   * ⚠️ เลิกใช้ตัดสินแล้วตั้งแต่เฟส 3 — กฎบล็อกย้ายไป product_block_rules (services/rules/blockRules.ts)
-   * คงไว้เพราะคอลัมน์ยังอยู่ใน DB และ diag:block-parity ใช้เทียบของเก่ากับของใหม่ระหว่าง soak
-   * ลบพร้อมคอลัมน์ในเฟส 5 — ห้ามเอากลับมาใช้ตัดสินการบล็อก
-   */
-  is_locked: boolean;
   delivery_in_stock_days: number;
   delivery_out_of_stock_days: number;
   quote_company: 'PM' | 'THT' | null;
@@ -51,7 +45,6 @@ export interface QuotationRuleOutcome {
   warranty_years: number;
   warranty_unit: 'year' | 'month';
   warranty_display: string;
-  is_locked: boolean;
   delivery_in_stock_days: number;
   delivery_out_of_stock_days: number;
   quote_company: 'PM' | 'THT' | null;
@@ -65,7 +58,6 @@ export const QUOTATION_RULE_DEFAULTS: QuotationRuleOutcome = {
   warranty_years: 1,
   warranty_unit: 'year',
   warranty_display: '1 ปี',
-  is_locked: false,
   delivery_in_stock_days: 3,
   delivery_out_of_stock_days: 7,
   quote_company: null,
@@ -117,7 +109,6 @@ export function resolveQuotationRule(rules: QuotationRule[], scope: ProductScope
     warranty_years: warrantyYears,
     warranty_unit: warrantyUnit,
     warranty_display: warrantyDisplayOf(warrantyYears, warrantyUnit),
-    is_locked: !!rule.is_locked,
     delivery_in_stock_days: rule.delivery_in_stock_days,
     delivery_out_of_stock_days: rule.delivery_out_of_stock_days,
     quote_company: rule.quote_company ?? null,
