@@ -12,7 +12,14 @@ ok('OUT_OF_STOCK ใส่ warn_msg', buildViolationDisplay({ type: 'OUT_OF_STOC
 ok('OUT_OF_STOCK optional note', buildViolationDisplay({ type: 'OUT_OF_STOCK', model: 'X', is_optional: true, linked_to_model: 'Y' }).includes('สินค้าเสริมของ Y'));
 ok('MIN_PRICE โชว์ราคา', buildViolationDisplay({ type: 'MIN_PRICE_VIOLATION', model: 'X', price: 80, min_price: 100 }).includes('80.00') && buildViolationDisplay({ type: 'MIN_PRICE_VIOLATION', model: 'X', price: 80, min_price: 100 }).includes('100.00'));
 ok('MOQ fallback', buildViolationDisplay({ type: 'MOQ_VIOLATION', model: 'X', min_order_qty: 10, qty: 3 }).includes('10') );
-ok('BLOCKED ใช้ warn_msg', buildViolationDisplay({ type: 'BLOCKED', model: 'X', warn_msg: '❌ ระงับ X' }) === '❌ ระงับ X');
+// เฟส 3.5: BLOCKED ใช้ template เดียวกับ MOQ (หัวข้อ + รหัส + เหตุผลที่แอดมินกรอก)
+// เดิม warn_msg ถูกใช้แทนข้อความทั้งก้อน ทำให้แต่ละจุดพิมพ์หัวข้อของตัวเองไม่ตรงกัน
+ok('BLOCKED ใช้ template เดียวกับ MOQ',
+  buildViolationDisplay({ type: 'BLOCKED', model: 'X', warn_msg: 'ห้ามขาย' })
+  === '❌ ระงับการเสนอราคา รายการ X: ห้ามขาย');
+ok('BLOCKED ไม่มี warn_msg → ข้อความ default',
+  buildViolationDisplay({ type: 'BLOCKED', model: 'X' })
+  === '❌ ระงับการเสนอราคา รายการ X กรุณาติดต่อแอดมิน');
 ok('SYSTEM_ERROR', buildViolationDisplay({ type: 'SYSTEM_ERROR', model: '-' }).includes('ตรวจสอบกฎไม่สำเร็จ'));
 ok('buildViolationText ว่าง = ""', buildViolationText([]) === '');
 ok('buildViolationText รวมหลายรายการ', buildViolationText([{ type: 'OUT_OF_STOCK', model: 'A', display_message: 'msgA' }, { type: 'MOQ_VIOLATION', model: 'B', display_message: 'msgB' }]).includes('msgA') );

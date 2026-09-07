@@ -26,6 +26,11 @@ export const DELIVERY_QTY_COLUMNS: Record<number, DeliveryQtyColumn> = {
 export interface QuotationRule extends ScopedRule {
   warranty_years: number;
   warranty_unit: 'year' | 'month';
+  /**
+   * ⚠️ เลิกใช้ตัดสินแล้วตั้งแต่เฟส 3 — กฎบล็อกย้ายไป product_block_rules (services/rules/blockRules.ts)
+   * คงไว้เพราะคอลัมน์ยังอยู่ใน DB และ diag:block-parity ใช้เทียบของเก่ากับของใหม่ระหว่าง soak
+   * ลบพร้อมคอลัมน์ในเฟส 5 — ห้ามเอากลับมาใช้ตัดสินการบล็อก
+   */
   is_locked: boolean;
   delivery_in_stock_days: number;
   delivery_out_of_stock_days: number;
@@ -144,34 +149,8 @@ export function resolveDeliveryOutOfStockDays(
 }
 
 /**
- * หากฏที่บล็อกสินค้านี้
- *
- * ⚠️ ตั้งใจ filter is_locked ก่อนแล้วค่อย match — ไม่ใช่ resolve จากชุดเต็มแล้วดูว่าตัวชนะ locked ไหม
- * สองแบบให้ผลต่างกัน เช่น rule A {production:'Import', is_locked:true} + rule B {production:'Import',
- * brand:'ACME', series:'X', is_locked:false} → สินค้า ACME X ถูกบล็อกในแบบแรก แต่ไม่ถูกบล็อกในแบบที่สอง
- * การเปลี่ยนเป็นแบบที่สองเป็น product decision ที่ต้องตัดสินใจแยก — Phase 0 คงพฤติกรรมเดิม
- */
-export function findBlockingRule(rules: QuotationRule[], scope: ProductScope): QuotationRule | null {
-  return selectRule(rules.filter(r => r.is_locked === true), scope);
-}
-
-/**
  * หากฏที่กำหนดค่าย (PM/THT) — filter quote_company ก่อนแล้วค่อย match ตามพฤติกรรมเดิม
  */
 export function findCompanyRule(rules: QuotationRule[], scope: ProductScope): QuotationRule | null {
   return selectRule(rules.filter(r => r.quote_company != null), scope);
-}
-
-function scopeLabel(rule: QuotationRule): string {
-  return `${rule.production || ''} > ${rule.brand || ''} > ${rule.series || ''}`;
-}
-
-/** ข้อความบล็อกที่ส่งกลับทาง LINE / API — รูปแบบเดิมเป๊ะ */
-export function buildBlockedMessage(rule: QuotationRule, productCode: string): string {
-  return `❌ ระงับการเสนอราคา\n${productCode}\nเงื่อนไข: ${scopeLabel(rule)}\nกรุณาติดต่อแอดมิน`;
-}
-
-/** ข้อความบล็อกตอนสร้าง PDF — รูปแบบต่างจากตัวบน (รหัสสินค้าอยู่บรรทัดเดียวกัน) จึงแยกฟังก์ชัน */
-export function buildBlockedPdfMessage(rule: QuotationRule, productCode: string): string {
-  return `❌ ระงับการเสนอราคาสินค้า ${productCode}\nเงื่อนไข: ${scopeLabel(rule)}\nกรุณาติดต่อแอดมิน`;
 }

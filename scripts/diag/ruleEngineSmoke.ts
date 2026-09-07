@@ -9,7 +9,8 @@
 import { pool } from '../../config/db.js';
 import {
   loadQuotationRules, resolveQuotationRule, normalizeProductScope,
-  findBlockingRule, findCompanyRule, invalidateRuleCache, selectRule, scopeSpecificity,
+  loadProductBlockRules, findBlockingRule, findCompanyRule,
+  invalidateRuleCache, selectRule, scopeSpecificity,
   resolveDeliveryOutOfStockDays, QUOTATION_RULE_DEFAULTS
 } from '../../services/rules/index.js';
 import {
@@ -139,10 +140,14 @@ for (const p of prods) {
     `→ rule#${out.matched_rule_id ?? 'default'} warranty=${out.warranty_display} in=${out.delivery_in_stock_days} out=${out.delivery_out_of_stock_days} locked=${out.is_locked}`);
 }
 ok('resolveQuotationRule ทำงานกับสินค้าจริง', prods.length > 0);
-ok('findBlockingRule / findCompanyRule เรียกได้', (() => {
-  const s = normalizeProductScope(prods[0]);
-  findBlockingRule(reloaded, s); findCompanyRule(reloaded, s); return true;
+ok('findCompanyRule เรียกได้', (() => {
+  findCompanyRule(reloaded, normalizeProductScope(prods[0])); return true;
 })());
+// กฎบล็อกย้ายออกไปคนละตารางแล้ว (เฟส 3) — ตรวจว่าโหลดได้และ match กับสินค้าจริงได้
+const blockRules = await loadProductBlockRules();
+ok('loadProductBlockRules / findBlockingRule เรียกได้', (() => {
+  findBlockingRule(blockRules, normalizeProductScope(prods[0])); return true;
+})(), `กฎบล็อกที่เปิดใช้ ${blockRules.length} แถว`);
 
 // ── 4. buildItemSnapshots กับสินค้าจริง ─────────────────────────────────
 const snaps = await buildItemSnapshots([

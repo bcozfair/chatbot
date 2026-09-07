@@ -226,6 +226,9 @@
       white-space: nowrap;
     }
     .btn-add:active { background: var(--green-dark); }
+    /* สินค้าที่ติดกฎระงับ — ยังกดได้เพื่อให้เห็นเหตุผลที่แอดมินกรอกไว้ แต่หน้าตาต้องบอกว่าใส่ตะกร้าไม่ได้ */
+    .btn-add.is-blocked { background: #FEE2E2; color: #B91C1C; }
+    .btn-add.is-blocked:active { background: #FECACA; }
 
     /* ─── QTY STEPPER ─── */
     .qty-stepper {
@@ -921,10 +924,16 @@
         else if (ci && ci.quantity > stock)      { badgeCls = 'low'; badgeTxt = `ไม่พอ (เหลือ ${stock})`; }
         else                                     { badgeCls = 'ok';  badgeTxt = `พร้อมส่ง ${stock}`; }
 
+        // สินค้าที่ติดกฎระงับ — บอกตั้งแต่ในผลค้นหา ไม่ต้องให้กดแล้วค่อยเด้ง
+        // (เซิร์ฟเวอร์ตัดสินมาให้แล้วใน /api/products/search จึงไม่ต้องยิงถามทีละแถว)
+        const isQuoteBlocked = !!prod.is_quote_blocked;
+
         // สินค้าที่อยู่ในตะกร้าในฐานะสินค้าเสริม → แสดงว่าเพิ่มแล้ว (badge) แต่แก้จำนวน/ลบเองไม่ได้
         // ผู้ใช้จัดการผ่านสินค้าหลักในตะกร้า
         const actionHtml = isOpt
           ? `<div class="optional-badge">🔗 สินค้าพ่วง ×${ci.quantity}</div>`
+          : isQuoteBlocked && !ci
+          ? `<button class="btn-add btn-addcart is-blocked" data-code="${safeCode}">🚫 ระงับการเสนอราคา</button>`
           : ci
           ? `<div class="qty-stepper">
                <button class="qty-btn btn-dec" data-code="${safeCode}">−</button>
@@ -951,22 +960,40 @@
       });
     }
 
+    /**
+     * ถามเซิร์ฟเวอร์ว่าสินค้ารหัสนี้ถูกระงับการเสนอราคาไหม
+     * คืนข้อความเตือน (ถ้อยคำจากเซิร์ฟเวอร์) ถ้าถูกระงับ · null ถ้าไม่ถูกระงับหรือเช็คไม่ได้
+     * เช็คไม่ได้แล้วปล่อยผ่านโดยตั้งใจ — ตัวกันจริงคือด่านตอนบันทึก client เป็นแค่ตัวเตือนต้นทาง
+     */
+    async function checkProductBlocked(code) {
+      if (!code) return null;
+      try {
+        const res = await fetch(`/api/products/${encodeURIComponent(code)}/blocked?userId=${encodeURIComponent(userId || '')}`);
+        if (!res.ok) return null;
+        const data = await res.json();
+        return data.blocked ? data.message : null;
+      } catch (err) {
+        console.error('Error checking blocked status:', err);
+        return null;
+      }
+    }
+
+    async function isProductBlocked(code) {
+      return (await checkProductBlocked(code)) !== null;
+    }
+
     async function addToCart(code) {
       const prod = productsList.find(p => p.code === code);
       if (!prod) return;
 
-      // ตรวจสอบว่าสินค้าถูกล็อกการเสนอราคาหรือไม่
-      try {
-        const checkRes = await fetch(`/api/products/${encodeURIComponent(code)}/blocked?userId=${encodeURIComponent(userId || '')}`);
-        if (checkRes.ok) {
-          const checkData = await checkRes.json();
-          if (checkData.blocked) {
-            showAlert(checkData.message);
-            return;
-          }
-        }
-      } catch (err) {
-        console.error('Error checking blocked status:', err);
+      // ตรวจสอบว่าสินค้าถูกระงับการเสนอราคาหรือไม่
+      // ผลค้นหาบอกมาแล้วก็ใช้เลย ไม่ต้องยิงซ้ำ — ยิงเฉพาะตอนที่ผลค้นหาไม่มีข้อมูลนี้
+      const blockedMsg = prod.is_quote_blocked
+        ? (prod.quote_blocked_msg || 'สินค้านี้ถูกระงับการเสนอราคา กรุณาติดต่อแอดมิน')
+        : (prod.is_quote_blocked === undefined ? await checkProductBlocked(code) : null);
+      if (blockedMsg) {
+        showAlert(blockedMsg);
+        return;
       }
 
       // ไม่บล็อกที่ client จากสต๊อกดิบ — สินค้าที่ "ไม่ได้ตั้งกฎระงับ" ต้องเพิ่มได้แม้ของไม่พอ
@@ -983,16 +1010,24 @@
 
       // พ่วงสินค้าเสริม (mirror expandOptionalProducts ฝั่ง backend) — จำนวนเท่าสินค้าหลัก (1 ตอนเพิ่ม)
       // de-dupe: ข้ามถ้ามีสินค้านั้นในตะกร้าอยู่แล้ว (ทั้งที่เป็นรายการปกติหรือสินค้าเสริมของตัวอื่น)
+      // สินค้าพ่วงต้องเช็คกฎระงับด้วย — เดิมข้ามไป ทำให้ตัวพ่วงที่ถูกระงับหลุดเข้าตะกร้า
+      // แล้วไปเด้งตอนกดบันทึกโดยที่เซลล์ไม่รู้ว่ามาจากตัวพ่วง
+      // ตัวพ่วงถูกระงับ = ข้ามเฉพาะตัวพ่วง สินค้าหลักไม่ผิดอะไร
       const optionals = Array.isArray(prod.optional_products) ? prod.optional_products : [];
-      optionals.forEach(opt => {
-        if (cartHasProduct(opt)) return;
+      const skippedOptionals = [];
+      for (const opt of optionals) {
+        if (cartHasProduct(opt)) continue;
+        if (await isProductBlocked(opt.model)) { skippedOptionals.push(opt.model); continue; }
         cart.push({
           product_code: opt.model, model: opt.model, name: opt.name,
           price: Number(opt.price)||0, quantity: 1, stock: Number(opt.stock)||0,
           product_id: opt.product_id, internal_reference: opt.internal_reference,
           is_optional: true, linked_to_product_id: prod.product_id
         });
-      });
+      }
+      if (skippedOptionals.length) {
+        showAlert(`เพิ่ม ${code} แล้ว แต่ข้ามสินค้าพ่วงที่ถูกระงับ: ${skippedOptionals.join(', ')}`);
+      }
 
       renderProducts();
       updateCartBar();

@@ -759,6 +759,15 @@
         background: var(--danger-bg);
         color: var(--danger);
       }
+      /* สินค้าที่ติดกฎระงับการเสนอราคา — คนละเรื่องกับสต๊อกหมด จึงเป็นป้ายแยก */
+      .prod-blocked {
+        font-weight: 700;
+        padding: 2px 6px;
+        border-radius: 6px;
+        font-size: 10px;
+        background: var(--danger-bg);
+        color: var(--danger);
+      }
 
       /* ─── DELIVERY STRIP (วันจัดส่ง — ทั้งใบ) ───
          แถบบางคาดเหนือ .total-bar เพื่อให้อ่านคู่กับยอดรวมเป็นสรุปท้ายใบ */
@@ -3581,6 +3590,7 @@
               <span class="prod-name">${prod.name || ""}</span>
               <span class="target-chip ${isTht ? "tht" : "pm"}">${isTht ? "THT" : "PM"}</span>
               <span class="prod-stock ${stock > 0 ? "in-stock" : "out-of-stock"}">${stock > 0 ? `คงเหลือ ${stock}` : "สินค้าหมด"}</span>
+              ${prod.is_quote_blocked ? '<span class="prod-blocked">🚫 ระงับการเสนอราคา</span>' : ""}
             </div>
           </div>
           <div class="sheet-action">${sheetActionHtml(qty)}</div>`;
@@ -3612,6 +3622,27 @@
       // กันแตะรัว ๆ ระหว่างที่ path "แยกใบใหม่" ยังยิง POST ไม่เสร็จ (จะได้ใบซ้ำ)
       let isAddingProduct = false;
 
+      /**
+       * ถามเซิร์ฟเวอร์ว่าสินค้ารหัสนี้ถูกระงับการเสนอราคาไหม
+       * คืนข้อความเตือน (ถ้อยคำจากเซิร์ฟเวอร์) ถ้าถูกระงับ · null ถ้าไม่ถูกระงับหรือเช็คไม่ได้
+       * เช็คไม่ได้แล้วปล่อยผ่านโดยตั้งใจ — ตัวกันจริงคือด่านตอนบันทึก ห้ามให้เน็ตสะดุดกันเซลล์ทำงาน
+       * (ตัวเดียวกับที่ product-search.html ใช้)
+       */
+      async function checkProductBlocked(code) {
+        if (!code) return null;
+        try {
+          const res = await fetch(
+            `/api/products/${encodeURIComponent(code)}/blocked?userId=${encodeURIComponent(userId || "")}`,
+          );
+          if (!res.ok) return null;
+          const data = await res.json();
+          return data.blocked ? data.message : null;
+        } catch (err) {
+          console.error("Error checking blocked status:", err);
+          return null;
+        }
+      }
+
       async function onSheetStep(prod, delta) {
         const found = findQuoteItem(prod);
 
@@ -3620,6 +3651,18 @@
           if (isAddingProduct) return;
           isAddingProduct = true;
           try {
+            // เตือนตั้งแต่ตอนหยิบ แทนที่จะไปเจอตอนกดบันทึก (product-search ทำแบบนี้อยู่แล้ว)
+            // ผลค้นหาบอกมาแล้วก็ใช้เลย ยิงถามเฉพาะตอนที่ไม่มีข้อมูลนี้ติดมา
+            const blockedMsg = prod.is_quote_blocked
+              ? prod.quote_blocked_msg ||
+                "สินค้านี้ถูกระงับการเสนอราคา กรุณาติดต่อแอดมิน"
+              : prod.is_quote_blocked === undefined
+                ? await checkProductBlocked(prod.code)
+                : null;
+            if (blockedMsg) {
+              showCustomAlert(blockedMsg);
+              return;
+            }
             await addProductToQuote(prod);
           } finally {
             isAddingProduct = false;
