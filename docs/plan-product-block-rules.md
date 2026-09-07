@@ -24,6 +24,11 @@
 แยกตารางแล้วปัญหานี้หายไปทั้งก้อน เพราะกฎบล็อกไม่ได้อยู่ในชุดเดียวกับกฎ warranty/delivery อีกต่อไป
 และยังเข้ารูปเดียวกับ `product_moq_rules` / `product_stock_rules` ที่แยกตารางอยู่แล้ว
 
+**ความต้องการนี้มีอยู่จริงในงานประจำวันแล้ว ไม่ใช่ฟีเจอร์เผื่ออนาคต:**
+ตรวจ `product_moq_rules` เจอ 4 แถวที่ตั้ง `min_order_qty` เป็น 9999/99999 พร้อมข้อความว่า
+"สินค้านี้ห้ามเสนอราคา" / "รหัสนี้ขายไม่ได้" — คือแอดมินใช้ MOQ ปลอมเป็นกฎบล็อก
+เพราะอยากบล็อก 4 ตัวจากซีรีส์ที่มี 24 ตัว แต่ระบบเดิมบล็อกได้แค่ทั้งซีรีส์ (ดู §3.2)
+
 **สมบัติสำคัญที่ทำให้แผนนี้ปลอดภัย:**
 การขยาย engine เป็น 5 ระดับ **ไม่กระทบการตัดสินของ `quotation_rules` เลยแม้แต่แถวเดียว**
 เพราะแถวใน `quotation_rules` ไม่มีคอลัมน์ `model` / `internal_reference` → เป็น `undefined` →
@@ -228,7 +233,7 @@ CREATE TABLE public.product_block_rules (
     series             text,
     model              text,
     internal_reference text,
-    warn_msg           text,                                  -- NULL = ใช้ข้อความมาตรฐาน
+    warn_msg           text NOT NULL,                         -- บังคับกรอก เหมือน sale_line_warn_msg ของ MOQ
     is_active          boolean NOT NULL DEFAULT true,
     created_at         timestamptz NOT NULL DEFAULT now(),
     updated_at         timestamptz NOT NULL DEFAULT now(),
@@ -244,7 +249,9 @@ CREATE TABLE public.product_block_rules (
      OR NULLIF(btrim(series), '')             IS NOT NULL
      OR NULLIF(btrim(model), '')              IS NOT NULL
      OR NULLIF(btrim(internal_reference), '') IS NOT NULL
-    )
+    ),
+    -- NOT NULL อย่างเดียวไม่พอ — '' หรือ '   ' ผ่าน NOT NULL ได้ แล้วเซลล์จะเห็นข้อความว่างเปล่า
+    CONSTRAINT product_block_rules_warn_msg_not_blank CHECK (btrim(warn_msg) <> '')
 );
 
 -- กฎซ้ำ scope เดียวกันไม่มีประโยชน์ และทำให้ผลลัพธ์ขึ้นกับ id
@@ -259,16 +266,6 @@ CREATE UNIQUE INDEX product_block_rules_scope_uniq
         lower(btrim(COALESCE(internal_reference, '')))
     );
 
--- ย้ายกฎบล็อกเดิมเข้ามา (ตอนนี้ยังไม่มีใครอ่านตารางนี้)
--- NULLIF(btrim(..)) ตอน SELECT ด้วย เพื่อไม่ให้ '' หรือ '  ' หลุดเข้าตารางใหม่
-INSERT INTO public.product_block_rules (production, brand, series)
-SELECT NULLIF(btrim(production), ''), NULLIF(btrim(brand), ''), NULLIF(btrim(series), '')
-  FROM public.quotation_rules
- WHERE is_locked = true
-   AND (NULLIF(btrim(production), '') IS NOT NULL
-     OR NULLIF(btrim(brand), '')      IS NOT NULL
-     OR NULLIF(btrim(series), '')     IS NOT NULL);
-
 -- ถ้ามีแถว is_locked ที่ scope ว่างทั้งหมด = บล็อกทั้งคลัง ต้องหยุดให้คนมาดู ไม่ใช่ข้ามเงียบ ๆ
 DO $$
 DECLARE n int;
@@ -280,6 +277,70 @@ BEGIN
      AND NULLIF(btrim(series), '')     IS NULL;
   IF n > 0 THEN
     RAISE EXCEPTION 'พบกฎ is_locked ที่ scope ว่างทั้งแถว % แถว — ต้องตัดสินใจก่อนย้าย', n;
+  END IF;
+END $$;
+
+-- ── ย้ายกฎบล็อกเดิม 4 แถว พร้อมข้อความ (ตอนนี้ยังไม่มีใครอ่านตารางนี้) ──
+-- warn_msg ต่อ scope อยู่ใน VALUES ให้เห็นชัดตอน review — ไม่ใช่ค่า default ลอย ๆ
+-- NULLIF(btrim(..)) ตอน SELECT ด้วย เพื่อไม่ให้ '' หรือ '  ' หลุดเข้าตารางใหม่
+INSERT INTO public.product_block_rules (production, brand, series, warn_msg)
+SELECT NULLIF(btrim(r.production), ''),
+       NULLIF(btrim(r.brand), ''),
+       NULLIF(btrim(r.series), ''),
+       w.warn_msg
+  FROM public.quotation_rules r
+  JOIN (VALUES
+    ('production 2(pm)', '', '',
+     'สินค้ากลุ่มผลิต Production 2 ไม่เปิดให้เสนอราคาผ่านระบบ กรุณาติดต่อแอดมินเพื่อขอราคาเป็นรายกรณี'),
+    ('production 3(pm)', '', 'ecm',
+     'สินค้าซีรีส์ ECM ไม่เปิดให้เสนอราคาผ่านระบบ กรุณาติดต่อแอดมินเพื่อขอราคาเป็นรายกรณี'),
+    ('buy to sell', '', '',
+     'สินค้ากลุ่ม Buy to Sell ต้องเช็คราคาและระยะเวลาสั่งซื้อกับแอดมินก่อนทุกครั้ง'),
+    ('buy to sell(tht)', '', '',
+     'สินค้ากลุ่ม Buy to Sell (THT) ต้องเช็คราคาและระยะเวลาสั่งซื้อกับแอดมินก่อนทุกครั้ง')
+  ) AS w(production, brand, series, warn_msg)
+    ON lower(btrim(coalesce(r.production, ''))) = w.production
+   AND lower(btrim(coalesce(r.brand, '')))      = w.brand
+   AND lower(btrim(coalesce(r.series, '')))     = w.series
+ WHERE r.is_locked = true;
+
+-- ── กฎระดับ ref ที่แอดมินทำ workaround ไว้ในตาราง MOQ ──
+-- 4 แถวนี้ตั้ง min_order_qty 9999/99999 เพื่อ "บล็อก" เพราะบล็อกได้แค่ระดับ series
+-- ข้อความที่แอดมินเขียนเองอยู่แล้ว ยกมาใช้เป็น warn_msg ตรง ๆ (ดู §3.2)
+-- ⚠️ แถวใน product_moq_rules ยัง active อยู่ในเฟสนี้ — ปิดตอนเฟส 3 เท่านั้น (ดู §4.4)
+INSERT INTO public.product_block_rules (internal_reference, warn_msg)
+SELECT m.internal_reference, btrim(m.sale_line_warn_msg)
+  FROM public.product_moq_rules m
+ WHERE m.internal_reference IN
+       ('FAFC4FP1080001', 'FAFC4FP1080003', 'FAFC4FP1080009', 'FAFC4FP1080016')
+   AND btrim(m.sale_line_warn_msg) <> '';
+
+-- ── ด่านสุดท้าย: ต้องย้ายครบ ไม่มีแถวไหนหล่น ──
+DO $$
+DECLARE n_locked int; n_moved int; n_refs int; n_extra int;
+BEGIN
+  SELECT count(*) INTO n_locked FROM public.quotation_rules WHERE is_locked = true;
+  SELECT count(*) INTO n_moved  FROM public.product_block_rules
+   WHERE internal_reference IS NULL;
+  IF n_locked <> n_moved THEN
+    RAISE EXCEPTION 'กฎ is_locked มี % แถว แต่ย้ายได้ % แถว — มีกฎที่ยังไม่ได้เขียน warn_msg ใน VALUES',
+      n_locked, n_moved;
+  END IF;
+
+  -- กันเคส sale_line_warn_msg ว่าง แล้วแถวถูกกรองทิ้งเงียบ ๆ
+  SELECT count(*) INTO n_refs FROM public.product_block_rules
+   WHERE internal_reference IS NOT NULL;
+  IF n_refs <> 4 THEN
+    RAISE EXCEPTION 'กฎระดับ ref ที่ย้ายมาจาก MOQ ได้ % แถว (ต้องได้ 4) — เช็ค sale_line_warn_msg ว่างหรือ ref หาย', n_refs;
+  END IF;
+
+  -- มี MOQ ที่ทำหน้าที่บล็อกเพิ่มมาหลังจากเขียนแผนนี้ไหม
+  SELECT count(*) INTO n_extra FROM public.product_moq_rules
+   WHERE min_order_qty >= 9999
+     AND internal_reference NOT IN
+         ('FAFC4FP1080001', 'FAFC4FP1080003', 'FAFC4FP1080009', 'FAFC4FP1080016');
+  IF n_extra > 0 THEN
+    RAISE EXCEPTION 'พบกฎ MOQ ที่ใช้บล็อกเพิ่มมาอีก % แถว — ต้องเพิ่มเข้ารายการก่อนรัน', n_extra;
   END IF;
 END $$;
 
@@ -296,7 +357,75 @@ SELECT id,
         AND NULLIF(btrim(brand),'')  IS NULL
         AND NULLIF(btrim(series),'') IS NULL) AS blocks_everything
   FROM quotation_rules WHERE is_locked = true;
+
+-- MOQ ที่จริง ๆ แล้วเป็นกฎบล็อก
+SELECT internal_reference, min_order_qty, sale_line_warn_msg
+  FROM product_moq_rules WHERE min_order_qty >= 9999;
 ```
+
+### 3.1.1 ข้อความที่จะได้ (ตรวจก่อนขึ้น)
+
+ต่อกับ template ของ §4.5.0 แล้วเซลล์จะเห็นแบบนี้:
+
+```
+❌ ระงับการเสนอราคา รายการ CH-02 12x170-110-350W-S003: สินค้ากลุ่มผลิต Production 2 ไม่เปิดให้เสนอราคาผ่านระบบ กรุณาติดต่อแอดมินเพื่อขอราคาเป็นรายกรณี
+❌ ระงับการเสนอราคา รายการ ECM-13000 SUS: สินค้าซีรีส์ ECM ไม่เปิดให้เสนอราคาผ่านระบบ กรุณาติดต่อแอดมินเพื่อขอราคาเป็นรายกรณี
+❌ ระงับการเสนอราคา รายการ FP-108-1 220 V.U1BW: สินค้านี้ห้ามเสนอราคา
+❌ ระงับการเสนอราคา รายการ FP-108/DC 24 VDC.U1BW: รหัสนี้ขายไม่ได้ใช้อีกรหัส ครับ
+```
+
+**ข้อความของ 4 กฎเดิมเป็นร่างที่เขียนจาก scope ของกฎ** ไม่ใช่เหตุผลทางธุรกิจจริง
+(ระบบเดิมไม่มีที่ให้เก็บ — `quotation_rules` ไม่มีคอลัมน์ `warn_msg` เลย)
+ให้แอดมิน/ฝ่ายขายอ่านแล้วแก้ก่อนขึ้นเฟส 3 — แก้ในไฟล์ migration ก่อนรัน
+หรือแก้ทีหลังผ่านหน้าแอดมินในเฟส 4 ก็ได้
+ส่วนข้อความของ 4 ref ยกมาจากที่แอดมินเขียนเองใน MOQ ไม่ต้องแก้
+
+### 3.1.2 ทดลองรันแล้ว (ยังไม่ commit)
+
+รัน SQL ทั้งก้อนบน DB จริงใน transaction แล้ว `ROLLBACK` (`lock_timeout=5s`, `statement_timeout=30s`)
+— ยืนยันว่าไม่มีอะไรค้าง: `to_regclass('public.product_block_rules')` คืน NULL หลังจบ
+
+```
+CREATE TABLE · CREATE INDEX · DO (ผ่าน) · INSERT 0 4 · INSERT 0 4 · DO (ผ่าน)
+```
+
+ได้ 8 แถวตามนี้:
+
+| id | production | series | internal_reference | warn_msg |
+| --- | --- | --- | --- | --- |
+| 1 | Production 2(PM) | | | สินค้ากลุ่มผลิต Production 2 ไม่เปิดให้เสนอราคาผ่านระบบ กรุณาติดต่อแอดมินเพื่อขอราคาเป็นรายกรณี |
+| 2 | Buy to Sell | | | สินค้ากลุ่ม Buy to Sell ต้องเช็คราคาและระยะเวลาสั่งซื้อกับแอดมินก่อนทุกครั้ง |
+| 3 | Buy to Sell(THT) | | | สินค้ากลุ่ม Buy to Sell (THT) ต้องเช็คราคาและระยะเวลาสั่งซื้อกับแอดมินก่อนทุกครั้ง |
+| 4 | Production 3(PM) | ECM | | สินค้าซีรีส์ ECM ไม่เปิดให้เสนอราคาผ่านระบบ กรุณาติดต่อแอดมินเพื่อขอราคาเป็นรายกรณี |
+| 5 | | | FAFC4FP1080001 | รหัสนี้ขายไม่ได้ใช้อีกรหัส ครับ |
+| 6 | | | FAFC4FP1080003 | สินค้านี้ห้ามเสนอราคา |
+| 7 | | | FAFC4FP1080009 | ใช้รุ่นอื่น |
+| 8 | | | FAFC4FP1080016 | รหัสนี้ขายไม่ได้ครับ |
+
+**ไม่มีแถวไหน `warn_msg` ว่าง** — ทั้ง 3 ด่านใน `DO $$` ผ่านหมด
+ตอนรันจริงยังต้อง dump ก่อนตามกฎใน [DEPLOY.md:512](../DEPLOY.md#L512)
+
+### 3.2 เจอตอนตรวจ: แอดมินทำ workaround ไว้ในตาราง MOQ แล้ว
+
+`product_moq_rules` มี 156 แถว ในนั้น **4 แถวไม่ใช่กฎ MOQ จริง** — ตั้ง `min_order_qty`
+เป็น 9999/99999 เพื่อให้สั่งไม่ได้ เท่ากับใช้ MOQ ปลอมเป็นกฎบล็อก:
+
+| internal_reference | model | min_order_qty | sale_line_warn_msg |
+| --- | --- | --- | --- |
+| FAFC4FP1080001 | FP-108/DC 24 VDC.U1BW | 9999 | รหัสนี้ขายไม่ได้ใช้อีกรหัส ครับ |
+| FAFC4FP1080003 | FP-108-1 220 V.U1BW | 9999 | สินค้านี้ห้ามเสนอราคา |
+| FAFC4FP1080009 | FP-108 CX/DC 24 VS1B | 99999 | ใช้รุ่นอื่น |
+| FAFC4FP1080016 | FP-108C-S1-B AC220/240V | 9999 | รหัสนี้ขายไม่ได้ครับ |
+
+ทั้ง 4 ตัวอยู่ใน `Import(PM) > COMMONWEALTH > FP-108` ซึ่งซีรีส์นั้นมีสินค้า **24 ตัว**
+⇒ แอดมินอยากบล็อก 4 จาก 24 แต่ระบบเดิมบล็อกได้แค่ทั้งซีรีส์ จึงต้องเลี่ยงไปใช้ MOQ
+
+**นี่คือหลักฐานตรงว่าความต้องการ "บล็อกราย ref" มีอยู่จริงในงานประจำวันแล้ว** ไม่ใช่ฟีเจอร์เผื่ออนาคต
+และเป็นเหตุผลที่ migration ข้างบนย้ายทั้ง 4 แถวเข้ามาเป็นกฎบล็อกระดับ ref ตั้งแต่เฟส 2
+
+ผลข้างเคียงที่ต้องรู้: ตอนนี้เซลล์เห็นข้อความพวกนี้เป็น `⬇️ จำนวนไม่ถึงขั้นต่ำ ...`
+ซึ่งอ่านแล้วสับสน (สินค้าไม่ได้ห้ามขายเพราะจำนวน) — หลังเฟส 3 จะเปลี่ยนเป็น
+`❌ ระงับการเสนอราคา ...` ที่ตรงกับความเป็นจริง
 
 ### 3.1 ต้องขึ้นทะเบียนตารางใหม่กับ externalSync ด้วย
 
@@ -408,6 +537,31 @@ API ต้อง `return 400` เมื่อทุกช่องเป็น n
 
 **`warn_msg` เป็นช่องบังคับ** เหมือน `sale_line_warn_msg` ของ MOQ ([index.ts:3742](../index.ts#L3742))
 — ตอบ 400 ถ้าไม่ส่งมา เพราะข้อความที่เซลล์เห็นมาจากช่องนี้ที่เดียว (ดู §4.5.0)
+
+### 4.4 ปิด MOQ ปลอม 4 แถว — **ต้องอยู่ในเฟส 3 เท่านั้น**
+
+`migrations/changes/2026-09-XX_02_retire_fake_moq_blocks.sql`
+
+```sql
+BEGIN;
+
+UPDATE public.product_moq_rules
+   SET is_active = false, updated_at = now()
+ WHERE internal_reference IN
+       ('FAFC4FP1080001', 'FAFC4FP1080003', 'FAFC4FP1080009', 'FAFC4FP1080016');
+
+COMMIT;
+```
+
+⚠️ **ห้ามเอาไปไว้ในเฟส 2** — เฟส 2 ยังไม่มีใครอ่าน `product_block_rules`
+ถ้าปิด MOQ ตั้งแต่ตอนนั้น สินค้า 4 ตัวนี้จะ**ขายได้**ในช่วงคาบเกี่ยวจนกว่าเฟส 3 จะขึ้น
+ต้องรันหลังโค้ดเฟส 3 deploy แล้วเท่านั้น
+
+**ทำไมต้องปิด:** ถ้าปล่อยไว้ เซลล์จะโดน 2 ข้อความพร้อมกันสำหรับสินค้าตัวเดียว
+(`❌ ระงับการเสนอราคา ...` + `⬇️ จำนวนไม่ถึงขั้นต่ำ ...`) ซึ่งอันหลังไม่จริง
+
+**rollback:** `UPDATE ... SET is_active = true WHERE internal_reference IN (...)`
+(ไม่ลบแถวทิ้ง เพื่อให้ย้อนได้ด้วยคำสั่งเดียว และเก็บ `min_order_qty` เดิมไว้เป็นหลักฐาน)
 
 ---
 
@@ -705,7 +859,10 @@ npx tsx scripts/diag/ruleResolutionDiff.ts
 | กฎระดับ ref ไปบล็อกค่าขนส่ง (`SOFBLDXXXX0010`) | กลาง | ข้าม `is_shipping_fee` ในด่านที่ 2 + เคส diag |
 | แอดมินสร้างกฎ brand แล้วบล็อกสินค้าหลายร้อยตัวโดยไม่รู้ | กลาง | (ทำทีหลังได้) endpoint `preview` บอกจำนวนสินค้าที่กฎครอบ ก่อนกดบันทึก |
 | ลืม `invalidateRuleCache` ใน write path ใหม่ | ต่ำ | เคส cache ใน `blockRuleSmoke.ts` |
-| ข้อความบล็อกที่เซลล์เห็นเปลี่ยนรูปแบบ (ไปใช้ template MOQ) | **กลาง** | แจ้งทีมขายก่อนขึ้นเฟส 3.5 · ต้องเติม `warn_msg` ให้ครบทุกกฎก่อน ไม่งั้นเซลล์ได้แต่ default ที่ไม่บอกเหตุผล |
+| ข้อความบล็อกที่เซลล์เห็นเปลี่ยนรูปแบบ (ไปใช้ template MOQ) | **กลาง** | แจ้งทีมขายก่อนขึ้นเฟส 3.5 · `warn_msg` เขียนครบทุกกฎแล้วใน migration §3 (ไม่มีกฎไหนตกไปใช้ default) |
+| ถ้อยคำร่างของ 4 กฎเดิมไม่ตรงเหตุผลธุรกิจจริง | **กลาง** | §3.1.1 — ให้ฝ่ายขายอ่านแล้วแก้ในไฟล์ migration ก่อนรัน · แก้ทีหลังผ่านหน้าแอดมินเฟส 4 ได้ |
+| ลืมปิด MOQ ปลอม 4 แถว → เซลล์เห็น 2 ข้อความพร้อมกัน | ต่ำ | §4.4 เป็น migration แยกที่ผูกกับเฟส 3 · rollback ด้วย UPDATE บรรทัดเดียว |
+| ปิด MOQ ปลอมเร็วไป (ไปอยู่ในเฟส 2) → สินค้า 4 ตัวขายได้ช่วงคาบเกี่ยว | **กลาง** | §4.4 เขียนกำกับไว้ชัดว่าห้ามอยู่ในเฟส 2 · migration แยกไฟล์กันคนละเฟส |
 | Flex ซ่อนปุ่มยืนยันเพิ่ม 1 เงื่อนไข → ใบที่เคยกดได้อาจกดไม่ได้ | ต่ำ | เป็นใบที่กดไปก็ถูกปฏิเสธที่ด่านจริงอยู่แล้ว · โหลดกฎล้ม = ปล่อยผ่าน ปุ่มยังโผล่ตามเดิม |
 | quote-edit ยิง `/blocked` เพิ่มทุกครั้งที่เพิ่มสินค้า | ต่ำ | endpoint มี fast-path + cache 60 วิ · client `catch` แล้วปล่อยผ่าน ด่านจริงอยู่ที่ server |
 | ลืมเพิ่ม `product_block_rules` ใน `externalSync` | ต่ำ | ข้อ 3.1 — ระบบไม่พัง แต่ข้อมูลไม่ถูกส่งออกและไม่มี error |
