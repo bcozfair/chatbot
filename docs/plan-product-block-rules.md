@@ -37,6 +37,7 @@
 | 1 | ขยาย rule engine เป็น 5 ระดับ | ❌ ไม่ (พิสูจน์ด้วย diag) |
 | 2 | สร้างตาราง + ก๊อปข้อมูล `is_locked` เดิมเข้ามา (ยังไม่ใช้) | ❌ ไม่ |
 | 3 | สลับ 3 จุดที่บล็อกจริงให้อ่านตารางใหม่ + API แอดมิน | ✅ เริ่มใช้ตารางใหม่ |
+| 3.5 | ปิดช่องโหว่ฝั่งแสดงผล 6 จุด + ข้อความใช้ template เดียวกับ MOQ | ✅ ข้อความที่เซลล์เห็นเปลี่ยน |
 | 4 | หน้าแอดมิน "กฎบล็อกสินค้า" | ✅ ตั้งค่าได้ 5 ระดับ |
 | 5 | ลบ `is_locked` ออกจาก `quotation_rules` (หลัง soak) | ❌ ไม่ (ตอนนั้นไม่มีใครอ่านแล้ว) |
 
@@ -332,26 +333,16 @@ export async function loadProductBlockRules(exec: DbExecutor = pool): Promise<Pr
 export function findBlockingRule(rules: ProductBlockRule[], scope: ProductScope): ProductBlockRule | null
 // → selectRule(rules.filter(r => r.is_active), scope)
 
-export function buildBlockedMessage(rule, productCode): string
-export function buildBlockedPdfMessage(rule, productCode): string
+/** ข้อความที่แอดมินกรอกไว้ — ไม่มีก็คืน null ให้ buildViolationDisplay เติม default เอง */
+export function blockWarnText(rule: ProductBlockRule): string | null
 ```
 
 `cache.ts` — เพิ่ม `'product_block_rules'` ใน `RuleCacheKey`
 `rules/index.ts` — export ตัวใหม่, เอา `findBlockingRule` / `buildBlocked*Message` ออกจาก `quotationRules`
 
-**`scopeLabel` ต้องเปลี่ยน** — ของเดิม `` `${production||''} > ${brand||''} > ${series||''}` `` ถ้ากฎเป็นระดับ ref
-จะได้ข้อความ `เงื่อนไข:  >  > ` ที่อ่านไม่รู้เรื่อง → ต่อเฉพาะช่องที่มีค่า:
-
-```ts
-function scopeLabel(rule: ProductBlockRule): string {
-  return [rule.production, rule.brand, rule.series, rule.model, rule.internal_reference]
-    .filter(Boolean).join(' > ');
-}
-```
-
-⚠️ **นี่คือการเปลี่ยนข้อความที่เซลล์เห็น** — กฎระดับ brand เดิมเคยขึ้น `ACME > ` จะกลายเป็น `ACME`
-ถือเป็นการปรับให้อ่านง่ายขึ้น แต่ต้องบอกทีมขายก่อน
-ถ้ากฎมี `warn_msg` ให้ใช้ `warn_msg` แทนบรรทัด `เงื่อนไข:` ไปเลย
+**`buildBlockedMessage` / `buildBlockedPdfMessage` ถูกลบทิ้งทั้งคู่** — ข้อความไปรวมที่
+`buildViolationDisplay()` ที่เดียวแบบเดียวกับ MOQ (ดู §4.5.0) `scopeLabel()` ยังอยู่ได้
+แต่ใช้กับ **log และหน้าแอดมิน** เท่านั้น ห้ามโผล่ในข้อความที่เซลล์เห็น
 
 ### 4.2 สลับจุดเรียกทั้ง 3
 
@@ -376,7 +367,13 @@ SELECT model, model AS code, brand, series, production, internal_reference
 const blockRules = await loadProductBlockRules();   // โหลดคู่กับ quotationRules ที่ต้นฟังก์ชัน
 ...
 const blockingRule = findBlockingRule(blockRules, scope);
-if (blockingRule) throw new Error(buildBlockedPdfMessage(blockingRule, item.product_code || item.model));
+if (blockingRule) {
+  throw new Error(buildViolationDisplay({
+    type: 'BLOCKED',
+    model: item.product_code || item.model,
+    warn_msg: blockWarnText(blockingRule)
+  }));
+}
 ```
 > ผลข้างเคียงที่ตั้งใจ: จุดนี้เปลี่ยนจาก "resolve แล้วดูตัวชนะ" เป็น "filter ก่อนแล้ว match"
 > = สอดคล้องกับอีก 2 จุดแล้ว (ดูข้อ 1.3)
@@ -390,7 +387,7 @@ if (blockingRule) throw new Error(buildBlockedPdfMessage(blockingRule, item.prod
 | Method | Path | หมายเหตุ |
 | --- | --- | --- |
 | GET | `/api/admin/block-rules` | เรียง specificity DESC, id ASC |
-| POST | `/api/admin/block-rules` | validate: ต้องมีอย่างน้อย 1 ช่อง · เช็คซ้ำก่อนตอบ 400 ภาษาไทย |
+| POST | `/api/admin/block-rules` | validate: ต้องมีอย่างน้อย 1 ช่อง **+ ต้องมี `warn_msg`** · เช็คซ้ำก่อนตอบ 400 ภาษาไทย |
 | PUT | `/api/admin/block-rules/:id` | |
 | DELETE | `/api/admin/block-rules/:id` | |
 | PATCH | `/api/admin/block-rules/:id/active` | สลับ is_active (ปุ่มในตาราง) |
@@ -408,6 +405,166 @@ const nz = (v: unknown) => { const t = String(v ?? '').trim(); return t === '' ?
 ของเดิมที่ [index.ts:2807](../index.ts#L2807) ใช้ `production || null` ซึ่งกัน `''` ได้ แต่ไม่กัน `'  '`
 (กฎที่มีแต่ช่องว่างจะไม่ match อะไรเลย = กฎตายเงียบ ๆ) — ตัวใหม่ใช้ `nz()` ให้ตรงกับ `CHECK` ในเฟส 2
 API ต้อง `return 400` เมื่อทุกช่องเป็น null แทนที่จะปล่อยให้ constraint โยน 500
+
+**`warn_msg` เป็นช่องบังคับ** เหมือน `sale_line_warn_msg` ของ MOQ ([index.ts:3742](../index.ts#L3742))
+— ตอบ 400 ถ้าไม่ส่งมา เพราะข้อความที่เซลล์เห็นมาจากช่องนี้ที่เดียว (ดู §4.5.0)
+
+---
+
+## 4.5 เฟส 3.5 — แก้ฝั่งแสดงผลให้ครบทุกจุด
+
+**ที่มา:** ตรวจ 3 หน้าจริง (product-search · quote-edit · Flex) แล้วเจอช่องโหว่ 6 จุด
+ทั้งหมดเป็นของเดิมที่มีมาก่อนแผนนี้ ไม่ได้เกิดจากเฟส 1 — แต่พอบล็อกได้ถึงระดับ ref
+ผลกระทบจะแรงขึ้นมาก (กฎเยอะขึ้น เซลล์เจอบ่อยขึ้น) จึงต้องปิดพร้อมกับเฟส 3
+
+ผลการตรวจที่เป็นหลักฐาน (รันจริงกับ DB production แบบอ่านอย่างเดียว):
+
+| ตรวจ | ผล |
+| --- | --- |
+| `GET /api/products/:code/blocked` ยิงจริง 5 เคส | ✅ ถูกทั้ง production-level และ series-level |
+| ด่านกลาง 3 stage (draft/save/confirm) | ✅ ข้อความ BLOCKED ตรงกันเป๊ะทั้ง 3 |
+| ด่านกลาง vs PDF fail-safe บน 929 scope จริง | ✅ ไม่มี scope ไหนให้ผลต่างกัน (85 scope = 39,840 สินค้า) |
+| ทางเข้าเรียกด่านกลางครบ 6 เส้น | ✅ POST `/api/quotations` · POST `draft-cart` · PUT `/api/quotation/:id` · POST `confirm` · postback `action=confirm` · revision |
+
+### 4.5.0 ต้นแบบข้อความ = MOQ (ใช้กับ **ทุก** จุดที่แจ้งเตือน)
+
+MOQ ทำถูกอยู่แล้ว ให้ลอกโครงมาทั้งดุ้น:
+
+| MOQ (ต้นแบบ) | BLOCKED (ต้องเปลี่ยนเป็นแบบนี้) |
+| --- | --- |
+| `checkMinOrderQty()` คืน **array** 1 violation ต่อ 1 บรรทัดที่ผิด | `checkBlockedProducts()` คืน array เหมือนกัน |
+| `violation.model` = รหัสสินค้าจริงจาก DB | เหมือนกัน (เดิมเป็น `'-'`) |
+| `warn_msg` มาจากช่องที่แอดมินกรอก (`sale_line_warn_msg`) API บังคับกรอก | `product_block_rules.warn_msg` API บังคับกรอกเหมือนกัน |
+| ข้อความ **บรรทัดเดียว** ประกอบที่ `buildViolationDisplay()` ที่เดียว | เหมือนกัน |
+| ไม่มีการเปิดเผย scope/กฎภายในให้เซลล์เห็น | เลิกพิมพ์ `เงื่อนไข: x > y > z` |
+
+```ts
+// services/quotationService.ts — buildViolationDisplay()
+case 'BLOCKED': {
+  const detail = v.warn_msg ? `: ${v.warn_msg}` : ' กรุณาติดต่อแอดมิน';
+  return `❌ ระงับการเสนอราคา รายการ ${model}${detail}`;
+}
+```
+
+เทียบของเดิมกับของใหม่ (ข้อความจริงที่ดึงมาจากระบบ):
+
+```
+เดิม  ❌ ระงับการเสนอราคา ⏎ CH-02 12x170-110-350W-S003 ⏎ เงื่อนไข: Production 2(PM) >  >  ⏎ กรุณาติดต่อแอดมิน
+ใหม่  ❌ ระงับการเสนอราคา รายการ CH-02 12x170-110-350W-S003: <ข้อความที่แอดมินกรอก>
+```
+
+**จุดที่ต้องเปลี่ยนให้ใช้ตัวเดียวกันทั้งหมด:**
+
+1. ด่านกลาง `validateQuotationItems` → ผ่าน `buildViolationDisplay` อยู่แล้ว
+2. `GET /api/products/:code/blocked` → `message: buildViolationDisplay({ type:'BLOCKED', model, warn_msg })`
+   (เดิมเรียก `buildBlockedMessage` ที่มีฟอร์แมตของตัวเอง)
+3. PDF fail-safe → `throw new Error(buildViolationDisplay({...}))`
+   (เดิมเรียก `buildBlockedPdfMessage` ที่ฟอร์แมตต่างจากข้อ 2 อีกแบบ)
+
+⇒ ลบ `buildBlockedMessage` + `buildBlockedPdfMessage` ทิ้งทั้งคู่ เหลือถ้อยคำเดียวทั้งระบบ
+ตรงตามคอมเมนต์ที่เขียนไว้แล้วที่ [quotationService.ts:54](../services/quotationService.ts#L54)
+ว่า `buildViolationDisplay` คือ "ถ้อยคำเดียวของทั้งระบบ"
+
+⚠️ **นี่คือการเปลี่ยนข้อความที่เซลล์เห็น** — ต้องแจ้งทีมขายก่อนขึ้น
+และต้องมี `warn_msg` ครบทุกกฎก่อน ไม่งั้นเซลล์จะได้แต่ default ที่ไม่บอกเหตุผล
+(migration ในเฟส 2 ย้าย `is_locked` มาโดยไม่มี `warn_msg` → ต้องเติมให้ครบก่อนสลับ)
+
+### 4.5.1 รายงานให้ครบทุกบรรทัด (ตอนนี้บอกได้ทีละ 1 รายการ)
+
+[getBlockedProductError()](../services/quotationService.ts#L863) `return` ทันทีที่เจอตัวแรก
+ใส่สินค้าที่ถูกบล็อก 2 ตัว ได้ violation เดียว (ทดสอบแล้ว) — ต่างจาก MOQ/สต๊อก/min-price
+ที่รายงานครบทุกบรรทัด และ `violation.model` เป็น `'-'` ไม่ใช่รหัสสินค้า
+
+เปลี่ยนเป็นทรง MOQ เป๊ะ:
+
+```ts
+export interface BlockViolation {
+  type: 'BLOCKED';
+  model: string;      // รหัสจริงจาก products ไม่ใช่ '-'
+  name: string;
+  warn_msg: string | null;
+}
+
+export async function checkBlockedProducts(items: any[] | null): Promise<BlockViolation[]>
+// - ข้าม item ที่ is_shipping_fee (ดู §4.2 จุดที่ 2)
+// - loop ทุก item ไม่ return กลางทาง
+// - lookup รอบเดียวด้วย ANY($1) แบบ checkMinOrderQty ไม่ใช่ getProductInfo ทีละตัวในลูป
+```
+
+แล้วใน `validateQuotationItems` เปลี่ยนจากบล็อกเดียว เป็น loop แบบเดียวกับ MOQ:
+
+```ts
+for (const e of await checkBlockedProducts(expanded)) {
+  const v = { type: 'BLOCKED' as const, model: e.model, warn_msg: e.warn_msg };
+  violations.push({ ...v, display_message: buildViolationDisplay(v) });
+}
+```
+
+> ผลพลอยได้: ตัดการ query แบบ N+1 ทิ้ง (เดิมเรียก `getProductInfo` ทีละ item ในลูป)
+
+### 4.5.2 Flex สรุปร่าง — ไม่บอกเลยว่าถูกบล็อก และปุ่มยืนยันยังโผล่
+
+ทดสอบด้วยใบจำลองที่มีสินค้าติดกฎ #2 ราคาปกติ:
+
+```
+มีคำว่า "ระงับ" ในการ์ด: false
+มีปุ่ม "ยืนยันออกใบเสนอราคา": true      ← กดแล้วเด้ง error แน่นอน
+```
+
+[flexTemplates.ts:1176](../utils/flexTemplates.ts#L1176) ซ่อนปุ่มยืนยันให้อยู่แล้วสำหรับ
+`customerIncomplete` / `customerBlacklisted` / `creditHoldText` / `hasMinPriceViolation`
+— ขาดแค่ blocked ตัวเดียว
+
+ต้องทำ 2 อย่างใน `getQuotationSummaryMessage()`:
+
+1. โหลด block rules ครั้งเดียวต่อใบ แล้วมาร์คต่อบรรทัด — แถบแดงใต้รายการแบบเดียวกับแถบสต๊อก
+   ข้อความในแถบ = `buildViolationDisplay({type:'BLOCKED', ...})` ตัวเดียวกับที่อื่น
+2. เพิ่ม `hasBlockedItem` เข้าเงื่อนไขซ่อนปุ่ม + ข้อความเตือนแทนปุ่ม
+
+```ts
+if (customerIncomplete || hasBlockedItem || hasMinPriceViolation || customerBlacklisted || creditHoldText) {
+```
+
+**ลำดับข้อความเตือน** ให้ blocked มาก่อน min-price (บล็อกแก้เองไม่ได้ ต้องไปหาแอดมิน
+ส่วนราคาต่ำกว่าขั้นต่ำเซลล์แก้เองได้) แต่หลัง `customerIncomplete` / blacklist / credit
+ที่เป็นระดับลูกค้าซึ่งครอบทั้งใบ
+
+⚠️ ต้อง `try/catch` แล้ว **ปล่อยผ่าน** เหมือนที่ blacklist ทำอยู่ ([flexTemplates.ts:717](../utils/flexTemplates.ts#L717))
+— การ์ดสรุปเป็นแค่ตัวเตือนต้นทาง ตัวบล็อกจริงคือด่านตอนกดยืนยัน ถ้าโหลดกฎล้มต้องไม่ทำให้การ์ดพัง
+
+### 4.5.3 `quote-edit.html` — ไม่เคยเรียก `/blocked` เลย
+
+[addProductToQuote()](../liff_pages/quote-edit.html#L3717) เพิ่มสินค้าเข้าใบตรง ๆ
+ไปเจอ error ตอนกดบันทึกเท่านั้น (ต่างจาก product-search ที่เช็คตั้งแต่ใส่ตะกร้า)
+คลาส `.is-blocked` ที่มีอยู่ในไฟล์เป็นของ dropdown **ลูกค้า** ไม่ใช่สินค้า
+
+- `onSheetStep()` → เรียก `/api/products/:code/blocked` ก่อน `addProductToQuote()`
+  ถูกบล็อก = `showCustomAlert(message)` แล้ว return (แบบเดียวกับ `addToCart` ใน product-search)
+- `renderSheetResults()` → ป้าย 🚫 ในแถวผลค้นหา ใช้สไตล์ `.is-blocked` เดิมซ้ำได้
+- ต้อง `catch` แล้วปล่อยผ่าน — client เช็คไม่ได้ไม่ควรกันเซลล์ทำงาน ด่านจริงอยู่ที่ server
+
+### 4.5.4 `product-search.html` — สินค้าพ่วงไม่ถูกเช็ค
+
+[product-search.html:987](../liff_pages/product-search.html#L987) — `optionals.forEach`
+push เข้าตะกร้าโดยข้าม `/blocked` (เช็คเฉพาะสินค้าหลัก)
+⇒ เช็คสินค้าพ่วงด้วย ถ้าตัวพ่วงถูกบล็อกให้ข้ามตัวพ่วง + `showAlert` บอกว่าข้ามเพราะอะไร
+(ไม่ต้องบล็อกสินค้าหลักตาม — สินค้าหลักไม่ผิดอะไร)
+
+### 4.5.5 ล้างช่องว่างค้างในข้อความ
+
+ของเดิม `เงื่อนไข: Production 2(PM) >  > ` — หายไปเองเมื่อทำ §4.5.0 เพราะเลิกพิมพ์ scope แล้ว
+ไม่ต้องแก้ `scopeLabel` ให้ยุ่ง (ยังใช้กับ log/หน้าแอดมินได้ตามเดิม)
+
+### 4.5.6 ทดสอบเฟส 3.5
+
+| ตรวจ | วิธี |
+| --- | --- |
+| ข้อความตรงทั้ง 3 จุด | ยิง `/blocked` + เรียก `validateQuotationItems` + สร้าง PDF ของสินค้าตัวเดียวกัน → string ต้องเท่ากันเป๊ะ |
+| รายงานครบทุกบรรทัด | ใส่สินค้าถูกบล็อก 3 ตัว → ต้องได้ 3 violations พร้อมรหัสสินค้าครบ |
+| Flex ซ่อนปุ่ม | ใบจำลองที่มีสินค้าถูกบล็อก → `ยืนยันออกใบเสนอราคา` ต้องไม่อยู่ใน JSON |
+| Flex ไม่พังตอนโหลดกฎล้ม | mock ให้ `loadProductBlockRules` throw → การ์ดยังออกปกติ |
+| ค่าขนส่งไม่โดนบล็อก | `npm run diag:block-parity` |
+| ของเดิมไม่พัง | `npm run diag:quote-validation` · `npm run diag:pdf-render` |
 
 ---
 
@@ -504,7 +661,9 @@ ALTER TABLE public.quotation_rules DROP COLUMN is_locked;
 | match | กฎ model โดนทุก ref ในรุ่นนั้น |
 | match | กฎ brand ไม่โดนสินค้าต่าง brand |
 | is_active | กฎที่ปิดอยู่ต้องไม่บล็อก |
-| ข้อความ | `warn_msg` ที่กรอกเองชนะข้อความมาตรฐาน · scopeLabel ไม่มี `>` ลอย |
+| ข้อความ | ทรง MOQ เป๊ะ: `❌ ระงับการเสนอราคา รายการ <model>: <warn_msg>` · ไม่มี `warn_msg` → ` กรุณาติดต่อแอดมิน` · ไม่มี scope โผล่ในข้อความ |
+| ข้อความ | 3 จุด (endpoint · ด่านกลาง · PDF) ให้สตริงเดียวกันเป๊ะสำหรับสินค้าตัวเดียวกัน |
+| รายงานครบ | สินค้าถูกบล็อก 3 ตัว → 3 violations · `model` เป็นรหัสจริงไม่ใช่ `'-'` |
 | cache | แก้แล้ว invalidate เห็นผลทันที |
 | ค่าขนส่ง | item `is_shipping_fee` ไม่ถูกบล็อกไม่ว่ากฎจะเป็นอะไร |
 | สินค้าจริง | สุ่มสินค้าจาก DB มาผ่าน findBlockingRule ไม่ throw |
@@ -518,14 +677,23 @@ npm run diag:pdf-render
 npm run diag:stock-rule
 npm run diag:shipping-fee
 npm run diag:credit-hold
+npm run diag:block-parity
 npx tsx scripts/diag/ruleResolutionDiff.ts
 ```
+
+`diag:block-parity` ([scripts/diag/blockParity.ts](../scripts/diag/blockParity.ts)) เป็นชุดถาวรที่เพิ่มมาพร้อมแผนนี้
+เฝ้า 3 อย่าง: ด่านกลาง vs PDF ให้ผลตรงกันทุก scope จริง · บรรทัดค่าขนส่งไม่ถูกกฎครอบ ·
+ความครอบคลุมของกฎ (กี่ scope/กี่สินค้า) ไว้เทียบก่อน-หลัง migration เฟส 2
 
 ### 7.3 ทดสอบมือ (LIFF)
 
 1. บล็อกระดับ ref → ค้นสินค้าตัวนั้นใน `product-search.html` ต้องขึ้นข้อความบล็อก · สินค้ารุ่นเดียวกันคนละ ref ต้องผ่าน
 2. บล็อกระดับ model → ทุก ref ในรุ่นต้องโดน
 3. ใบที่มีสินค้าถูกบล็อกอยู่แล้ว → กดออก PDF ต้องถูกปฏิเสธพร้อมข้อความ (ด่านที่ 3)
+4. `quote-edit.html` → เพิ่มสินค้าที่ถูกบล็อกจากช่องค้นหา ต้องเด้งทันทีตั้งแต่กด `+` ไม่ใช่ตอนกดบันทึก (§4.5.3)
+5. `product-search.html` → สินค้าที่มีของพ่วงซึ่ง**ตัวพ่วง**ถูกบล็อก ต้องเพิ่มสินค้าหลักได้แต่ข้ามตัวพ่วงพร้อมบอกเหตุผล (§4.5.4)
+6. Flex สรุปร่างของใบที่มีสินค้าถูกบล็อก → ต้องมีแถบแดงใต้รายการนั้น และ**ไม่มี**ปุ่ม "ยืนยันออกใบเสนอราคา" (§4.5.2)
+7. ข้อความจาก 3 จุด (LIFF alert · ด่านกลาง · PDF) ของสินค้าตัวเดียวกัน ต้องเป็นสตริงเดียวกันเป๊ะ (§4.5.0)
 4. คุยผ่าน LINE สั่งสินค้าที่ถูกบล็อก → บอทต้องตอบข้อความบล็อก
 
 ---
@@ -537,7 +705,9 @@ npx tsx scripts/diag/ruleResolutionDiff.ts
 | กฎระดับ ref ไปบล็อกค่าขนส่ง (`SOFBLDXXXX0010`) | กลาง | ข้าม `is_shipping_fee` ในด่านที่ 2 + เคส diag |
 | แอดมินสร้างกฎ brand แล้วบล็อกสินค้าหลายร้อยตัวโดยไม่รู้ | กลาง | (ทำทีหลังได้) endpoint `preview` บอกจำนวนสินค้าที่กฎครอบ ก่อนกดบันทึก |
 | ลืม `invalidateRuleCache` ใน write path ใหม่ | ต่ำ | เคส cache ใน `blockRuleSmoke.ts` |
-| ข้อความบล็อกที่เซลล์เห็นเปลี่ยนรูปแบบ | ต่ำ | แจ้งทีมขายก่อนขึ้นเฟส 3 |
+| ข้อความบล็อกที่เซลล์เห็นเปลี่ยนรูปแบบ (ไปใช้ template MOQ) | **กลาง** | แจ้งทีมขายก่อนขึ้นเฟส 3.5 · ต้องเติม `warn_msg` ให้ครบทุกกฎก่อน ไม่งั้นเซลล์ได้แต่ default ที่ไม่บอกเหตุผล |
+| Flex ซ่อนปุ่มยืนยันเพิ่ม 1 เงื่อนไข → ใบที่เคยกดได้อาจกดไม่ได้ | ต่ำ | เป็นใบที่กดไปก็ถูกปฏิเสธที่ด่านจริงอยู่แล้ว · โหลดกฎล้ม = ปล่อยผ่าน ปุ่มยังโผล่ตามเดิม |
+| quote-edit ยิง `/blocked` เพิ่มทุกครั้งที่เพิ่มสินค้า | ต่ำ | endpoint มี fast-path + cache 60 วิ · client `catch` แล้วปล่อยผ่าน ด่านจริงอยู่ที่ server |
 | ลืมเพิ่ม `product_block_rules` ใน `externalSync` | ต่ำ | ข้อ 3.1 — ระบบไม่พัง แต่ข้อมูลไม่ถูกส่งออกและไม่มี error |
 | frontend เก่าที่ค้างในเบราว์เซอร์ยังส่ง `is_locked` หลัง drop คอลัมน์ | ต่ำ | เฟส 5 ต้องห่างจากเฟส 4 อย่างน้อย 1 สัปดาห์ · backend เลิกอ่าน field นี้ตั้งแต่เฟส 4 (ส่งมาก็แค่ถูกละเลย ไม่ 500) |
 | ระหว่างเฟส 2-4 มีข้อมูล 2 ที่ (`is_locked` + ตารางใหม่) | ต่ำ | เฟส 3 ขึ้นแล้วไม่มีใครอ่าน `is_locked` อีก · เฟส 4 เอา UI ออกทันทีในรอบเดียวกัน |
