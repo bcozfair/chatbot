@@ -1,4 +1,5 @@
-import { lineClient, createChatCompletion } from '../config/clients.js';
+import { lineClient as defaultLineClient, createChatCompletion } from '../config/clients.js';
+import type { ReplyClient } from '../services/chatChannel.js';
 import { pool, withTransaction } from '../config/db.js';
 import {
   getSalespersonByUserId,
@@ -278,7 +279,7 @@ function buildProductSelectionMessages(slot: any, slotIndex: number, userId: str
 
 export async function handleImage(event: any): Promise<any> {
   try {
-    return await lineClient.replyMessage({
+    return await defaultLineClient.replyMessage({
       replyToken: event.replyToken,
       messages: [{ type: 'text', text: 'ขออภัยครับ ตอนนี้ยังไม่รองรับการส่งภาพเข้ามาประมวลผลครับ 📷' }]
     });
@@ -296,11 +297,18 @@ const DEADLINE_ABORT = Symbol.for('chatbot.deadlineAbort');
  *   ไม่ส่งมา = ไม่จำกัด (เส้นทาง CLI/เทสที่ไม่มี replyToken)
  * @param opts.signal ธงยกเลิกจาก index.ts — ถูก abort ตอน Promise.race ตัดเพราะหมดงบ
  *   ไม่ส่งมา = ไม่มีใครยกเลิก (เส้นทาง CLI/เทส)
+ * @param opts.client ตัวตอบกลับที่จะใช้แทน lineClient — ช่องฉีดของเส้นทางเว็บ (เฟส A ของ
+ *   docs/plan-web-quote-request.md) **ไม่ส่งมา = lineClient ตัวเดิมทุกบิต** เส้นทาง LINE
+ *   จึงไม่ขยับ · ตัวที่ส่งเข้ามาจริงคือ createCaptureClient() ซึ่งเก็บข้อความแทนยิงออก LINE
  */
 export async function handleEvent(
   event: any,
-  opts: { deadlineAt?: number; signal?: AbortSignal } = {}
+  opts: { deadlineAt?: number; signal?: AbortSignal; client?: ReplyClient } = {}
 ): Promise<any> {
+  // ⚠️ ต้องเป็นบรรทัดแรกสุดของฟังก์ชัน — ชื่อนี้บังตัว import ไว้ทั้งสโคป ถ้ามีโค้ดอ้าง
+  // lineClient เหนือบรรทัดนี้จะเจอ TDZ แล้วพังตอน "รัน" ไม่ใช่ตอน compile (tsc จับไม่ได้)
+  const lineClient: ReplyClient = opts.client ?? defaultLineClient;
+
   /** เหลืองบอีกกี่ ms (Infinity ถ้าไม่ได้กำหนด deadline มา) */
   const remainingMs = () => (opts.deadlineAt === undefined ? Infinity : opts.deadlineAt - Date.now());
 
