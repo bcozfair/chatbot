@@ -627,10 +627,12 @@ app.get('/api/products/search', async (req: any, res: any) => {
         brand: item.brand,
         series: item.series,
         is_quote_blocked: !!blockingRule,
+        // trim รหัสก่อนประกอบข้อความ — model จาก Odoo มีที่ติดช่องว่างหัว/ท้ายมาจริง
+        // ถ้าไม่ trim ข้อความในผลค้นหาจะไม่ตรงกับด่านกลาง/PDF ทั้งที่ควรเป็นถ้อยคำเดียวกัน
         quote_blocked_msg: blockingRule
           ? buildViolationDisplay({
               type: 'BLOCKED',
-              model: item.code,
+              model: String(item.code ?? '').trim(),
               warn_msg: blockWarnText(blockingRule) ?? undefined
             })
           : null,

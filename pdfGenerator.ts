@@ -204,7 +204,7 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
       if (blockingRule) {
         throw new Error(buildViolationDisplay({
           type: 'BLOCKED',
-          model: item.product_code || item.model,
+          model: String(item.product_code || item.model || '').trim(),
           warn_msg: blockWarnText(blockingRule) ?? undefined
         }));
       }
