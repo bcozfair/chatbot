@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { useAuth } from '../context/AuthContext';
 import { KeyRound, Eye, EyeOff, AlertCircle, CheckCircle2, Loader2, X } from 'lucide-react';
 
-const BRAND = '#009032';
+const BRAND = 'var(--brand-fg)';
 const MIN_PASSWORD_LENGTH = 8;
 
 interface ChangePasswordModalProps {
@@ -66,15 +66,15 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ onClos
   };
 
   const inputClass =
-    'w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-[#009032] focus:ring-2 focus:ring-[#009032]/10 transition-all disabled:opacity-50';
+    'w-full bg-card border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-[var(--brand-fg)] focus:ring-2 focus:ring-[var(--brand-fg)]/10 transition-all disabled:opacity-50';
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
-      <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+      <div className="w-full max-w-md bg-card rounded-2xl shadow-2xl border border-slate-200 overflow-hidden">
         <div className="flex items-center gap-3 px-5 py-4 border-b border-slate-200">
           <div
             className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
-            style={{ backgroundColor: 'rgba(0, 144, 50, 0.10)', color: BRAND }}
+            style={{ backgroundColor: 'var(--brand-soft)', color: BRAND }}
           >
             <KeyRound className="w-4 h-4" />
           </div>
@@ -102,7 +102,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ onClos
             <button
               onClick={() => logout()}
               className="w-full py-2.5 px-4 text-white text-sm font-semibold rounded-xl transition-all active:scale-[0.98]"
-              style={{ backgroundColor: BRAND }}
+              style={{ backgroundColor: 'var(--brand)' }}
             >
               เข้าสู่ระบบใหม่
             </button>
@@ -186,7 +186,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ onClos
                 type="submit"
                 disabled={isSubmitting}
                 className="flex-1 py-2.5 px-4 text-white text-sm font-semibold rounded-xl transition-all active:scale-[0.98] flex items-center justify-center gap-2 disabled:opacity-50"
-                style={{ backgroundColor: BRAND }}
+                style={{ backgroundColor: 'var(--brand)' }}
               >
                 {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
                 บันทึก

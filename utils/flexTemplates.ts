@@ -1,6 +1,7 @@
 import { pool } from '../config/db.js';
 import { validateProductPriceWithPromotions, getRelevantPromotion } from './promotionValidator.js';
 import { calcNetPrice } from './pricing.js';
+import { resolveDeliveryTerms, deliveryDisplayText } from './deliveryTerms.js';
 
 export function createListFlexMessage(
   title: string,
@@ -627,25 +628,17 @@ export function isCustomerInfoIncomplete(quote: any): boolean {
 }
 
 /**
- * ข้อความกำหนดส่งของใบหนึ่งใบ — ใช้ค่าที่ enrichQuotationData คำนวณมาให้แล้ว
- * (delivery_days_auto / delivery_all_in_stock) และค่าที่เซลล์ตั้งทับไว้ (delivery_days_override)
+ * ข้อความกำหนดส่งของใบหนึ่งใบ — ถ้อยคำเดียวกับที่พิมพ์ลง PDF ทุกอักขระ
+ * (deliveryDisplayText ใน utils/deliveryTerms.ts) เซลล์จะได้ไม่ต้องแปลในหัวว่าคำไหนคือคำไหน
  *
- * fallback 3/7 วัน กับคำว่า In_stock./Make to order. ตรงกับ pdfGenerator และหน้า LIFF
- * เซลล์จะได้เห็นเลขเดียวกันทั้งในแชท ในหน้าแก้ไข และในไฟล์ PDF
+ * ต่อท้าย "(ตั้งค่าเอง)" เมื่อเซลล์ตั้งจำนวนวันเอง — เป็นข้อความในแชทสำหรับเซลล์เท่านั้น
+ * ไม่มีในเอกสาร และไม่มีในไฟล์นำเข้า Odoo
  */
 function formatDeliveryTime(quote: any): { text: string; allInStock: boolean } {
-  const raw = quote?.delivery_days_override;
-  const overrideDays = (raw === null || raw === undefined || raw === '' || !Number.isFinite(Number(raw)))
-    ? null
-    : Number(raw);
-  const allInStock = quote?.delivery_all_in_stock !== false;
-  const autoRaw = Number(quote?.delivery_days_auto);
-  const autoDays = Number.isFinite(autoRaw) ? autoRaw : (allInStock ? 3 : 7);
-  const days = overrideDays !== null ? overrideDays : autoDays;
-  const mode = allInStock ? 'In_stock.' : 'Make to order.';
+  const terms = resolveDeliveryTerms(quote);
   return {
-    text: `${mode} ภายใน ${days} วัน${overrideDays !== null ? ' (ตั้งค่าเอง)' : ''}`,
-    allInStock
+    text: `${deliveryDisplayText(terms)}${terms.days_source === 'override' ? ' (ตั้งค่าเอง)' : ''}`,
+    allInStock: terms.all_in_stock
   };
 }
 
@@ -707,11 +700,22 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
   // ไม่ใช่ตัวกันจริง (ตัวจริงคือด่านตอนกดยืนยัน) แต่ช่วยไม่ให้เซลล์กดแล้วเด้ง
   // ล้มแล้วปล่อยผ่าน: ปุ่มยังโผล่ตามปกติ แล้วไปโดนปฏิเสธที่ด่านจริงแทน
   let customerBlacklisted = false;
+  // ข้อความของด่านเครดิตต้องมาจาก buildViolationDisplay ที่เดียว (มีวันที่ซื้อล่าสุดประกอบอยู่)
+  // จึงถือมาเป็นสตริงสำเร็จรูป ไม่ใช่ boolean แบบ blacklist ที่ถ้อยคำคงที่
+  let creditHoldText: string | null = null;
   try {
     const { isBlacklisted } = await import('../services/blacklistService.js');
     customerBlacklisted = await isBlacklisted(quotes[0]?.customer_id, quotes[0]?.contact_id);
+    if (!customerBlacklisted) {
+      const { checkCreditHold } = await import('../services/creditHoldService.js');
+      const credit = await checkCreditHold(quotes[0]?.customer_id);
+      if (credit.held) {
+        const { creditHoldViolation } = await import('../services/quotationService.js');
+        creditHoldText = creditHoldViolation(credit).display_message;
+      }
+    }
   } catch (err) {
-    console.error('[getQuotationSummaryMessage] blacklist check failed (ปล่อยผ่าน):', err);
+    console.error('[getQuotationSummaryMessage] customer gate check failed (ปล่อยผ่าน):', err);
   }
   if (customerIncomplete && meta.company === 'ลูกค้าทั่วไป') meta.company = '';
 
@@ -1169,7 +1173,7 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
             }
           ];
 
-          if (customerIncomplete || hasMinPriceViolation || customerBlacklisted) {
+          if (customerIncomplete || hasMinPriceViolation || customerBlacklisted || creditHoldText) {
             // แสดงข้อความเตือนแทนปุ่มยืนยัน
             footerButtons.push({
               type: "box",
@@ -1181,7 +1185,9 @@ export async function getQuotationSummaryMessage(quotes: any[]) {
                     ? "⚠️ ยังยืนยันไม่ได้ — ต้องกรอกข้อมูลลูกค้าก่อน"
                     : customerBlacklisted
                       ? "🚫 บริษัท/ผู้ติดต่อ รายนี้ถูกระงับการเสนอราคา กรุณาติดต่อแอดมิน"
-                      : "⚠️ ไม่สามารถยืนยันได้ — มีสินค้าราคาต่ำกว่าขั้นต่ำ",
+                      : creditHoldText
+                        ? creditHoldText
+                        : "⚠️ ไม่สามารถยืนยันได้ — มีสินค้าราคาต่ำกว่าขั้นต่ำ",
                   size: "xs",
                   color: "#DC2626",
                   weight: "bold",

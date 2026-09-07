@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { DateInput } from './DateInput';
+import { PageHeader } from './PageHeader';
 import {
   FileText,
   Search,
@@ -57,6 +58,10 @@ interface Quotation {
   updated_at: string;
   /** เวลาที่ใบนี้ถูกส่งออกไฟล์นำเข้า Odoo ครั้งล่าสุด — null = ยังไม่เคยส่งออก */
   odoo_exported_at?: string | null;
+  /** เวลาที่รอบ sync เห็นใบนี้อยู่ใน Odoo ครั้งแรก — null = ยังไม่เคยเห็น (ดู services/quotationOdooLink.ts) */
+  odoo_imported_at?: string | null;
+  /** id ของเอกสารในฐาน Odoo ตอนจับคู่ได้ — ไม่เปลี่ยนแม้ Odoo จะเปลี่ยนชื่อเอกสารภายหลัง */
+  odoo_so_id?: number | null;
   customer_details?: {
     customer_name: string;
     customer_code: string;
@@ -88,8 +93,11 @@ const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 /** รูปแบบไฟล์นำเข้า Sale Order ของ Odoo — ตรงกับ query param `format` ของ endpoint export */
 type ExportFormat = 'xlsx' | 'csv';
 
-/** ตัวกรอง "สถานะการส่งออก Odoo" — ตรงกับ query param `exported` ของ backend */
-type ExportedFilter = 'no' | 'yes' | 'all';
+/**
+ * ตัวกรอง "สถานะ Odoo" — ตรงกับ query param `exported` ของ backend (db/repositories.ts)
+ * ค่าเรียงตามด่านที่ใบเดินผ่านจริง: no → pending → imported · yes = pending + imported
+ */
+type ExportedFilter = 'no' | 'yes' | 'all' | 'pending' | 'imported';
 
 /**
  * บริษัทที่ส่งออก — ตรงกับ query param `company` ของ backend (ดูจากคำนำหน้าเลขที่ใบ)
@@ -127,6 +135,35 @@ const STATUS_STYLES: Record<string, { bg: string; text: string; label: string }>
 
 function getStatusStyle(status: string) {
   return STATUS_STYLES[status] || { bg: 'bg-slate-50 border-slate-200', text: 'text-slate-600', label: status };
+}
+
+/**
+ * สถานะ Odoo ของใบเสนอราคา — 3 ขั้นเรียงตามลำดับที่เกิดจริง และเดินหน้าทางเดียว
+ *   ยังไม่ส่งออก → รอนำเข้า (ส่งออกไฟล์แล้วแต่ยังไม่เห็นใน Odoo) → นำเข้า Odoo แล้ว
+ * อ่านจาก snapshot ในตาราง quotations ไม่ใช่ join สดกับ sale_orders — Odoo เปลี่ยนชื่อเอกสาร
+ * ตอนยืนยัน/ออกบิล เลข Q* จึงหายไปจากฝั่งนั้นได้ ถ้า join สดสถานะจะเด้งกลับเองทั้งที่สำเร็จแล้ว
+ */
+type OdooStage = 'imported' | 'pending' | 'not_exported';
+
+const ODOO_STAGE_STYLES: Record<OdooStage, { bg: string; text: string; dot: string; label: string; hint: string }> = {
+  imported: {
+    bg: 'bg-emerald-50 border-emerald-200', text: 'text-emerald-700', dot: 'bg-emerald-500',
+    label: 'นำเข้า Odoo แล้ว', hint: 'พบใบนี้เป็นเอกสารในระบบ Odoo แล้ว',
+  },
+  pending: {
+    bg: 'bg-amber-50 border-amber-200', text: 'text-amber-700', dot: 'bg-amber-400',
+    label: 'รอนำเข้า', hint: 'ส่งออกไฟล์แล้วแต่ยังไม่พบใบนี้ใน Odoo — อาจยังไม่ได้อัปโหลด หรืออัปโหลดไม่สำเร็จ',
+  },
+  not_exported: {
+    bg: 'bg-slate-50 border-slate-200', text: 'text-slate-500', dot: 'bg-slate-300',
+    label: 'ยังไม่ส่งออก', hint: 'ยังไม่เคยอยู่ในไฟล์นำเข้า Odoo',
+  },
+};
+
+function getOdooStage(quote: Quotation): OdooStage {
+  if (quote.odoo_imported_at) return 'imported';
+  if (quote.odoo_exported_at) return 'pending';
+  return 'not_exported';
 }
 
 function formatNumber(num: number) {
@@ -199,8 +236,8 @@ export const Quotations: React.FC = () => {
       return <ArrowUpDown className="w-3.5 h-3.5 text-slate-300 ml-1.5 inline-block" />;
     }
     return sortOrder === 'asc'
-      ? <ArrowUp className="w-3.5 h-3.5 text-[#009032] ml-1.5 inline-block font-bold" />
-      : <ArrowDown className="w-3.5 h-3.5 text-[#009032] ml-1.5 inline-block font-bold" />;
+      ? <ArrowUp className="w-3.5 h-3.5 text-[var(--brand-fg)] ml-1.5 inline-block font-bold" />
+      : <ArrowDown className="w-3.5 h-3.5 text-[var(--brand-fg)] ml-1.5 inline-block font-bold" />;
   };
 
   // Expanded row (show items detail)
@@ -415,87 +452,79 @@ export const Quotations: React.FC = () => {
     <div className="space-y-4">
       {/* Success Toast */}
       {successMsg && (
-        <div className="fixed bottom-5 right-5 z-50 flex items-center gap-3 bg-white border border-slate-200 border-l-4 border-l-[#009032] p-4 rounded-2xl shadow-xl shadow-slate-200/50 text-slate-800 text-sm animate-fade-in">
-          <CheckCircle2 className="w-5 h-5 text-[#009032]" />
+        <div className="fixed bottom-5 right-5 z-50 flex items-center gap-3 bg-card border border-slate-200 border-l-4 border-l-[var(--brand-fg)] p-4 rounded-2xl shadow-xl shadow-slate-200/50 text-slate-800 text-sm animate-fade-in">
+          <CheckCircle2 className="w-5 h-5 text-[var(--brand-fg)]" />
           <span>{successMsg}</span>
         </div>
       )}
 
-      {/* Compact single-row header + filters */}
-      <div className="bg-white border border-slate-200 rounded-2xl px-5 py-3.5 shadow-sm space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-          <div className="flex items-center gap-2 flex-shrink-0">
-            <FileText className="w-5 h-5 text-[#009032]" />
-            <h2 className="text-base font-bold text-slate-900 whitespace-nowrap">ประวัติใบเสนอราคา</h2>
-            <span className="text-xs text-slate-400 hidden lg:inline">
-              ค้นหา ดูข้อมูล และส่งออกใบเสนอราคาทั้งหมดในระบบ
-            </span>
-          </div>
+      {/* หัวเรื่อง + ปุ่มส่งออก ขึ้นไปอยู่บนแถบบน (ดู PageHeader.tsx) เหลือแค่การ์ดตัวกรองในเนื้อหา */}
+      <PageHeader
+        icon={FileText}
+        title="ประวัติใบเสนอราคา"
+        description="ค้นหา ดูข้อมูล และส่งออกใบเสนอราคาทั้งหมดในระบบ"
+      >
+        <div className="relative" ref={exportMenuRef}>
+          <button
+            onClick={() => setExportMenuOpen(open => !open)}
+            disabled={isExporting}
+            className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[var(--brand)] hover:bg-[var(--brand-hover)] disabled:opacity-60 disabled:cursor-not-allowed text-white text-sm font-bold rounded-xl shadow-sm transition-all active:scale-95 flex-shrink-0"
+          >
+            {isExporting
+              ? <Loader2 className="w-4 h-4 animate-spin" />
+              : <FileSpreadsheet className="w-4 h-4" />}
+            <span className="hidden sm:inline">ส่งออก Odoo</span>
+            <ChevronDown className="w-3.5 h-3.5" />
+          </button>
 
-          <div className="flex-1" />
-
-          <div className="flex items-center gap-2 w-full sm:w-auto">
-            <div className="relative w-full sm:w-auto" ref={exportMenuRef}>
-              <button
-                onClick={() => setExportMenuOpen(open => !open)}
-                disabled={isExporting}
-                className="w-full flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[#009032] hover:bg-[#007b2b] disabled:opacity-60 disabled:cursor-not-allowed text-white text-sm font-bold rounded-xl shadow-sm transition-all active:scale-95 flex-shrink-0"
-              >
-                {isExporting
-                  ? <Loader2 className="w-4 h-4 animate-spin" />
-                  : <FileSpreadsheet className="w-4 h-4" />}
-                <span className="hidden sm:inline">ส่งออก Odoo</span>
-                <ChevronDown className="w-3.5 h-3.5" />
-              </button>
-
-              {exportMenuOpen && (
-                <div className="absolute right-0 top-full mt-2 z-30 w-[19rem] bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden">
-                  {/* 1 ครั้ง = 1 บริษัท — Odoo ของ PM กับ THT เป็นคนละระบบ ไฟล์จึงรวมกันไม่ได้ */}
-                  {EXPORT_COMPANIES.map(({ value, company }) => (
-                    <div key={value} className="flex items-center gap-2 px-3 py-2 border-b border-slate-100">
-                      <div className="flex items-baseline gap-1.5 flex-1 min-w-0">
-                        <span className="px-1.5 py-0.5 rounded-md bg-[#009032]/10 text-[#009032] text-xs font-extrabold tracking-wide">
-                          {value}
-                        </span>
-                        <span className="text-sm font-bold text-slate-800 truncate">{company}</span>
-                      </div>
-                      <button
-                        onClick={() => handleExportOdoo('xlsx', value)}
-                        title={`ส่งออก ${value} (${company}) เป็น Excel`}
-                        className="flex items-center gap-1 px-2 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-slate-600 hover:border-[#009032] hover:text-[#009032] hover:bg-[#009032]/5 transition-colors"
-                      >
-                        <FileSpreadsheet className="w-3.5 h-3.5" />
-                        Excel
-                      </button>
-                      <button
-                        onClick={() => handleExportOdoo('csv', value)}
-                        title={`ส่งออก ${value} (${company}) เป็น CSV`}
-                        className="flex items-center gap-1 px-2 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-slate-600 hover:border-[#009032] hover:text-[#009032] hover:bg-[#009032]/5 transition-colors"
-                      >
-                        <FileText className="w-3.5 h-3.5" />
-                        CSV
-                      </button>
-                    </div>
-                  ))}
+          {exportMenuOpen && (
+            <div className="absolute right-0 top-full mt-2 z-30 w-[19rem] bg-card border border-slate-200 rounded-xl shadow-xl overflow-hidden">
+              {/* 1 ครั้ง = 1 บริษัท — Odoo ของ PM กับ THT เป็นคนละระบบ ไฟล์จึงรวมกันไม่ได้ */}
+              {EXPORT_COMPANIES.map(({ value, company }) => (
+                <div key={value} className="flex items-center gap-2 px-3 py-2 border-b border-slate-100">
+                  <div className="flex items-baseline gap-1.5 flex-1 min-w-0">
+                    <span className="px-1.5 py-0.5 rounded-md bg-[var(--brand)]/10 text-[var(--brand-fg)] text-xs font-extrabold tracking-wide">
+                      {value}
+                    </span>
+                    <span className="text-sm font-bold text-slate-800 truncate">{company}</span>
+                  </div>
                   <button
-                    onClick={openHistory}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 transition-colors"
+                    onClick={() => handleExportOdoo('xlsx', value)}
+                    title={`ส่งออก ${value} (${company}) เป็น Excel`}
+                    className="flex items-center gap-1 px-2 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-slate-600 hover:border-[var(--brand-fg)] hover:text-[var(--brand-fg)] hover:bg-[var(--brand)]/5 transition-colors"
                   >
-                    <History className="w-4 h-4 text-slate-400" />
-                    ประวัติการส่งออก
+                    <FileSpreadsheet className="w-3.5 h-3.5" />
+                    Excel
                   </button>
-                  <p className="px-3 py-2 text-[11px] leading-snug text-slate-500 border-t border-slate-100 bg-slate-50">
-                    ส่งออกตามตัวกรองบนหน้าจอ (ตั้งต้น: เฉพาะใบที่ยังไม่เคยส่ง) ใบที่อยู่ในไฟล์จะถูกทำเครื่องหมายว่าส่งแล้วทันที
-                    · เลขที่ที่ไม่ขึ้นต้นด้วย QP/QT จะไม่อยู่ในไฟล์
-                  </p>
+                  <button
+                    onClick={() => handleExportOdoo('csv', value)}
+                    title={`ส่งออก ${value} (${company}) เป็น CSV`}
+                    className="flex items-center gap-1 px-2 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-slate-600 hover:border-[var(--brand-fg)] hover:text-[var(--brand-fg)] hover:bg-[var(--brand)]/5 transition-colors"
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                    CSV
+                  </button>
                 </div>
-              )}
+              ))}
+              <button
+                onClick={openHistory}
+                className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 transition-colors"
+              >
+                <History className="w-4 h-4 text-slate-400" />
+                ประวัติการส่งออก
+              </button>
+              <p className="px-3 py-2 text-[11px] leading-snug text-slate-500 border-t border-slate-100 bg-slate-50">
+                ส่งออกตามตัวกรองบนหน้าจอ (ตั้งต้น: เฉพาะใบที่ยังไม่เคยส่ง) ใบที่อยู่ในไฟล์จะถูกทำเครื่องหมายว่าส่งแล้วทันที
+                · เลขที่ที่ไม่ขึ้นต้นด้วย QP/QT จะไม่อยู่ในไฟล์
+              </p>
             </div>
-          </div>
+          )}
         </div>
+      </PageHeader>
 
-        {/* Filters */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 pt-4 border-t border-slate-100">
+      {/* Filters */}
+      <div className="bg-card border border-slate-200 rounded-2xl px-5 py-3.5 shadow-sm space-y-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
           {/* Search */}
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
@@ -505,7 +534,7 @@ export const Quotations: React.FC = () => {
               placeholder="ค้นหาเลขที่, ชื่อลูกค้า, ชื่อพนักงาน..."
               value={searchQuery}
               onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
-              className="w-full bg-white border border-slate-200 focus:border-[#009032] focus:ring-2 focus:ring-[#009032]/10 focus:outline-none rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 transition-all"
+              className="w-full bg-card border border-slate-200 focus:border-[var(--brand-fg)] focus:ring-2 focus:ring-[var(--brand-fg)]/10 focus:outline-none rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 transition-all"
             />
           </div>
 
@@ -515,7 +544,7 @@ export const Quotations: React.FC = () => {
               id="quotation-status-filter"
               value={statusFilter}
               onChange={(e) => { setStatusFilter(e.target.value); setCurrentPage(1); }}
-              className="w-full bg-white border border-slate-200 focus:border-[#009032] focus:ring-2 focus:ring-[#009032]/10 focus:outline-none rounded-xl px-4 py-2.5 text-sm text-slate-800 transition-all appearance-none cursor-pointer"
+              className="w-full bg-card border border-slate-200 focus:border-[var(--brand-fg)] focus:ring-2 focus:ring-[var(--brand-fg)]/10 focus:outline-none rounded-xl px-4 py-2.5 text-sm text-slate-800 transition-all appearance-none cursor-pointer"
             >
               <option value="">สถานะทั้งหมด</option>
               <option value="draft">ร่าง</option>
@@ -527,17 +556,20 @@ export const Quotations: React.FC = () => {
             <Filter className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
           </div>
 
-          {/* Export Status Filter — ตั้งต้น "ยังไม่ส่งออก" เพื่อให้กดส่งออกได้เลยโดยไม่ซ้ำ */}
+          {/* Odoo Status Filter — ตั้งต้น "ยังไม่ส่งออก" เพื่อให้กดส่งออกได้เลยโดยไม่ซ้ำ
+              ค่าที่เลือกใช้กับทั้งตารางและปุ่มส่งออก (ส่ง param `exported` ตัวเดียวกัน) */}
           <div className="relative">
             <select
               id="quotation-exported-filter"
               value={exportedFilter}
               onChange={(e) => { setExportedFilter(e.target.value as ExportedFilter); setCurrentPage(1); }}
-              className="w-full bg-white border border-slate-200 focus:border-[#009032] focus:ring-2 focus:ring-[#009032]/10 focus:outline-none rounded-xl px-4 py-2.5 text-sm text-slate-800 transition-all appearance-none cursor-pointer"
+              className="w-full bg-card border border-slate-200 focus:border-[var(--brand-fg)] focus:ring-2 focus:ring-[var(--brand-fg)]/10 focus:outline-none rounded-xl px-4 py-2.5 text-sm text-slate-800 transition-all appearance-none cursor-pointer"
             >
-              <option value="no">ยังไม่ส่งออก Odoo</option>
-              <option value="yes">ส่งออก Odoo แล้ว</option>
-              <option value="all">การส่งออกทั้งหมด</option>
+              <option value="no">ยังไม่ส่งออก</option>
+              <option value="pending">รอนำเข้า Odoo</option>
+              <option value="imported">นำเข้า Odoo แล้ว</option>
+              <option value="yes">ส่งออกแล้ว (รอนำเข้า + นำเข้าแล้ว)</option>
+              <option value="all">สถานะ Odoo ทั้งหมด</option>
             </select>
             <FileSpreadsheet className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
           </div>
@@ -549,7 +581,7 @@ export const Quotations: React.FC = () => {
               value={dateFrom}
               onChange={(v) => { setDateFrom(v); setCurrentPage(1); }}
               aria-label="กรองตั้งแต่วันที่"
-              className="w-full bg-white border border-slate-200 focus-within:border-[#009032] focus-within:ring-2 focus-within:ring-[#009032]/10 focus:border-[#009032] focus:ring-2 focus:ring-[#009032]/10 focus:outline-none rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-800 transition-all"
+              className="w-full bg-card border border-slate-200 focus-within:border-[var(--brand-fg)] focus-within:ring-2 focus-within:ring-[var(--brand-fg)]/10 focus:border-[var(--brand-fg)] focus:ring-2 focus:ring-[var(--brand-fg)]/10 focus:outline-none rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-800 transition-all"
             />
           </div>
 
@@ -560,7 +592,7 @@ export const Quotations: React.FC = () => {
               value={dateTo}
               onChange={(v) => { setDateTo(v); setCurrentPage(1); }}
               aria-label="กรองถึงวันที่"
-              className="w-full bg-white border border-slate-200 focus-within:border-[#009032] focus-within:ring-2 focus-within:ring-[#009032]/10 focus:border-[#009032] focus:ring-2 focus:ring-[#009032]/10 focus:outline-none rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-800 transition-all"
+              className="w-full bg-card border border-slate-200 focus-within:border-[var(--brand-fg)] focus-within:ring-2 focus-within:ring-[var(--brand-fg)]/10 focus:border-[var(--brand-fg)] focus:ring-2 focus:ring-[var(--brand-fg)]/10 focus:outline-none rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-800 transition-all"
             />
           </div>
         </div>
@@ -595,15 +627,15 @@ export const Quotations: React.FC = () => {
 
       {/* Loading State */}
       {isLoading && (
-        <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center shadow-sm flex flex-col items-center justify-center gap-3">
-          <Loader2 className="w-7 h-7 text-[#009032] animate-spin" />
+        <div className="bg-card border border-slate-200 rounded-2xl p-10 text-center shadow-sm flex flex-col items-center justify-center gap-3">
+          <Loader2 className="w-7 h-7 text-[var(--brand-fg)] animate-spin" />
           <p className="text-slate-500 text-sm font-medium">กำลังค้นหาข้อมูล...</p>
         </div>
       )}
 
       {/* Empty State */}
       {!isLoading && !error && quotations.length === 0 && (
-        <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center shadow-sm text-slate-500 flex flex-col items-center justify-center gap-2">
+        <div className="bg-card border border-slate-200 rounded-2xl p-10 text-center shadow-sm text-slate-500 flex flex-col items-center justify-center gap-2">
           <FileText className="w-9 h-9 text-slate-300" />
           <p className="font-bold">ไม่พบรายการใบเสนอราคา</p>
           <p className="text-xs">ลองปรับเปลี่ยนตัวกรองหรือค้นหาด้วยคำอื่น</p>
@@ -612,48 +644,48 @@ export const Quotations: React.FC = () => {
 
       {/* Table Section */}
       {!isLoading && !error && quotations.length > 0 && (
-        <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+        <div className="bg-card border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm border-collapse">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 text-[11px] font-semibold uppercase tracking-wider select-none">
                   <th 
                     onClick={() => handleSort('created_at')}
-                    className="px-4 py-3 cursor-pointer hover:bg-slate-100 transition-colors"
+                    className="px-4 py-3 whitespace-nowrap cursor-pointer hover:bg-slate-100 transition-colors"
                   >
                     เลขที่ / วันที่ {renderSortIcon('created_at')}
                   </th>
                   <th 
                     onClick={() => handleSort('customer_name')}
-                    className="px-4 py-3 cursor-pointer hover:bg-slate-100 transition-colors"
+                    className="px-4 py-3 w-full whitespace-nowrap cursor-pointer hover:bg-slate-100 transition-colors"
                   >
                     ลูกค้า {renderSortIcon('customer_name')}
                   </th>
                   <th 
                     onClick={() => handleSort('salesperson_name')}
-                    className="px-4 py-3 cursor-pointer hover:bg-slate-100 transition-colors"
+                    className="px-4 py-3 whitespace-nowrap cursor-pointer hover:bg-slate-100 transition-colors"
                   >
                     พนักงานขาย {renderSortIcon('salesperson_name')}
                   </th>
                   <th 
                     onClick={() => handleSort('total_sum')}
-                    className="px-4 py-3 text-right cursor-pointer hover:bg-slate-100 transition-colors"
+                    className="px-4 py-3 text-right whitespace-nowrap cursor-pointer hover:bg-slate-100 transition-colors"
                   >
                     ยอดรวม {renderSortIcon('total_sum')}
                   </th>
                   <th 
                     onClick={() => handleSort('status')}
-                    className="px-4 py-3 text-center cursor-pointer hover:bg-slate-100 transition-colors"
+                    className="px-4 py-3 text-center whitespace-nowrap cursor-pointer hover:bg-slate-100 transition-colors"
                   >
                     สถานะ {renderSortIcon('status')}
                   </th>
                   <th
                     onClick={() => handleSort('odoo_exported_at')}
-                    className="px-4 py-3 text-center cursor-pointer hover:bg-slate-100 transition-colors"
+                    className="px-4 py-3 text-center whitespace-nowrap cursor-pointer hover:bg-slate-100 transition-colors"
                   >
-                    ส่งออก Odoo {renderSortIcon('odoo_exported_at')}
+                    สถานะ Odoo {renderSortIcon('odoo_exported_at')}
                   </th>
-                  <th className="px-4 py-3 text-center">จัดการ</th>
+                  <th className="px-4 py-3 text-center whitespace-nowrap">จัดการ</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -668,7 +700,7 @@ export const Quotations: React.FC = () => {
                         onClick={() => setExpandedId(isExpanded ? null : quote.id)}
                       >
                         {/* Quotation No / Date */}
-                        <td className="px-4 py-2.5">
+                        <td className="px-4 py-2.5 whitespace-nowrap">
                           <div className="flex flex-col">
                             <span className="font-mono font-bold text-slate-900 text-sm">
                               {quote.quotation_no || '-'}
@@ -679,8 +711,9 @@ export const Quotations: React.FC = () => {
                           </div>
                         </td>
 
-                        {/* Customer */}
-                        <td className="px-4 py-2.5">
+                        {/* Customer — คอลัมน์เดียวที่ยอมให้ตัดบรรทัด ชื่อบริษัทไทยยาวเกินกว่าจะบังคับบรรทัดเดียว
+                            w-full ทำให้มันดูดพื้นที่ที่เหลือทั้งหมด คอลัมน์อื่นจึงไม่ถูกบีบจนข้อความตกบรรทัด */}
+                        <td className="px-4 py-2.5 w-full min-w-[16rem]">
                           <div className="flex flex-col">
                             <span className="font-semibold text-slate-800 text-sm">
                               {quote.company_name || (quote.customer_name || '')}
@@ -694,51 +727,57 @@ export const Quotations: React.FC = () => {
                         </td>
 
                         {/* Salesperson */}
-                        <td className="px-4 py-2.5">
+                        <td className="px-4 py-2.5 whitespace-nowrap">
                           <span className="text-slate-700 text-sm">
                             {quote.salesperson_name || '-'}
                           </span>
                         </td>
 
                         {/* Total */}
-                        <td className="px-4 py-2.5 text-right">
+                        <td className="px-4 py-2.5 text-right whitespace-nowrap">
                           <span className="font-mono font-semibold text-slate-900 text-sm">
                             ฿{formatNumber(quote.total_sum || 0)}
                           </span>
                         </td>
 
                         {/* Status */}
-                        <td className="px-4 py-2.5 text-center">
-                          <span className={`inline-flex items-center px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border ${statusStyle.bg} ${statusStyle.text}`}>
+                        <td className="px-4 py-2.5 text-center whitespace-nowrap">
+                          <span className={`inline-flex items-center whitespace-nowrap px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border ${statusStyle.bg} ${statusStyle.text}`}>
                             {statusStyle.label}
                           </span>
                         </td>
 
-                        {/* Odoo export status */}
-                        <td className="px-4 py-2.5 text-center">
-                          {quote.odoo_exported_at ? (
-                            <div className="flex flex-col items-center gap-0.5">
-                              <span className="inline-flex items-center px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border bg-emerald-50 border-emerald-200 text-emerald-700">
-                                ส่งออกแล้ว
-                              </span>
-                              <span className="text-[10px] text-slate-400">{formatDate(quote.odoo_exported_at)}</span>
-                            </div>
-                          ) : (
-                            <span className="inline-flex items-center px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border bg-slate-50 border-slate-200 text-slate-500">
-                              ยังไม่ส่งออก
-                            </span>
-                          )}
+                        {/* Odoo status: ยังไม่ส่งออก → รอนำเข้า → นำเข้า Odoo แล้ว */}
+                        <td className="px-4 py-2.5 text-center whitespace-nowrap">
+                          {(() => {
+                            const stage = getOdooStage(quote);
+                            const st = ODOO_STAGE_STYLES[stage];
+                            return (
+                              <div className="flex flex-col items-center gap-0.5" title={st.hint}>
+                                <span className={`inline-flex items-center gap-1.5 whitespace-nowrap px-3 py-1 rounded-full text-[10px] font-bold tracking-wider border ${st.bg} ${st.text}`}>
+                                  <span className={`w-1.5 h-1.5 shrink-0 rounded-full ${st.dot}`} />
+                                  {st.label}
+                                </span>
+                                {stage === 'imported' && (
+                                  <span className="text-[10px] text-slate-400">{formatDate(quote.odoo_imported_at as string)}</span>
+                                )}
+                                {stage === 'pending' && (
+                                  <span className="text-[10px] text-slate-400">ส่งออก {formatDate(quote.odoo_exported_at as string)}</span>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </td>
 
                         {/* Actions */}
-                        <td className="px-4 py-2.5 text-center">
+                        <td className="px-4 py-2.5 text-center whitespace-nowrap">
                           <div className="flex items-center justify-center gap-2">
                             {quote.quotation_no && (
                               <a
                                 href={`/download-pdf/${quote.id}/${encodeURIComponent(quote.quotation_no)}`}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="p-2 bg-white hover:bg-emerald-50 text-slate-500 hover:text-emerald-600 border border-slate-200 hover:border-emerald-200 rounded-xl transition-all active:scale-95 shadow-sm"
+                                className="p-2 bg-card hover:bg-emerald-50 text-slate-500 hover:text-emerald-600 border border-slate-200 hover:border-emerald-200 rounded-xl transition-all active:scale-95 shadow-sm"
                                 title="ดาวน์โหลด PDF"
                                 onClick={(e) => e.stopPropagation()}
                               >
@@ -749,7 +788,7 @@ export const Quotations: React.FC = () => {
                               <button
                                 type="button"
                                 disabled={unmarkingId === quote.id}
-                                className="p-2 bg-white hover:bg-amber-50 text-slate-500 hover:text-amber-600 border border-slate-200 hover:border-amber-200 rounded-xl transition-all active:scale-95 shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
+                                className="p-2 bg-card hover:bg-amber-50 text-slate-500 hover:text-amber-600 border border-slate-200 hover:border-amber-200 rounded-xl transition-all active:scale-95 shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
                                 title="ยกเลิกเครื่องหมายส่งออก (ให้ส่งออกใหม่ได้)"
                                 onClick={(e) => { e.stopPropagation(); handleUnmarkExport(quote); }}
                               >
@@ -766,7 +805,7 @@ export const Quotations: React.FC = () => {
                       {isExpanded && (
                         <tr className="bg-slate-50/70">
                           <td colSpan={7} className="px-4 py-2.5">
-                            <div className="text-[11px] space-y-2 border-l-2 border-[#009032]/30 pl-3">
+                            <div className="text-[11px] space-y-2 border-l-2 border-[var(--brand-fg)]/30 pl-3">
                               {/* label กับค่าอยู่บรรทัดเดียวกันและตัดขึ้นบรรทัดใหม่เองเมื่อจอแคบ — ข้อมูลครบเท่าเดิมแต่เตี้ยลงครึ่งหนึ่ง */}
                               <div className="flex flex-wrap gap-x-5 gap-y-1">
                                 <div>
@@ -819,7 +858,7 @@ export const Quotations: React.FC = () => {
                                         }
 
                                         return (
-                                          <tr key={idx} className="border-b border-slate-100/70 hover:bg-white/70 transition-colors">
+                                          <tr key={idx} className="border-b border-slate-100/70 hover:bg-slate-100/70 transition-colors">
                                             <td className="py-0.5 pr-3 font-mono text-slate-700">{item.model || item.product_code || '-'}</td>
                                             {/* ตัดชื่อยาวด้วย … กันดันแถวเป็น 2 บรรทัด — ชื่อเต็มยังอ่านได้จาก tooltip */}
                                             <td className="py-0.5 pr-3 text-slate-600">
@@ -860,7 +899,7 @@ export const Quotations: React.FC = () => {
                 <select
                   value={pageSize}
                   onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
-                  className="h-7 px-2 rounded-lg border border-slate-200 bg-white text-xs font-semibold outline-none focus:border-[#009032]"
+                  className="h-7 px-2 rounded-lg border border-slate-200 bg-card text-xs font-semibold outline-none focus:border-[var(--brand-fg)]"
                 >
                   {PAGE_SIZE_OPTIONS.map(n => (
                     <option key={n} value={n}>{n}</option>
@@ -873,7 +912,7 @@ export const Quotations: React.FC = () => {
               <button
                 onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
                 disabled={safePage <= 1}
-                className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-card text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 <ChevronLeft className="w-3.5 h-3.5" />
               </button>
@@ -886,8 +925,8 @@ export const Quotations: React.FC = () => {
                     key={p}
                     onClick={() => setCurrentPage(p)}
                     className={`w-7 h-7 flex items-center justify-center rounded-lg text-xs font-bold transition-colors ${p === safePage
-                      ? 'bg-[#009032] text-white'
-                      : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                      ? 'bg-[var(--brand)] text-white'
+                      : 'bg-card border border-slate-200 text-slate-600 hover:bg-slate-100'
                       }`}
                   >
                     {p}
@@ -898,7 +937,7 @@ export const Quotations: React.FC = () => {
               <button
                 onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
                 disabled={safePage >= totalPages}
-                className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-card text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 <ChevronRight className="w-3.5 h-3.5" />
               </button>
@@ -910,15 +949,15 @@ export const Quotations: React.FC = () => {
       {/* ── Export History Modal ── */}
       {historyOpen && (
         <div
-          className="fixed inset-0 z-40 bg-slate-900/40 flex items-start justify-center p-4 sm:p-8 overflow-y-auto"
+          className="fixed inset-0 z-40 bg-black/60 flex items-start justify-center p-4 sm:p-8 overflow-y-auto"
           onClick={() => setHistoryOpen(false)}
         >
           <div
-            className="bg-white border border-slate-200 rounded-2xl shadow-xl w-full max-w-3xl my-8"
+            className="bg-card border border-slate-200 rounded-2xl shadow-xl w-full max-w-3xl my-8"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center gap-2 px-5 py-4 border-b border-slate-100">
-              <History className="w-5 h-5 text-[#009032]" />
+              <History className="w-5 h-5 text-[var(--brand-fg)]" />
               <h3 className="text-base font-bold text-slate-900">ประวัติการส่งออก Odoo</h3>
               <div className="flex-1" />
               <button
@@ -932,7 +971,7 @@ export const Quotations: React.FC = () => {
 
             {isLoadingBatches && (
               <div className="p-10 flex flex-col items-center justify-center gap-3">
-                <Loader2 className="w-7 h-7 text-[#009032] animate-spin" />
+                <Loader2 className="w-7 h-7 text-[var(--brand-fg)] animate-spin" />
                 <p className="text-slate-500 text-sm font-medium">กำลังโหลดประวัติ...</p>
               </div>
             )}
@@ -984,7 +1023,7 @@ export const Quotations: React.FC = () => {
                             type="button"
                             disabled={batch.active_count === 0 || unmarkingId === batch.id}
                             onClick={() => handleUnmarkBatch(batch)}
-                            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-white hover:bg-amber-50 text-slate-600 hover:text-amber-700 border border-slate-200 hover:border-amber-200 rounded-xl text-xs font-semibold transition-all active:scale-95 shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-card hover:bg-amber-50 text-slate-600 hover:text-amber-700 border border-slate-200 hover:border-amber-200 rounded-xl text-xs font-semibold transition-all active:scale-95 shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
                             title="ยกเลิกเครื่องหมายส่งออกของทั้งชุด"
                           >
                             {unmarkingId === batch.id

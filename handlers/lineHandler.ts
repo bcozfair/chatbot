@@ -14,7 +14,8 @@ import {
   getBranchesByCodes,
 } from '../db/repositories.js';
 import { calcNetPrice, round2 } from '../utils/pricing.js';
-import { buildPdfLink } from '../utils/quotationLink.js';
+import { buildPdfLink, parseQuotationNosFromText } from '../utils/quotationLink.js';
+import { getAppUrl } from '../config/appUrl.js';
 import { 
   createBranchSelectionFlex, 
   getQuotationSummaryMessage, 
@@ -544,7 +545,7 @@ export async function handleEvent(
             continue;
           }
 
-          const reqUrl = process.env.APP_URL || `http://localhost:${process.env.PORT || 3011}`;
+          const reqUrl = getAppUrl();
 
           if (currentQuote.status === 'confirmed') {
             // ยืนยันไปแล้ว — แสดงผลสำเร็จเหมือนเดิม (ผู้กดยืนยันต้องเห็น ✅ เสมอ ไม่ใช่ข้อความคลุมเครือ)
@@ -807,6 +808,15 @@ export async function handleEvent(
         const quoteIds = pendingQuotes.map((q: any) => q.id);
         const parts = pendingQuotes[0].customer_name.split('|');
         const companyName = parts[0] ? parts[0].trim() : '';
+
+        // รายชื่อผู้ติดต่อค้นข้ามนิติบุคคล (getRelatedContactsByCustomerId) การกดเลือกคนจึงเป็น
+        // การเลือกบริษัทไปในตัว — ใบต้องย้ายไปผูกบริษัทของคนที่เลือก ไม่ใช่บริษัทที่ค้นเจอตอนแรก
+        // ชื่อบริษัทใน snapshot ถูก updateQuotationCustomerSnapshot ดึงใหม่จากคู่ที่ผูกจริง
+        // (ดู companyNameOfRow) ตรงนี้จึง log ไว้ให้ตามรอยได้เวลาใบเปลี่ยนบริษัทกลางคัน
+        if (String(pendingQuotes[0].customer_id ?? '') !== String(resolvedCustomerId ?? '')) {
+          console.log(`[select_contact] ผู้ติดต่อ "${contactName}" อยู่ใต้บริษัทพี่น้อง → ย้ายใบจากบริษัท ${pendingQuotes[0].customer_id} ไป ${resolvedCustomerId} (ค้นด้วย "${companyName}")`);
+        }
+
         const finalCustomerName = `${companyName} | ${contactName}`;
 
         // ด่าน blacklist — จุดเดียวในระบบที่เรียก updateQuotationCustomerSnapshot โดยไม่ผ่าน
@@ -815,15 +825,19 @@ export async function handleEvent(
         // แล้วตอบ "อัปเดตข้อมูลไม่สำเร็จ" ซึ่งเป็นข้อความคนละเรื่อง
         {
           const { isBlacklisted } = await import('../services/blacklistService.js');
-          const { buildViolationText, blacklistViolation, systemErrorViolation } =
+          const { checkCreditHold } = await import('../services/creditHoldService.js');
+          const { buildViolationText, blacklistViolation, creditHoldViolation, systemErrorViolation } =
             await import('../services/quotationService.js');
           let blockText: string | null = null;
           try {
             if (await isBlacklisted(resolvedCustomerId, contactId)) {
               blockText = buildViolationText([blacklistViolation()]);
+            } else {
+              const credit = await checkCreditHold(resolvedCustomerId);
+              if (credit.held) blockText = buildViolationText([creditHoldViolation(credit)]);
             }
           } catch (err) {
-            console.error('[select_contact] blacklist check failed (fail-closed):', err);
+            console.error('[select_contact] customer gate failed (blacklist/credit, fail-closed):', err);
             blockText = buildViolationText([systemErrorViolation()]);
           }
           if (blockText) {
@@ -1122,7 +1136,7 @@ export async function handleEvent(
           }
 
           if (quotes && quotes.length > 0) {
-            const reqUrl = process.env.APP_URL || '';
+            const reqUrl = getAppUrl();
             const messages: any[] = [];
 
             for (const q of quotes) {
@@ -1218,16 +1232,18 @@ export async function handleEvent(
       // 🔎 Trigger: พิมพ์เลขที่ใบเสนอราคาล้วน ๆ (เช่น "QT-260705020") → ตอบปุ่มดาวน์โหลด PDF
       // ใช้กับ LINE PC ที่ liff.sendMessages ใช้ไม่ได้ และใช้ขอ PDF ย้อนหลังได้ทุกเมื่อ
       // gate เฉพาะ status 'active' เพื่อไม่ชน flow แก้ไขใบ (edit_quote_number) ที่ user พิมพ์เลขที่เช่นกัน
-      if (
-        salesperson.status === 'active' &&
-        /^\s*(?:(?:QT|QP)-[0-9]+(?:-R[0-9]+)?[\s,]*)+$/i.test(trimmedContent)
-      ) {
-        const quotationNos = trimmedContent.toUpperCase().match(/(?:QT|QP)-[0-9]+(?:-R[0-9]+)?/g) || [];
+      //
+      // รูปแบบเลขที่ (รวมใบฉบับแก้ไข "-01") อยู่ที่ parseQuotationNosFromText ที่เดียว
+      // — เดิมเขียน regex ไว้ตรงนี้เป็น -R[0-9]+ ซึ่งไม่มีอยู่จริง ใบ revision จึงขอ PDF ไม่ได้
+      //
+      const quotationNos =
+        salesperson.status === 'active' ? parseQuotationNosFromText(trimmedContent) : null;
+      if (quotationNos) {
         try {
           const quotes = await getQuotationsByNos(quotationNos, userId);
 
           if (quotes && quotes.length > 0) {
-            const reqUrl = process.env.APP_URL || '';
+            const reqUrl = getAppUrl();
             const messages: any[] = [];
             for (const q of quotes) {
               const quoteNo = q.quotation_no || '-';

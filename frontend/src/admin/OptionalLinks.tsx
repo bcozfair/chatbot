@@ -16,6 +16,7 @@ import {
   ChevronLeft,
   ChevronRight
 } from 'lucide-react';
+import { PageHeader } from './PageHeader';
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 
@@ -111,11 +112,11 @@ const ProductComboBox: React.FC<ProductComboBoxProps> = ({
         <div
           className={`flex items-center gap-2 w-full h-11 px-3.5 rounded-xl border text-sm transition-all ${
             isOpen
-              ? 'border-[#009032] bg-white ring-2 ring-[#009032]/10 shadow-sm'
+              ? 'border-[var(--brand-fg)] bg-card ring-2 ring-[var(--brand-fg)]/10 shadow-sm'
               : error
               ? 'border-red-300 bg-red-50/10'
               : value
-              ? 'border-slate-300 bg-white'
+              ? 'border-slate-300 bg-card'
               : 'border-slate-200 bg-slate-50 hover:border-slate-300'
           }`}
           onClick={() => setIsOpen(true)}
@@ -152,10 +153,10 @@ const ProductComboBox: React.FC<ProductComboBoxProps> = ({
         </div>
 
         {isOpen && (
-          <div className="absolute z-50 mt-1.5 w-full bg-white border border-slate-200 rounded-xl shadow-xl max-h-56 overflow-y-auto divide-y divide-slate-100">
+          <div className="absolute z-50 mt-1.5 w-full bg-card border border-slate-200 rounded-xl shadow-xl max-h-56 overflow-y-auto divide-y divide-slate-100">
             {isLoading ? (
               <div className="p-4 text-center text-xs text-slate-400 flex items-center justify-center gap-2">
-                <Loader2 className="w-4 h-4 text-[#009032] animate-spin" />
+                <Loader2 className="w-4 h-4 text-[var(--brand-fg)] animate-spin" />
                 กำลังค้นหา...
               </div>
             ) : results.length === 0 ? (
@@ -273,8 +274,8 @@ export const OptionalLinks: React.FC = () => {
       return <ArrowUpDown className="w-3.5 h-3.5 text-slate-300 ml-1.5 inline-block" />;
     }
     return sortDirection === 'asc'
-      ? <ArrowUp className="w-3.5 h-3.5 text-[#009032] ml-1.5 inline-block font-bold" />
-      : <ArrowDown className="w-3.5 h-3.5 text-[#009032] ml-1.5 inline-block font-bold" />;
+      ? <ArrowUp className="w-3.5 h-3.5 text-[var(--brand-fg)] ml-1.5 inline-block font-bold" />
+      : <ArrowDown className="w-3.5 h-3.5 text-[var(--brand-fg)] ml-1.5 inline-block font-bold" />;
   };
 
   // Open modal for Create
@@ -508,44 +509,35 @@ export const OptionalLinks: React.FC = () => {
         </div>
       )}
 
-      {/* Compact single-row header */}
-      <div className="bg-white border border-slate-200 rounded-2xl px-5 py-3.5 shadow-sm flex flex-col sm:flex-row sm:items-center gap-3">
-        <div className="flex items-center gap-2 flex-shrink-0">
-          <LinkIcon className="w-5 h-5 text-[#009032]" />
-          <h2 className="text-base font-bold text-slate-900 whitespace-nowrap">คู่สินค้าหลัก-สินค้าเสริม (Optional)</h2>
-          <span className="text-xs text-slate-400 hidden lg:inline">
-            พ่วงเสนอขายสินค้าเสริมอัตโนมัติเมื่อเลือกสินค้าหลัก
-          </span>
+      <PageHeader
+        icon={LinkIcon}
+        title="คู่สินค้าหลัก-สินค้าเสริม (Optional)"
+        description="พ่วงเสนอขายสินค้าเสริมอัตโนมัติเมื่อเลือกสินค้าหลัก"
+      >
+        <div className="relative flex-1 sm:w-60">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+          <input
+            type="text"
+            placeholder="ค้นหา..."
+            value={searchQuery}
+            onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
+            className="w-full pl-9 pr-3 py-2 text-sm bg-slate-50 border border-slate-200 hover:border-slate-300 focus:border-[var(--brand-fg)] focus:bg-card rounded-xl outline-none transition-all"
+          />
         </div>
 
-        <div className="flex-1" />
-
-        <div className="flex items-center gap-2 w-full sm:w-auto">
-          <div className="relative flex-1 sm:w-60">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
-            <input
-              type="text"
-              placeholder="ค้นหา..."
-              value={searchQuery}
-              onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
-              className="w-full pl-9 pr-3 py-2 text-sm bg-slate-50 border border-slate-200 hover:border-slate-300 focus:border-[#009032] focus:bg-white rounded-xl outline-none transition-all"
-            />
-          </div>
-
-          <button
-            onClick={handleCreateOpen}
-            className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[#009032] hover:bg-[#007b2b] text-white text-sm font-bold rounded-xl shadow-sm transition-all active:scale-95 flex-shrink-0"
-          >
-            <Plus className="w-4 h-4" />
-            <span className="hidden sm:inline">สร้างคู่ใหม่</span>
-          </button>
-        </div>
-      </div>
+        <button
+          onClick={handleCreateOpen}
+          className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[var(--brand)] hover:bg-[var(--brand-hover)] text-white text-sm font-bold rounded-xl shadow-sm transition-all active:scale-95 flex-shrink-0"
+        >
+          <Plus className="w-4 h-4" />
+          <span className="hidden sm:inline">สร้างคู่ใหม่</span>
+        </button>
+      </PageHeader>
 
       {/* Loading & Empty States */}
       {isLoading ? (
-        <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center shadow-sm flex flex-col items-center justify-center gap-3">
-          <Loader2 className="w-7 h-7 text-[#009032] animate-spin" />
+        <div className="bg-card border border-slate-200 rounded-2xl p-10 text-center shadow-sm flex flex-col items-center justify-center gap-3">
+          <Loader2 className="w-7 h-7 text-[var(--brand-fg)] animate-spin" />
           <p className="text-slate-500 text-sm font-medium">กำลังโหลดข้อมูลสินค้าเสริม...</p>
         </div>
       ) : error ? (
@@ -555,14 +547,14 @@ export const OptionalLinks: React.FC = () => {
           <p className="text-sm text-red-600">{error}</p>
         </div>
       ) : sortedLinks.length === 0 ? (
-        <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center shadow-sm text-slate-500 flex flex-col items-center justify-center gap-2">
+        <div className="bg-card border border-slate-200 rounded-2xl p-10 text-center shadow-sm text-slate-500 flex flex-col items-center justify-center gap-2">
           <LinkIcon className="w-9 h-9 text-slate-300" />
           <p className="font-bold">ไม่พบความสัมพันธ์สินค้าเสริม</p>
           <p className="text-xs">ทดลองใช้ช่องค้นหาอื่น หรือสร้างการจับคู่ใหม่ได้ทันที</p>
         </div>
       ) : (
         /* Links Table */
-        <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+        <div className="bg-card border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
           <div className="overflow-x-auto">
             <table className="w-full border-collapse text-left">
               <thead className="sticky top-0 z-10">
@@ -594,7 +586,7 @@ export const OptionalLinks: React.FC = () => {
                       <div className="text-[11px] text-slate-500 line-clamp-1">{link.trigger_name}</div>
                     </td>
                     <td className="px-4 py-2.5 align-top">
-                      <div className="font-semibold text-[#009032] text-[13px] font-mono">{link.optional_model}</div>
+                      <div className="font-semibold text-[var(--brand-fg)] text-[13px] font-mono">{link.optional_model}</div>
                       <div className="text-[11px] text-slate-500 line-clamp-1">{link.optional_name}</div>
                     </td>
                     <td className="px-4 py-2.5 text-slate-500 text-xs italic">
@@ -649,7 +641,7 @@ export const OptionalLinks: React.FC = () => {
                 <select
                   value={pageSize}
                   onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
-                  className="h-7 px-2 rounded-lg border border-slate-200 bg-white text-xs font-semibold outline-none focus:border-[#009032]"
+                  className="h-7 px-2 rounded-lg border border-slate-200 bg-card text-xs font-semibold outline-none focus:border-[var(--brand-fg)]"
                 >
                   {PAGE_SIZE_OPTIONS.map(n => (
                     <option key={n} value={n}>{n}</option>
@@ -662,7 +654,7 @@ export const OptionalLinks: React.FC = () => {
               <button
                 onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
                 disabled={safePage <= 1}
-                className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-card text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 <ChevronLeft className="w-3.5 h-3.5" />
               </button>
@@ -675,8 +667,8 @@ export const OptionalLinks: React.FC = () => {
                     key={p}
                     onClick={() => setCurrentPage(p)}
                     className={`w-7 h-7 flex items-center justify-center rounded-lg text-xs font-bold transition-colors ${p === safePage
-                      ? 'bg-[#009032] text-white'
-                      : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                      ? 'bg-[var(--brand)] text-white'
+                      : 'bg-card border border-slate-200 text-slate-600 hover:bg-slate-100'
                       }`}
                   >
                     {p}
@@ -687,7 +679,7 @@ export const OptionalLinks: React.FC = () => {
               <button
                 onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
                 disabled={safePage >= totalPages}
-                className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-card text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 <ChevronRight className="w-3.5 h-3.5" />
               </button>
@@ -698,8 +690,8 @@ export const OptionalLinks: React.FC = () => {
 
       {/* Edit/Create Modal Form */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl border border-slate-200 w-full max-w-lg shadow-2xl flex flex-col max-h-[90vh]">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-card rounded-2xl border border-slate-200 w-full max-w-lg shadow-2xl flex flex-col max-h-[90vh]">
 
             <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100">
               <div>
@@ -753,7 +745,7 @@ export const OptionalLinks: React.FC = () => {
                     value={note}
                     onChange={(e) => setNote(e.target.value)}
                     placeholder="เช่น ซีรีส์นี้ต้องการตัวแปลงเสริมพ่วง..."
-                    className="w-full h-9 px-3 bg-white border border-slate-200 focus:border-[#009032] rounded-xl text-sm text-slate-800 outline-none transition-all focus:ring-2 focus:ring-[#009032]/10"
+                    className="w-full h-9 px-3 bg-card border border-slate-200 focus:border-[var(--brand-fg)] rounded-xl text-sm text-slate-800 outline-none transition-all focus:ring-2 focus:ring-[var(--brand-fg)]/10"
                   />
                 </div>
 
@@ -763,8 +755,8 @@ export const OptionalLinks: React.FC = () => {
                     <p className="text-xs font-bold text-slate-700">เปิดใช้งานความสัมพันธ์นี้</p>
                     <p className="text-[10px] text-slate-400">ระบุการทำงานพ่วงแถมสินค้าแบบอัตโนมัติในใบเสนอราคา</p>
                   </div>
-                  <div className={`relative w-9 h-5 rounded-full flex-shrink-0 transition-colors ${isActive ? 'bg-[#009032]' : 'bg-slate-300'}`}>
-                    <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-all ${isActive ? 'left-4' : 'left-0.5'}`} />
+                  <div className={`relative w-9 h-5 rounded-full flex-shrink-0 transition-colors ${isActive ? 'bg-[var(--brand)]' : 'bg-slate-300'}`}>
+                    <div className={`absolute top-0.5 w-4 h-4 bg-card rounded-full shadow-sm transition-all ${isActive ? 'left-4' : 'left-0.5'}`} />
                     <input
                       type="checkbox"
                       checked={isActive}
@@ -786,7 +778,7 @@ export const OptionalLinks: React.FC = () => {
                 <button
                   type="submit"
                   disabled={isSaving}
-                  className="px-5 py-2 text-xs font-bold text-white bg-[#009032] hover:bg-[#007b2b] rounded-lg transition-all active:scale-95 shadow-sm flex items-center gap-1.5"
+                  className="px-5 py-2 text-xs font-bold text-white bg-[var(--brand)] hover:bg-[var(--brand-hover)] rounded-lg transition-all active:scale-95 shadow-sm flex items-center gap-1.5"
                 >
                   {isSaving && <Loader2 className="w-3 h-3 animate-spin" />}
                   {editingLink ? 'บันทึกการแก้ไข' : 'บันทึกข้อมูล'}
@@ -799,8 +791,8 @@ export const OptionalLinks: React.FC = () => {
 
       {/* Delete Confirmation Dialog */}
       {isDeleteConfirmOpen && linkToDelete && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl border border-slate-200 w-full max-w-sm shadow-2xl">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-card rounded-2xl border border-slate-200 w-full max-w-sm shadow-2xl">
             <div className="p-6 text-center">
               <div className="w-12 h-12 rounded-full bg-red-50 flex items-center justify-center mx-auto mb-3">
                 <Trash2 className="w-6 h-6 text-red-500" />

@@ -1,6 +1,9 @@
 # deps — ติดตั้งใหม่ใน image
 node_modules
 frontend/node_modules
+# logworker ติดตั้ง dependency ขั้นต่ำของตัวเองไว้ที่ deploy/logworker/node_modules
+# แล้ว symlink เข้า scripts/logworker/ — pattern บนสุดไม่ครอบโฟลเดอร์ซ้อน จึงต้องระบุแยก
+**/node_modules
 
 # build outputs — สร้างใหม่ตอน build image
 public
@@ -23,3 +26,5 @@ backup
 
 # plan / docs ที่ไม่ต้องใน image
 DEPLOY.md
+# ของสำหรับรันบน host เท่านั้น (systemd unit + dependency ของ logworker) ไม่เกี่ยวกับ image
+deploy

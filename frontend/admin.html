@@ -2,10 +2,20 @@
 <html lang="th">
   <head>
     <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/logo.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Chatbot ออกใบเสนอราคา - Primus Co., Ltd.</title>
+    <script>
+      // เซ็ตธีมก่อน React โหลด กันจอวาบขาวตอนเปิดหน้า (ค่าเริ่มต้น = มืด)
+      try {
+        var t = localStorage.getItem('admin-theme');
+        document.documentElement.dataset.theme = t === 'light' ? 'light' : 'dark';
+      } catch (e) {
+        document.documentElement.dataset.theme = 'dark';
+      }
+    </script>
   </head>
-  <body class="bg-slate-950 text-slate-50">
+  <body>
     <div id="root"></div>
     <script type="module" src="/src/admin/main.tsx"></script>
   </body>

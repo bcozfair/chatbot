@@ -9,8 +9,12 @@
 //     คีย์ที่เชื่อม sale_orders ↔ customers ได้จริงคือ contact_id (res_partner id) เท่านั้น
 //     + customer_tax_id เป็น fallback หา company — จึงวัด "ลูกค้าหาย" ด้วย contact_id ล้วน
 //
-//  ให้รัน "ก่อน" แก้เพื่อเห็น gap เป็นตัวเลข แล้วรันซ้ำ "หลัง" full re-sync / backfill เพื่อยืนยันว่าลด
-//  ใช้เป็น guard ประจำหลัง sync ด้วย: ถ้าเลขไม่เป็น 0 แปลว่า customer sync ยังกวาดไม่ครบ
+//  ⚠️ GAP ที่ไม่เป็น 0 "ไม่ใช่ปัญหา" — contact ที่มีเฉพาะใน sale_orders (ส่วนใหญ่บุคคลธรรมดา/
+//     ไม่มี tax_id ที่ customer sync ไม่ได้กวาด) ถูก customers_data_build "Arm 2" ดึงเข้า
+//     customers_data_view ให้อยู่แล้ว (source='saleorder') แอปจึงค้นหาเจอปกติ
+//     ตัวเลขที่ควรเป็น 0 จริง ๆ คือ "GAP vs customers_data_view" ด้านล่าง — ถ้าไม่ 0 ค่อยแปลว่าเสีย
+//     (Arm 2 พัง หรือ view rebuild ไม่สำเร็จ) การรัน sync:customers --full / backfill:contacts
+//     ไม่ได้ทำให้ GAP แรกเป็น 0 และไม่จำเป็นถ้า GAP vs view = 0
 // ─────────────────────────────────────────────────────────────────────────────
 import { pool } from '../../config/db.js';
 
@@ -34,9 +38,15 @@ try {
       SELECT DISTINCT contact_id FROM sale_orders WHERE contact_id>0
       EXCEPT SELECT DISTINCT contact_id FROM customers WHERE contact_id>0) t`))[0].n;
 
+  // gap ที่ชี้ปัญหาจริง: contact ที่แอปหาไม่เจอ (view ครอบไม่ถึง) — ควรเป็น 0 เสมอ
+  const viewGap = (await q(`SELECT COUNT(*)::int n FROM (
+      SELECT DISTINCT contact_id FROM sale_orders WHERE contact_id>0
+      EXCEPT SELECT DISTINCT contact_id FROM customers_data_view WHERE contact_id>0) t`))[0].n;
+
   console.log(`contact_id ใน sale_orders (distinct): ${soDistinct}`);
   console.log(`contact_id ใน customers   (distinct): ${cuDistinct}`);
-  console.log(`>> GAP: contact_id มีใน sale_orders แต่ไม่มีใน customers = ${gap}\n`);
+  console.log(`   GAP vs customers (ปกติไม่เป็น 0 — Arm 2 ครอบให้แล้ว ไม่ต้องแก้) = ${gap}`);
+  console.log(`>> GAP vs customers_data_view (ต้องเป็น 0 ถ้าไม่ใช่ = ปัญหาจริง) = ${viewGap}\n`);
 
   console.log('── แยกสาเหตุ (ด้วย customer_tax_id) ──');
   const buckets = await q(`

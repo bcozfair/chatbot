@@ -10,7 +10,7 @@
 //
 //  read-only ทั้งหมด — อ่านใบเสนอราคาจริงมา build แถวแล้วตรวจ ไม่เขียนอะไรลง DB
 //
-//  ครอบคลุม: ลำดับ/จำนวนหัวคอลัมน์ · กติกา one2many ของ Odoo (แถวที่ 2+ ต้องเว้น A–L) ·
+//  ครอบคลุม: ลำดับ/จำนวนหัวคอลัมน์ · กติกา one2many ของ Odoo (แถวที่ 2+ ต้องเว้น A–L และ S–T) ·
 //            ช่องบังคับที่ว่างไม่ได้ · ช่องค่าคงที่ (source_id/uom/tax) · ชนิดข้อมูลของช่องตัวเลข
 //            การแยกบริษัท: ไฟล์มีเฉพาะใบของบริษัทที่เลือก ใบที่เลขไม่ขึ้นต้น QP/QT ไม่ลงไฟล์
 //            และชื่อภาษีเป็นค่าของบริษัทนั้น (QP กับ QT ต่างกันแค่เว้นวรรค แต่ต่างกันจริง)
@@ -39,6 +39,11 @@ import {
 } from '../../services/odooSaleOrderExport.js';
 import { calcLineTotal } from '../../utils/pricing.js';
 import { resolveMinWarrantyDisplay, warrantyNoteText } from '../../utils/warranty.js';
+import {
+  resolveDeliveryTerms,
+  deliveryOdooName,
+  deliveryOdooTime,
+} from '../../utils/deliveryTerms.js';
 
 const ok = (label: string, cond: boolean, extra = '') =>
   console.log(`${cond ? '✓' : '✗ FAIL'}  ${label}${extra ? '  ' + extra : ''}`);
@@ -69,10 +74,12 @@ const TEMPLATE_HEADERS = [
   'date_order', 'payment_term_id', 'Salesperson', 'Sales Team', 'employee_quotation_id',
   'source_id', 'note', 'order_line/product', 'order_line/product_uom_qty',
   'order_line/product_uom', 'order_line/price_unit', 'order_line/tax_id', 'order_line/discount',
+  // S/T: ช่องหัวใบที่ต่อท้ายไฟล์ (ยืนยันด้วยการนำเข้า Odoo จริงแล้ว)
+  'delivery_name', 'delivery_time',
 ];
 
 // ── 1. หัวคอลัมน์ตรงกับ template ────────────────────────────────────────
-ok('หัวคอลัมน์มี 18 ช่อง', ODOO_SO_HEADERS.length === 18, `(ได้ ${ODOO_SO_HEADERS.length})`);
+ok('หัวคอลัมน์มี 20 ช่อง', ODOO_SO_HEADERS.length === 20, `(ได้ ${ODOO_SO_HEADERS.length})`);
 ok('หัวคอลัมน์ตรงกับ template ทั้งชื่อและลำดับ',
   JSON.stringify([...ODOO_SO_HEADERS]) === JSON.stringify(TEMPLATE_HEADERS));
 
@@ -95,7 +102,7 @@ const { rows: quotes } = await pool.query<OdooExportQuotationRow & {
   quotation_no: string; total_sum: string; customer_id: number | null; contact_id: number | null;
 }>(
   `SELECT q.quotation_no, q.total_sum, q.created_at, q.updated_at, q.customer_details, q.item_details, q.employee_details,
-          q.customer_id, q.contact_id,
+          q.customer_id, q.contact_id, q.delivery_terms,
           s.name AS salesperson_name, cust.sales_team AS customer_sales_team,
           s.employee_quotation_id AS salesperson_employee_quotation_id,
           ${ODOO_EXPORT_RAW_NAME_COLS}
@@ -154,6 +161,8 @@ const HEADER_KEYS = [
   'name', 'partner_id', 'contact', 'partner_invoice_id', 'partner_shipping_id',
   'date_order', 'payment_term_id', 'salesperson', 'sales_team', 'employee_quotation_id',
   'source_id', 'note',
+  // อยู่ท้ายไฟล์ (S) แต่เป็นช่องหัวใบ — ต้องเว้นว่างในแถวต่อเนื่องเหมือน A–L
+  'delivery_name',
 ] as const;
 
 // ตัวเทียบอิสระของช่อง I: อ่าน sales_team จาก customers_data_view ตรง ๆ ไม่ผ่านท่อน JOIN ที่ export ใช้
@@ -231,6 +240,8 @@ let missingQuotationNo = 0;
 let missingPaymentTerm = 0;
 let badContact = 0;
 let badNote = 0;
+let badDelivery = 0;
+let missingDeliveryTerms = 0;
 let badSuffix = 0;
 let badSalesTeam = 0;
 let emptySalesTeam = 0;
@@ -350,8 +361,21 @@ for (const quote of quotesWithItems) {
     console.log(`   ✗ ${quote.quotation_no}: note ไม่ตรง (ได้ "${first.note}" คาด "${expectedNote}")`);
   }
 
+  // T: delivery_time เป็นตัวเลข ค่าว่างคือ null ไม่ใช่ '' จึงเช็คแยกจาก HEADER_KEYS
+  const wantTerms = quote.delivery_terms
+    ? resolveDeliveryTerms(quote as any)
+    : null;
+  const wantName = wantTerms ? deliveryOdooName(wantTerms) : '';
+  const wantTime = wantTerms ? deliveryOdooTime(wantTerms) : null;
+  if (first.delivery_name !== wantName || first.delivery_time !== wantTime) {
+    badDelivery++;
+    console.log(`   ✗ ${quote.quotation_no}: กำหนดส่งไม่ตรง (ได้ "${first.delivery_name}"/${first.delivery_time} คาด "${wantName}"/${wantTime})`);
+  }
+  if (!wantTerms) missingDeliveryTerms++;
+
   for (const row of slice.slice(1)) {
-    const leaked = HEADER_KEYS.filter(key => row[key] !== '');
+    const leaked: string[] = HEADER_KEYS.filter(key => row[key] !== '');
+    if (row.delivery_time !== null) leaked.push('delivery_time');
     if (leaked.length > 0) {
       continuationBad++;
       console.log(`   ✗ ${quote.quotation_no}: แถวต่อเนื่องมีค่าหัวใบค้าง → ${leaked.join(', ')}`);
@@ -360,8 +384,10 @@ for (const quote of quotesWithItems) {
 }
 
 ok('ทุกใบมีค่าหัวใบครบในแถวแรก', firstRowBad === 0, firstRowBad ? `(พลาด ${firstRowBad} ใบ)` : '');
-ok('แถวที่ 2 ขึ้นไปเว้นคอลัมน์ A–L ว่างตามกติกา one2many', continuationBad === 0,
+ok('แถวที่ 2 ขึ้นไปเว้นช่องหัวใบ (A–L และ S–T) ว่างตามกติกา one2many', continuationBad === 0,
   continuationBad ? `(พลาด ${continuationBad} แถว)` : '');
+ok('delivery_name/delivery_time (S/T) ตรงกับกำหนดส่งที่ตรึงไว้ในใบ', badDelivery === 0,
+  badDelivery ? `(พลาด ${badDelivery} ใบ)` : `(ใบที่ยังไม่มีค่าตรึงไว้ = ปล่อยว่าง ${missingDeliveryTerms} ใบ)`);
 ok('ทุกใบผูกลูกค้าแล้ว (partner_id ไม่ว่าง)', missingCompany === 0,
   missingCompany ? `(ว่าง ${missingCompany} ใบ)` : '');
 ok('ช่อง contact เป็นรูปแบบ "บริษัท, ผู้ติดต่อ"', badContact === 0,

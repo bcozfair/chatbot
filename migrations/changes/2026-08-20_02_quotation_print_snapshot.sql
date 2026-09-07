@@ -1,0 +1,34 @@
+-- ─────────────────────────────────────────────────────────────────────────────
+--  ตรึงค่าที่ PDF ต้องใช้ ไว้ตอนยืนยันใบ — ให้เอกสารที่พิมพ์ซ้ำเหมือนเดิมทุกครั้ง
+--
+--  ปัญหา: /download-pdf/:id เจน PDF ใหม่สดทุกครั้ง ค่าหลายตัวจึงเปลี่ยนตามเวลา
+--  ใบเดียวกันพิมพ์คนละวันได้เอกสารคนละหน้าตา — ลูกค้าถือใบหนึ่ง เซลเปิดดูอีกใบหนึ่ง
+--
+--  ค่าส่วนใหญ่ตรึงได้โดยไม่ต้องเก็บอะไรใหม่ เพราะข้อมูลอยู่ในใบแล้ว:
+--    วันที่เอกสาร  → created_at (ตัวเดียวกับที่ allocateQuotationNo ใช้คำนวณเลขที่)
+--    ค่าย PM/THT   → prefix ของ quotation_no (คือผลของ resolveQuoteCompany ที่ตรึงตอนออกเลข)
+--    ชื่อ/เบอร์เซล → employee_details
+--    บรรทัดค่าขนส่ง → item_details[].delivery_source = 'shipping_fee'
+--
+--  เหลือ "สต๊อก" อย่างเดียวที่ไม่มีเก็บไว้เลย — ตัดสินจาก products.quantity_on_hand_unreserved
+--  สดทุกครั้งที่ enrich จึงต้องมีที่เก็บใหม่
+--
+--  print_snapshot
+--    { "item_stock": [3, 0, 12], "frozen_at": "..." }  เรียงตรง index กับ item_details
+--    เขียนที่ confirmQuotationAtomic จุดเดียวกับ delivery_terms
+--
+--    NULL = ใบร่างที่ยังไม่ยืนยัน หรือใบเก่าก่อน deploy → pdfGenerator กลับไปใช้สต๊อกสด
+--    เหมือนเดิมทุกประการ (พฤติกรรมเดิม 100%)
+--
+--    ใบเก่าเติมด้วย scripts/backfillPrintSnapshot.ts ซึ่งใช้สต๊อกวันที่รันสคริปต์และติดธง
+--    "backfilled": true ไว้ — เป็นสต๊อกชุดเดียวกับที่ backfillDeliveryTerms.ts ใช้ ค่าที่ตรึง
+--    ทั้งสองก้อนจึงสอดคล้องกันถาวร (ไม่มีเคส "In_stock." คู่กับ "สินค้าคงเหลือ 0 pcs.")
+--
+--  เป็น jsonb เพราะพื้นที่นี้ requirement เปลี่ยนบ่อย — ตรึงค่าอื่นเพิ่มทีหลังได้โดยไม่ต้อง migrate
+--
+--  รัน: npx tsx scripts/runMigration.ts migrations/changes/2026-08-20_02_quotation_print_snapshot.sql
+--  ไฟล์นี้ idempotent — รันซ้ำได้ผลเท่าเดิม
+-- ─────────────────────────────────────────────────────────────────────────────
+
+ALTER TABLE public.quotations
+  ADD COLUMN IF NOT EXISTS print_snapshot jsonb;

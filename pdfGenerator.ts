@@ -14,6 +14,7 @@ import {
 import { calcNetPrice, calcVat, calcGrandTotal } from "./utils/pricing.js";
 import { DEFAULT_WARRANTY_DISPLAY, resolveMinWarrantyDisplay, warrantyNoteText } from "./utils/warranty.js";
 import { thaiDateDMY } from "./utils/thaiTime.js";
+import { resolveDeliveryTerms, deliveryDisplayText } from "./utils/deliveryTerms.js";
 
 // ใช้ Chrome ตัวเดียวร่วมกันทุก request แทนการ launch ใหม่ทุกครั้ง
 // เดิม: launch ต่อ request และ browser.close() ไม่อยู่ใน finally -> error หนึ่งครั้ง = Chrome ค้าง 1 ตัว สะสมจน RAM หมด
@@ -62,6 +63,42 @@ export async function closePdfBrowser(): Promise<void> {
   }
 }
 
+/** เพดานเวลารอฟอนต์ — สั้นกว่าเวลาที่ Google Fonts ตอบปกติ (วัดได้ 40-111 ms) หลายสิบเท่า */
+const FONTS_READY_TIMEOUT_MS = 3_000;
+
+/**
+ * รอให้ webfont โหลดเสร็จก่อนสั่งพิมพ์ — คู่กับ waitUntil: "load"
+ *
+ * ทำไมต้องมี: "load" การันตีแค่ว่า <script>/<link> โหลดเสร็จ ไม่ได้การันตีว่าไฟล์ .woff2 ที่ CSS
+ * สั่งโหลดต่ออีกทอดมาถึงแล้ว ถ้าไม่รอตรงนี้ ผลจะไปขึ้นกับว่า "สคริปต์ Tailwind บังเอิญโหลดนานกว่า
+ * ฟอนต์หรือเปล่า" ซึ่งเป็นการแข่งกันที่ชนะบ้างแพ้บ้าง — ทดลองแล้วเห็นจริง: ตัดตัวถ่วงออกแล้วยิง 3 รอบ
+ * ได้ screenshot 124,682 / 122,735 / 124,682 ไบต์ คือฟอนต์มาไม่ทันบางรอบ แล้ว PDF เพี้ยนแบบเงียบ ๆ
+ * ไม่มี error ให้จับ · พอรอ document.fonts.ready ผลนิ่งทุกรอบ
+ *
+ * ทำไมต้องมี timeout ของตัวเอง: ของเดิม networkidle0 มี timeout 30 วิของ puppeteer คุมอยู่ในตัว
+ * แต่ page.evaluate ไม่มีเพดานเวลา ⇒ ถ้า Google Fonts ไม่ตอบ การเจน PDF จะค้างถาวร
+ * หมดเวลาแล้วพิมพ์ต่อด้วยฟอนต์ fallback — ได้ PDF หน้าตาเพี้ยนยังดีกว่าผู้ใช้กดแล้วค้าง
+ */
+async function waitForFontsReady(page: import("puppeteer").Page): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      // ส่งเป็นสตริงเพราะ tsconfig ไม่ได้เปิด lib DOM — และ .then(() => true) กันไม่ให้ puppeteer
+      // ต้อง serialize ตัว FontFaceSet กลับมา (ส่งข้ามไม่ได้ ค่าที่ต้องการคือ "เสร็จแล้ว" เฉย ๆ)
+      page.evaluate("document.fonts.ready.then(() => true)"),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("fonts.ready timeout")), FONTS_READY_TIMEOUT_MS);
+      }),
+    ]);
+  } catch (err: any) {
+    console.warn(
+      `[pdfGenerator] ฟอนต์ยังโหลดไม่เสร็จใน ${FONTS_READY_TIMEOUT_MS}ms — พิมพ์ต่อด้วยฟอนต์ที่มี:`,
+      err?.message ?? err);
+  } finally {
+    if (timer) clearTimeout(timer);   // ไม่เคลียร์ = timer ค้างถ่วง event loop ทุกครั้งที่เจน PDF
+  }
+}
+
 // แยก sales_description เป็นบรรทัดตาม \n เดิมในข้อมูล (trim + ตัดบรรทัดว่างทิ้ง)
 function splitSalesDescriptionLines(desc: string): string[] {
   return String(desc)
@@ -71,9 +108,38 @@ function splitSalesDescriptionLines(desc: string): string[] {
     .filter(Boolean);
 }
 
+/**
+ * แทนค่า "ที่คำนวณสด" ในรายการสินค้าด้วยค่าที่ตรึงไว้ตอนยืนยันใบ
+ *
+ * enrichQuotationData() ดึงสต๊อกสดจาก products และตัดสิน is_shipping_fee จาก config สดทุกครั้ง
+ * ซึ่งถูกสำหรับใบร่าง (เซลกำลังดูของจริง) แต่ผิดสำหรับเอกสารที่ส่งลูกค้าไปแล้ว
+ *
+ * คืน array เดิมกลับไปตรง ๆ เมื่อไม่มีอะไรให้ตรึง — ใบร่างและใบเก่าก่อน deploy จึงได้ผลเท่าเดิมทุกไบต์
+ */
+function freezePrintItems(items: any[], snapshots: any[], printSnapshot: any): any[] {
+  const frozenStock = Array.isArray(printSnapshot?.item_stock) && printSnapshot.item_stock.length === items.length
+    ? printSnapshot.item_stock
+    : null;
+  // delivery_source เป็นเครื่องหมายถาวรที่ buildShippingFeeSnapshot เขียนไว้ในบรรทัดค่าขนส่ง
+  // ใบเก่ามาก ๆ ไม่มีคีย์นี้ (ตรวจแล้ว 2 จาก 679 ใบ) — เคสนั้นถอยไปใช้ค่าจาก enrich เหมือนเดิม
+  const snapsAligned = Array.isArray(snapshots) && snapshots.length === items.length;
+  if (!frozenStock && !snapsAligned) return items;
+
+  return items.map((item: any, i: number) => {
+    const snap = snapsAligned ? snapshots[i] : null;
+    const out = { ...item };
+    if (frozenStock) out.stock = Number(frozenStock[i]) || 0;
+    if (snap && snap.delivery_source !== undefined) {
+      out.is_shipping_fee = snap.delivery_source === 'shipping_fee';
+    }
+    return out;
+  });
+}
+
 export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string | null): Promise<Uint8Array> {
-  const itemsList = quoteData.items || [];
   const itemSnapshots = quoteData.item_details || [];
+  // ทุกจุดที่อ่าน stock / is_shipping_fee ด้านล่างใช้ตัวนี้ต่อ จึงไม่มีทางหลงเหลือค่าสด
+  const itemsList = freezePrintItems(quoteData.items || [], itemSnapshots, quoteData.print_snapshot);
 
   // คำนวณวันรับประกันและระยะเวลาจัดส่ง
   let minWarrantyDisplay = DEFAULT_WARRANTY_DISPLAY;
@@ -149,19 +215,18 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
   }
 
   // จำนวนวันที่กฏคำนวณได้ — เซลล์ตั้งทับได้จากหน้า LIFF (quotations.delivery_days_override)
-  // ส่วนคำนำหน้า In_stock./Make to order. ยังมาจากสถานะสต๊อกจริงเสมอ ไม่ให้แก้
+  // ส่วนประเภทการส่งมาจากสถานะสต๊อก เว้นแต่เซลล์เลือกเอง (quotations.delivery_type_override)
   const autoDeliveryDays = itemDeliveryDays.length > 0
     ? Math.max(...itemDeliveryDays)
     : (allItemsInStock ? 3 : 7);
-  const overrideDays = Number.isInteger(Number(quoteData.delivery_days_override))
-    && quoteData.delivery_days_override !== null
-    ? Number(quoteData.delivery_days_override)
-    : null;
-  const finalDeliveryDays = overrideDays !== null ? overrideDays : autoDeliveryDays;
 
-  const deliveryTimeText = allItemsInStock
-    ? `In_stock.,With in  ${finalDeliveryDays}  Days`
-    : `Make to order.,With in  ${finalDeliveryDays}  Days`;
+  // ใบที่ยืนยันแล้วมี delivery_terms ตรึงไว้ → resolveDeliveryTerms คืนค่านั้นตรง ๆ เอกสาร
+  // ที่พิมพ์ซ้ำทีหลังจึงเหมือนใบแรกเสมอ แม้สต๊อกจะเปลี่ยนไปแล้ว · ใบที่ยังไม่ยืนยันคิดสดจากค่าข้างบน
+  const deliveryTimeText = deliveryDisplayText(resolveDeliveryTerms({
+    ...quoteData,
+    delivery_days_auto: autoDeliveryDays,
+    delivery_all_in_stock: allItemsInStock,
+  }));
 
   let grossSubTotal = 0;
   let discountedSubTotal = 0;
@@ -184,8 +249,18 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
   const vat = calcVat(discountedSubTotal);
   const grandTotal = calcGrandTotal(discountedSubTotal);
 
+  // ใบที่มีเลขที่แล้ว = เอกสารที่ออกไปแล้ว ต้องพิมพ์ซ้ำได้เหมือนเดิมทุกครั้ง
+  // ใบร่างยังไม่ใช่เอกสาร จึงยังคำนวณสดเหมือนเดิมทุกอย่าง
+  const issuedNo = String(quoteData.quotation_no || '').trim();
+  const isIssued = issuedNo !== '';
+
   // วันไทยเสมอ ไม่พึ่ง TZ ของโปรเซส — บน UTC วันที่บนหัวเอกสารจะเลื่อนไปวันก่อนหน้าช่วง 00:00–07:00 น.
-  const dateStr = thaiDateDMY();
+  //
+  // ใบที่ออกเลขแล้วยึด created_at (วันที่ออกใบ) ไม่ใช่วันที่เปิดดู — เป็นตัวเดียวกับที่
+  // allocateQuotationNo() ใช้คำนวณงวดของเลขที่ใบ วันที่กับเลขที่จึงตรงกันเสมอ
+  // ใบ revise เป็นแถวใหม่คนละ created_at จึงลงวันที่ที่ revise ถูกต้องอยู่แล้ว
+  const issuedAt = isIssued && quoteData.created_at ? new Date(quoteData.created_at) : null;
+  const dateStr = issuedAt && !isNaN(issuedAt.getTime()) ? thaiDateDMY(issuedAt) : thaiDateDMY();
 
   const quoteNo = quoteNoInput || (quoteData.quotation_no
     ? quoteData.quotation_no
@@ -193,10 +268,15 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
       ? quoteData.id.split("-")[0].toUpperCase()
       : "DRAFT"));
 
-  // พิจารณาค่ายจาก resolveQuoteCompany (เช็ค quotation_rules) โดยใช้รายการสินค้าแรกเป็น reference
-  // ถ้าไม่มีสินค้าให้ fallback ไปเช็ค prefix ของเลขที่ใบเสนอราคา
+  // ค่ายของใบที่ออกเลขแล้วอ่านจาก prefix ของเลขที่ได้ตรง ๆ — allocateQuotationNo() ตั้ง prefix
+  // จากผลของ resolveQuoteCompany() ตอนออกเลข prefix จึงเป็นคำตอบที่ "ตรึงไว้แล้ว" ของใบนั้น
+  // เชื่อถือได้กว่าการคำนวณสดซ้ำ (แอดมินแก้ quotation_rules ทีหลังแล้วใบเก่าจะสลับโลโก้ทั้งใบ)
+  // และตัด query quotation_rules + products ออกจากการเจน PDF ทุกครั้งไปด้วย
+  // เลข revise (`QP-xxxx-01`) ขึ้นต้นด้วยเลขฐานที่มี prefix ติดมาแล้ว จึงใช้กติกาเดียวกันได้
+  //
+  // ใบร่างยังไม่มีเลข → คำนวณสดจากสินค้ารายการแรกเหมือนเดิม
   let isThemtech = false;
-  const itemSourceList = itemsList.length > 0 ? itemsList : [];
+  const itemSourceList = !isIssued && itemsList.length > 0 ? itemsList : [];
   if (itemSourceList.length > 0) {
     try {
       const company = await resolveQuoteCompany(itemSourceList[0]);
@@ -207,7 +287,8 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
       isThemtech = quoteNo.toUpperCase().startsWith('QT');
     }
   } else {
-    isThemtech = quoteNo.toUpperCase().startsWith('QT');
+    // ใบที่ออกเลขแล้วยึด quotation_no ในใบ ไม่ใช่ quoteNoInput ที่ผู้เรียกส่งมา (เป็นแค่ป้ายชื่อไฟล์)
+    isThemtech = (isIssued ? issuedNo : quoteNo).toUpperCase().startsWith('QT');
   }
 
   // จัดการชื่อพนักงานขายตามเงื่อนไข (QT -> THT, QP -> PM)
@@ -938,7 +1019,13 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
   const browser = await getBrowser();
   const page = await browser.newPage();
   try {
-    await page.setContent(finalHtml, { waitUntil: "networkidle0" as any });
+    // "load" ไม่ใช่ "networkidle0" — วัดจริงกับ HTML ใบเสนอราคาของจริงในคอนเทนเนอร์ prod:
+    //   networkidle0 = 1,930 ms คงที่ · load = 620 ms · ผลลัพธ์เหมือนกันทุก pixel (ยิงซ้ำ 15 รอบ
+    //   screenshot เต็มหน้า 122,110 ไบต์ทั้ง 15 รอบ + bounding rect ของ 207 element ตรงกันหมด)
+    // networkidle0 คือ "รอจนไม่มี connection ค้าง 500 ms" ซึ่งกินเวลาเท่าเดิมแม้หน้าไม่มี network
+    // เลยสักเส้น (ทดสอบกับหน้าเปล่า: 1,948 ms) ⇒ เป็นเวลารอเปล่าล้วน ๆ ต่อการเจน PDF ทุกใบ
+    await page.setContent(finalHtml, { waitUntil: "load" as any });
+    await waitForFontsReady(page);
     return await page.pdf({
       format: "A4",
       printBackground: true,

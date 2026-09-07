@@ -890,7 +890,7 @@
       prodContainer.innerHTML = '<div class="empty-state"><div class="empty-icon">⏳</div><p>กำลังค้นหา...</p></div>';
       resultMeta.style.display = 'none';
       try {
-        const res = await fetch(`/api/products/search?q=${encodeURIComponent(q)}`);
+        const res = await fetch(`/api/products/search?q=${encodeURIComponent(q)}&userId=${encodeURIComponent(userId || '')}`);
         if (!res.ok) throw new Error('Search failed');
         productsList = await res.json();
         renderProducts();
@@ -957,7 +957,7 @@
 
       // ตรวจสอบว่าสินค้าถูกล็อกการเสนอราคาหรือไม่
       try {
-        const checkRes = await fetch(`/api/products/${encodeURIComponent(code)}/blocked`);
+        const checkRes = await fetch(`/api/products/${encodeURIComponent(code)}/blocked?userId=${encodeURIComponent(userId || '')}`);
         if (checkRes.ok) {
           const checkData = await checkRes.json();
           if (checkData.blocked) {

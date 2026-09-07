@@ -1,7 +1,9 @@
 import { pool } from '../config/db.js';
 import { GatewayUnreachableError } from '../scripts/sync/gatewayClient.js';
 import { refreshCustomerDataView } from '../scripts/sync/refreshCustomerDirectory.js';
-import { clearCustomerSearchCache } from './customerService.js';
+import { clockNow, fmtDur, serr, slog, swarn, vlog } from '../scripts/sync/syncLog.js';
+import { clearCustomerSearchCache, reloadCustomerSearchCache } from './customerService.js';
+import { reconcileQuotationOdooLinks } from './quotationOdooLink.js';
 import { thaiDateParts } from '../utils/thaiTime.js';
 
 // ============================================================
@@ -135,30 +137,36 @@ async function recordResult(id: ResourceId, status: RunStatus, errorMessage?: st
 }
 
 /**
- * นับ contact ที่มีใน sale_orders แต่ไม่มีใน customers (ลูกค้า/ผู้ติดต่อ "หาย") แล้ว log
- * เป็น guard เตือนหลังจบรอบ sync ว่า customer sync ยังกวาดไม่ครบ
+ * นับ contact ที่มีใน sale_orders แต่ "แอปหาไม่เจอ" คือไม่มีใน customers_data_view
+ *
+ * ⚠️ ต้องเทียบกับ customers_data_view ไม่ใช่ตาราง customers — contact ที่มีเฉพาะใน
+ *    sale_orders (ส่วนใหญ่บุคคลธรรมดา/ไม่มี tax_id ที่ customer sync ไม่ได้กวาด) ถูก
+ *    customers_data_build "Arm 2" ดึงเข้า view ให้อยู่แล้ว (source='saleorder') จึงค้นหาได้ปกติ
+ *    ของเดิมเทียบกับ customers ตรง ๆ เลยเตือนทุกรอบทั้งที่ไม่มีอะไรเสีย (วัดจริง 4,324 = ครบพอดี)
+ *    → เลขที่ควรเป็น 0 คือเลขนี้ ถ้าไม่ 0 แปลว่า Arm 2 พังหรือ view rebuild ไม่สำเร็จ = ปัญหาจริง
  *
  * ⚠️ ใช้ contact_id เป็นคีย์เท่านั้น — sale_orders.company_id เก็บบริษัทผู้ขาย (res.company)
  *    ไม่ใช่ลูกค้า จึงเชื่อมกับ customers ไม่ได้ (ดู memory: sale-orders-company-id-trap)
  * EXCEPT ใช้ hash/sort เร็ว (dedupe ในตัว) — เบากว่า NOT EXISTS ต่อแถว
  * ห้าม throw — เป็นแค่ตัวรายงาน ไม่ควรไปล้มรอบ sync
+ * ต้องเรียก "หลัง" refreshCustomerDirectory() เสมอ ไม่งั้นเทียบกับ view รอบก่อน = เตือนหลอก
  */
-async function reconcileOrphanContacts() {
+async function reconcileOrphanContacts(): Promise<number | null> {
   try {
     const { rows } = await pool.query(`
       SELECT COUNT(*)::int AS n FROM (
         SELECT contact_id FROM sale_orders WHERE contact_id > 0
         EXCEPT
-        SELECT contact_id FROM customers WHERE contact_id > 0
+        SELECT contact_id FROM customers_data_view WHERE contact_id > 0
       ) t`);
     const n = rows[0]?.n ?? 0;
     if (n > 0) {
-      console.warn(`[sync] ⚠️ contact มีใน sale_orders แต่ไม่มีใน customers: ${n} — customer sync อาจกวาดไม่ครบ (ดู npm run diag:orphan-contacts แล้ว sync:customers -- --full / backfill:contacts)`);
-    } else {
-      console.log('[sync] ✓ ไม่มี contact ตกค้าง (sale_orders ⊆ customers by contact_id)');
+      swarn(`contact มีใน sale_orders แต่แอปหาไม่เจอใน customers_data_view: ${n} — view rebuild ไม่สำเร็จ หรือ customers_data_build Arm 2 ผิด (ดู npm run diag:orphan-contacts)`);
     }
+    return n;
   } catch (err: any) {
-    console.error('[sync] reconcile orphan contacts ล้มเหลว:', err?.message || err);
+    serr(`เช็ค contact ตกค้างไม่สำเร็จ — ${err?.message || err}`);
+    return null;
   }
 }
 
@@ -167,14 +175,25 @@ async function reconcileOrphanContacts() {
  * → rebuild ท้าย sync = ข้อมูลสดเสมอในทางปฏิบัติ) แล้วล้าง in-memory search cache
  *
  * logic จริงอยู่ใน refreshCustomerDataView() (แชร์กับ CLI sync scripts); ที่นี่ห่อเพิ่ม
- * clearCustomerSearchCache() ซึ่งเป็นเรื่องเฉพาะโปรเซสแอปที่รันอยู่
+ * การรีเฟรช search cache ซึ่งเป็นเรื่องเฉพาะโปรเซสแอปที่รันอยู่
  *
- * ถ้ารอบนั้นถูกข้าม (ข้อมูลต้นทางไม่ขยับ) ก็ไม่ต้องล้าง cache — ข้อมูลใน cache ยังตรงอยู่
+ * ถ้ารอบนั้นถูกข้าม (ข้อมูลต้นทางไม่ขยับ) ก็ไม่ต้องแตะ cache — ข้อมูลใน cache ยังตรงอยู่
  * และการล้างทิ้งเปล่า ๆ ทำให้ค้นหาครั้งถัดไปต้องโหลด 52k แถวใหม่ฟรี ๆ
  */
 async function refreshCustomerDirectory() {
   const result = await refreshCustomerDataView();
-  if (!result.skipped) clearCustomerSearchCache();
+  if (result.skipped) return;
+  // โหลด cache ใหม่แทนการล้างทิ้ง — จ่ายค่าโหลด ~700ms ตรงนี้ตอน sync เพิ่งเสร็จและไม่มีใครรอ
+  // แทนที่จะไปโผล่ในคำค้นของเซลส์คนแรกหลัง sync (วัดบน prod: 2 ใน 8 ครั้งแรกเจอเคสนี้)
+  // ระหว่างโหลด คนที่ค้นหายังได้ข้อมูลรอบก่อนไปใช้ทันที ไม่มีใครถูกบล็อก
+  try {
+    await reloadCustomerSearchCache();
+  } catch (err) {
+    // โหลดใหม่ไม่สำเร็จ = ถอยไปล้างทิ้งตามเดิม ยอมให้ค้นครั้งถัดไปช้า
+    // ดีกว่าปล่อยให้ cache ค้างข้อมูลก่อน rebuild ไว้โดยไม่มีกำหนด
+    console.error('[sync] โหลด customer search cache ใหม่ไม่สำเร็จ — ล้างทิ้งแทน:', err);
+    clearCustomerSearchCache();
+  }
 }
 
 /** เพิ่ม 4 คอลัมน์ผลรอบล่าสุด — เรียกตอน boot เพื่อให้ deploy แล้วใช้ได้เลยไม่ต้องรันมือ */
@@ -230,6 +249,13 @@ export function startSync(
 
   // ไม่ await — ปล่อยรันเบื้องหลัง
   void (async () => {
+    const roundStart = Date.now();
+    const failedLabels: string[] = [];
+    let okCount = 0;
+    slog(
+      `▶ ${clockNow()} รอบ sync เริ่ม — trigger=${trigger} mode=${forceFull ? 'full' : 'incremental'}` +
+        ` · คิว: ${list.join(', ')}`
+    );
     // try/finally: running ต้องถูกปลดทุกเส้นทาง ไม่งั้น mutex ค้างและ sync ทั้งระบบตายจน restart
     try {
       for (let i = 0; i < list.length; i++) {
@@ -237,27 +263,32 @@ export function startSync(
         runState.currentResource = id;
         const def = RESOURCES[id];
         try {
-          console.log(
-            `[sync] เริ่ม sync ${def.label} (${id}) — trigger=${trigger}${forceFull ? ' mode=full' : ''}`
-          );
+          // ไม่มีบรรทัด "เริ่ม sync" ต่อ resource — บรรทัด ✓ ท้าย resource บอกครบกว่า
+          // และถ้ามันช้าจนน่าสงสัย ticker ของ syncLog จะพิมพ์ '…' ให้เองภายใน 10 วิ
           const fn = await def.load();
           await fn({ forceFull });
-          console.log(`[sync] sync ${def.label} เสร็จแล้ว`);
+          okCount += 1;
           await recordResult(id, 'success');
         } catch (err: any) {
           const msg = err?.message || String(err);
           runState.lastError = `${def.label}: ${msg}`;
-          console.error(`[sync] sync ${def.label} ล้มเหลว:`, msg);
+          failedLabels.push(id);
+          serr(`${id} ล้มเหลว — ${msg}`);
 
           // ติดต่อ gateway ไม่ได้ → ยิง resource ที่เหลือก็พังเหมือนกัน ยกเลิกทั้งรอบเลย
           // (error อื่น เช่น payload ผิดรูป/DB พัง/env หาย ยังไปต่อตัวถัดไปตามเดิม)
           if (err instanceof GatewayUnreachableError) {
             runState.aborted = true;
             await recordResult(id, 'aborted', msg);
-            for (const rest of list.slice(i + 1)) {
-              await recordResult(rest, 'skipped', `ยกเลิกทั้งรอบ: ${msg}`);
+            const rest = list.slice(i + 1);
+            for (const r of rest) {
+              await recordResult(r, 'skipped', `ยกเลิกทั้งรอบ: ${msg}`);
             }
-            console.error(`[sync] ยกเลิกทั้งรอบ — ข้าม ${list.length - i - 1} รายการที่เหลือ (รอรอบถัดไป)`);
+            serr(
+              `ยกเลิกทั้งรอบ — ติดต่อ gateway ไม่ได้` +
+                (rest.length ? ` · ข้าม ${rest.length} รายการที่เหลือ: ${rest.join(', ')}` : '') +
+                ' (รอรอบถัดไป)'
+            );
             break;
           }
 
@@ -269,11 +300,29 @@ export function startSync(
       runState.currentResource = null;
       runState.queue = [];
       runState.finishedAt = new Date().toISOString();
-      console.log(runState.aborted ? '[sync] จบรอบ sync (ถูกยกเลิก)' : '[sync] จบรอบ sync ทั้งหมด');
-      // guard: เตือนถ้ายังมี contact ตกค้าง (อ่าน DB อย่างเดียว ไม่ throw)
-      await reconcileOrphanContacts();
       // สร้าง customers_data_view ใหม่ให้สะท้อนข้อมูลที่ sync มาใหม่ + ล้าง search cache
       await refreshCustomerDirectory();
+      // guard: เตือนถ้ามี contact ที่แอปหาไม่เจอ (อ่าน DB อย่างเดียว ไม่ throw)
+      // ต้องอยู่หลัง refresh — เทียบกับ view ที่เพิ่ง rebuild เท่านั้นถึงจะไม่เตือนหลอก
+      const orphans = await reconcileOrphanContacts();
+      // มาร์กใบเสนอราคาที่โผล่ใน sale_orders แล้ว (สถานะ "นำเข้า Odoo แล้ว" ของหน้าประวัติใบเสนอราคา)
+      // ต้องอยู่หลัง sync saleorders ของรอบนี้ — อ่านจากตารางที่เพิ่งอัปเดต ไม่ใช่ของรอบก่อน
+      await reconcileQuotationOdooLinks();
+
+      // บรรทัดปิดรอบ: อ่านบรรทัดเดียวต้องรู้ว่าครบไหม พังตัวไหน และข้อมูลลูกค้าใช้ได้ไหม
+      const parts = [`สำเร็จ ${okCount}/${list.length}`];
+      if (failedLabels.length) parts.push(`ล้มเหลว ${failedLabels.length}: ${failedLabels.join(', ')}`);
+      if (runState.aborted) parts.push('ยกเลิกกลางรอบ');
+      const orphanNote =
+        orphans === null
+          ? 'เช็ค contact ตกค้างไม่ได้'
+          : orphans === 0
+            ? 'ไม่มี contact ตกค้าง'
+            : `⚠️ contact ตกค้าง ${orphans}`;
+      slog(
+        `■ ${clockNow()} จบรอบใน ${fmtDur(Date.now() - roundStart)} — ${parts.join(' · ')} · ${orphanNote}` +
+          (failedLabels.length || runState.aborted ? ' · ดู sync_state.last_error' : '')
+      );
     }
   })();
 
@@ -311,8 +360,8 @@ const DEFAULT_SETTINGS: SyncSettings = {
   updated_at: null,
 };
 
-// ensure ทำงานครั้งเดียวพอ — scheduler เรียก getSettings() ทุก 5 วินาที ถ้าปล่อยให้ยิง
-// DDL ทุกครั้งจะกลายเป็นหลายพันคำสั่งต่อชั่วโมงโดยไม่ได้อะไรเลย
+// ensure ทำงานครั้งเดียวพอ — ถ้าปล่อยให้ยิง DDL ทุกครั้งที่มีคนเรียก getSettings()/saveSettings()
+// จะกลายเป็นคำสั่งซ้ำ ๆ โดยไม่ได้อะไรเลย
 let settingsTableReady = false;
 
 async function ensureSyncSettings() {
@@ -382,13 +431,31 @@ function normalizeDays(input: any): number[] {
   return days.length ? days : [...DEFAULT_SETTINGS.days];
 }
 
+/**
+ * ค่าที่อ่านจาก DB ล่าสุด — scheduler เรียก getSettings() ทุก 5 วินาที (17,280 ครั้ง/วัน)
+ * ทั้งที่ค่าเปลี่ยนเฉพาะตอนแอดมินกดบันทึก และเกือบ 70% ของรอบเป็นการถามนอกวัน/นอกช่วงเวลา
+ * ที่รู้คำตอบอยู่แล้ว · saveSettings() เป็นตัวเขียนตัวเดียวตอน runtime จึงล้าง cache จุดเดียวพอ
+ *
+ * ข้อแลกเปลี่ยน: แก้ตาราง sync_settings ด้วย SQL ตรง ๆ จะไม่มีผลจนกว่าจะ restart
+ * (แก้ผ่านหน้า admin ไม่กระทบ เพราะผ่าน saveSettings)
+ */
+let settingsCache: SyncSettings | null = null;
+
+/** คืนสำเนาเสมอ ไม่ยื่นตัว cache ออกไป — กันคนเรียกเผลอแก้อาเรย์แล้วกระทบรอบถัดไป */
+function cloneSettings(s: SyncSettings): SyncSettings {
+  return { ...s, days: [...s.days], resources: [...s.resources] };
+}
+
 export async function getSettings(): Promise<SyncSettings> {
+  if (settingsCache) return cloneSettings(settingsCache);
+
   await ensureSyncSettings();
   const { rows } = await pool.query(`SELECT * FROM sync_settings WHERE id = 1`);
-  if (rows.length === 0) return { ...DEFAULT_SETTINGS };
+  // แถวหาย = ผิดปกติ ไม่ cache ไว้ เผื่อรอบหน้าอ่านเจอ
+  if (rows.length === 0) return cloneSettings(DEFAULT_SETTINGS);
   const r = rows[0];
   const resources = (Array.isArray(r.resources) ? r.resources : []).filter(isValidResource);
-  return {
+  const settings: SyncSettings = {
     auto_enabled: !!r.auto_enabled,
     days: normalizeDays(r.days),
     window_start: TIME_RE.test(r.window_start) ? r.window_start : DEFAULT_SETTINGS.window_start,
@@ -397,6 +464,8 @@ export async function getSettings(): Promise<SyncSettings> {
     resources: resources.length ? resources : [...RESOURCE_IDS],
     updated_at: r.updated_at ? new Date(r.updated_at).toISOString() : null,
   };
+  settingsCache = settings;
+  return cloneSettings(settings);
 }
 
 /** validate + บันทึก config; คืนค่าที่บันทึกจริง */
@@ -435,6 +504,9 @@ export async function saveSettings(input: any): Promise<SyncSettings> {
      WHERE id = 1`,
     [autoEnabled, days, start, end, intervalSeconds, finalResources]
   );
+
+  // ค่าใน DB เปลี่ยนแล้ว — ทิ้ง cache ให้ getSettings() อ่านของจริงกลับมา
+  settingsCache = null;
 
   // reset ตัวจับเวลา interval เพื่อให้เริ่มนับใหม่จากตอนบันทึก
   lastIntervalRun = Date.now();
@@ -547,10 +619,16 @@ async function schedulerTick() {
 
     lastIntervalRun = Date.now();
     const started = startSync(settings.resources, 'schedule');
-    console.log(
-      `[scheduler] ถึงเวลา auto sync (วัน ${day} เวลา ${time} ในช่วง ${settings.window_start}-${settings.window_end}` +
-        ` ทุก ${settings.interval_seconds} วิ) — started=${started}`
-    );
+    // ปกติไม่ต้อง log — บรรทัด '▶' ของ startSync บอก trigger=schedule อยู่แล้ว
+    // แต่ถ้าเริ่มไม่ได้ต้องดัง เพราะแปลว่ารอบก่อนหน้ายังค้างอยู่ (mutex ไม่ปลด)
+    if (!started) {
+      swarn(`ข้าม auto sync รอบนี้ — รอบก่อนหน้ายังรันไม่จบ (${runState.currentResource || 'ไม่ทราบ resource'})`);
+    } else {
+      vlog(
+        `[scheduler] ถึงเวลา auto sync (วัน ${day} เวลา ${time} ในช่วง ${settings.window_start}-${settings.window_end}` +
+          ` ทุก ${settings.interval_seconds} วิ)`
+      );
+    }
   } catch (err: any) {
     console.error('[scheduler] tick error:', err?.message || err);
   }

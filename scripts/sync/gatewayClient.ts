@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import { swarn, syncCtxLabel } from './syncLog.js';
 
 dotenv.config();
 
@@ -108,7 +109,7 @@ export function createGatewayGet(apiKeyEnvNames: string[]) {
               `Gateway API Error: ${response.status} - ${response.statusText} (max attempts reached)`
             );
           }
-          console.warn(`[gateway] temporary ${response.status}, retrying in ${delay / 1000}s (${attempts}/${MAX_ATTEMPTS})`);
+          swarn(`${syncCtxLabel()}gateway ${response.status} — retry ${attempts}/${MAX_ATTEMPTS} ใน ${delay / 1000}s`);
           await sleep(delay);
           delay *= 2;
           continue;
@@ -142,7 +143,7 @@ export function createGatewayGet(apiKeyEnvNames: string[]) {
           throw error;
         }
 
-        console.warn(`[gateway] request failed: ${error.message}. retrying in ${delay / 1000}s (${attempts}/${MAX_ATTEMPTS})`);
+        swarn(`${syncCtxLabel()}gateway ยิงไม่ผ่าน (${error.message}) — retry ${attempts}/${MAX_ATTEMPTS} ใน ${delay / 1000}s`);
         await sleep(delay);
         delay *= 2;
       }

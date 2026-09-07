@@ -7,6 +7,22 @@
 --
 -- หมายเหตุ: บรรทัด \restrict / \unrestrict ที่ pg_dump 18 ใส่มาถูกตัดออก
 -- เพราะเป็น meta-command ของ psql ทำให้รันผ่าน pg driver (runMigration.ts) ไม่ได้
+-- และไม่ได้ใส่ `COMMENT ON SCHEMA public IS ''` ที่ pg_dump ของ DB จริงพ่นออกมา (เป็นคอมเมนต์
+-- ว่างเปล่า ไม่มีผลต่อโครงสร้าง)
+--
+-- ตรวจว่าไฟล์นี้ยังตรงกับ DB จริง (ปลอดภัย — สร้าง DB เปล่าชื่อ schema_check ไม่แตะ chatbot_primus):
+--   d() { docker compose exec -T db pg_dump -U postgres -d "$1" --schema-only --no-owner --no-privileges \
+--         | grep -v '^\\restrict\|^\\unrestrict\|^-- Dumped'; }   # 3 บรรทัดนี้ต่างกันทุกครั้งโดยธรรมชาติ
+--   docker compose exec -T db psql -U postgres -d postgres -q -c 'DROP DATABASE IF EXISTS schema_check' -c 'CREATE DATABASE schema_check'
+--   docker compose exec -T db psql -U postgres -d schema_check -v ON_ERROR_STOP=1 -q -f - < migrations/schema.sql
+--   diff <(d chatbot_primus) <(d schema_check)
+--   docker compose exec -T db psql -U postgres -d postgres -q -c 'DROP DATABASE schema_check'
+--
+-- ผลที่ถูกต้อง = ต่างแค่ก้อน `COMMENT ON SCHEMA public` ข้างบนก้อนเดียว
+-- ถ้าต่างมากกว่านั้น แปลว่ามี migration ที่ยังไม่ถูกยุบเข้าไฟล์นี้
+-- ตรวจล่าสุด 2026-08-25 (ผ่าน — ยุบ 2026-08-25_01 นิยาม last_order_at ใหม่ + 2026-08-25_02 ปลดโหมด warn เข้าไปแล้ว)
+-- ก่อนหน้า 2026-08-21 (รอบนั้นพบว่าขาด quotation_counters, sync_settings, index 6 ตัว
+-- และ role 'subadmin' — ยุบเข้าครบแล้ว)
 --
 -- Dumped from database version 18.4
 -- Dumped by pg_dump version 18.4
@@ -53,7 +69,7 @@ CREATE TABLE public.admin_users (
     role character varying(20) DEFAULT 'admin'::character varying NOT NULL,
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    CONSTRAINT admin_users_role_check CHECK (((role)::text = ANY ((ARRAY['admin'::character varying, 'user'::character varying])::text[])))
+    CONSTRAINT admin_users_role_check CHECK (role IN ('admin', 'subadmin', 'user'))
 );
 
 
@@ -75,6 +91,62 @@ CREATE SEQUENCE public.admin_users_id_seq
 --
 
 ALTER SEQUENCE public.admin_users_id_seq OWNED BY public.admin_users.id;
+
+
+--
+-- Name: api_logs; Type: TABLE; Schema: public; Owner: -
+--
+
+-- บันทึกการเรียก API ทุกครั้ง (ใครเรียกอะไร ได้ status อะไร ใช้เวลาเท่าไหร่)
+-- จงใจไม่เก็บ request body — ดูเหตุผลเต็มใน migrations/changes/2026-08-10_01_api_logs.sql
+-- route เก็บเฉพาะที่ Express บอกมาเป็น string ไม่บอกก็ NULL (จัดกลุ่มตอนอ่านแทน)
+-- inflight/db_waiting/queue_waited_ms = ตัวเลขสำหรับวิเคราะห์ทรัพยากร
+-- llm_ms/llm_calls/own_ms = แผน G แยกเวลารอ LLM ออกจากเวลางานของเราเอง (มีเฉพาะแถว /callback (async))
+--   ดูเหตุผลเต็มใน migrations/changes/2026-09-03_01_api_logs_llm_timing.sql
+-- llm_prompt_tokens/llm_cached_tokens = แผน G#2 อัตราที่ prompt เข้าแคชของ DeepSeek
+--   ดูเหตุผลเต็มใน migrations/changes/2026-09-04_01_api_logs_llm_tokens.sql
+CREATE TABLE public.api_logs (
+    id bigint NOT NULL,
+    created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    request_id character varying(16) NOT NULL,
+    method character varying(6) NOT NULL,
+    route character varying(120),
+    path character varying(200) NOT NULL,
+    status_code smallint NOT NULL,
+    duration_ms integer NOT NULL,
+    resp_bytes integer,
+    admin_user_id integer,
+    line_user_id character varying(40),
+    inflight smallint,
+    db_waiting smallint,
+    queue_waited_ms integer,
+    ip character varying(45),
+    llm_ms integer,
+    llm_calls smallint,
+    own_ms integer,
+    llm_prompt_tokens integer,
+    llm_cached_tokens integer
+)
+WITH (autovacuum_vacuum_scale_factor='0.02', autovacuum_analyze_scale_factor='0.01');
+
+
+--
+-- Name: api_logs_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.api_logs_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: api_logs_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.api_logs_id_seq OWNED BY public.api_logs.id;
 
 
 --
@@ -140,6 +212,14 @@ CREATE TABLE public.customers (
 --
 -- Name: sale_orders; Type: TABLE; Schema: public; Owner: -
 --
+-- 1 แถว = 1 เอกสารขายของ Odoo (sync ตัดให้เหลือรายการสินค้าแรกรายการเดียว) — PK คือ
+-- order_reference ซึ่ง Odoo "เปลี่ยนได้" ตอนยืนยันใบเสนอราคา (QP-xxx → OP-xxx) sync เป็น
+-- upsert ล้วนไม่เคยลบแถว แถวชื่อเก่าจึงค้างอยู่เป็นซากที่ไม่ถูกอัปเดตอีก และของจริงคือแถว
+-- ที่ last_updated ใหม่กว่าภายใต้ sale_order_id เดียวกัน (sale_order_id ไม่เปลี่ยนตามชื่อ)
+--
+-- สถานะมี 2 ชั้นคนละความหมาย: order_status = สถานะเอกสาร (Quotation/Approved/Locked/
+-- Cancelled/Demo Order) · invoice_status = ตั้งบิลหรือยัง (no/to invoice/invoiced)
+--
 
 CREATE TABLE public.sale_orders (
     order_reference character varying(255) CONSTRAINT sale_orders_order_reference_not_null1 NOT NULL,
@@ -185,6 +265,9 @@ CREATE TABLE public.sale_orders (
     product_group text,
     product_sub_category text,
     product_series text,
+    order_status text,
+    invoice_date timestamp with time zone,
+    source text,
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP
 );
@@ -219,6 +302,11 @@ $$ SELECT CASE WHEN lower(btrim(v)) = ANY (ARRAY['null', '']) THEN NULL ELSE btr
 CREATE INDEX IF NOT EXISTS idx_sale_orders_contact_order ON public.sale_orders (contact_id, order_date DESC);
 CREATE INDEX IF NOT EXISTS idx_customers_contact_id ON public.customers (contact_id);
 CREATE INDEX IF NOT EXISTS idx_customers_tax_id ON public.customers (customer_tax_id);
+
+-- ── index สำหรับ LATERAL `own` ของ Arm 2 ──
+-- เงื่อนไขเทียบเป็น btrim(...) จึงต้องเป็น expression index ไม่งั้น Arm 2 ตกไป seq scan
+-- ทุกแถว (4,365 ครั้ง/รอบ refresh)
+CREATE INDEX IF NOT EXISTS idx_customers_reference_trimmed ON public.customers (btrim(customer_reference));
 
 -- ── index สำหรับ latest_so ──
 -- ของเดิม idx_sale_orders_contact_order (contact_id, order_date DESC) ใช้ไม่ได้จริง เพราะ DESC ของ
@@ -340,6 +428,106 @@ comp AS (
     (array_remove(array_agg(invoice_district     ORDER BY contact_id), NULL))[1] AS invoice_district,
     (array_remove(array_agg(invoice_sub_district ORDER BY contact_id), NULL))[1] AS invoice_sub_district
   FROM base GROUP BY company_id
+),
+-- ════════════════════════════════════════════════════════════════════
+-- last_order_at — "วันอ้างอิงของด่านตรวจเครดิต" ไม่ใช่วันสั่งซื้อล่าสุดตามชื่อ
+--
+-- ⚠️⚠️ ชื่อคอลัมน์หลอก อ่านนิยามให้จบก่อนเอาไปใช้ที่อื่น ⚠️⚠️
+--   ค่าที่ได้ = วันที่ล่าสุดของใบที่ "ออกบิลแล้ว/รอออกบิล" ของนิติบุคคลนี้
+--               และเฉพาะเมื่อนิติบุคคลนี้เป็นลูกค้าเครดิต/เช็คล่วงหน้าเท่านั้น
+--   NULL     = ไม่เข้าข่ายตรวจ ซึ่งมีได้ 3 สาเหตุและด่านปฏิบัติเหมือนกันหมด (= ผ่าน):
+--                1. ไม่ใช่ลูกค้าเครดิต (Cash / Immediate Payment / ไม่ได้ระบุใน Odoo)
+--                2. เป็นเครดิต แต่ไม่มีใบสั่งซื้อเลยสักใบ  ← ลูกค้าใหม่ ต้องเสนอราคาได้
+--                3. เป็นเครดิต มีใบ แต่ไม่เคยมีใบที่ออกบิลเลย (452 บริษัท ณ 2026-08-25)
+--   ⇒ ห้ามเอาคอลัมน์นี้ไปแสดงเป็น "ลูกค้ารายนี้ซื้อครั้งสุดท้ายเมื่อไหร่" เด็ดขาด
+--     ลูกค้า Cash ทุกรายจะได้ NULL ทั้งที่ซื้อประจำ
+--   ตัวเลข ณ 2026-08-25: 42,640 บริษัทไม่ใช่เครดิต · 10,718 เป็นเครดิต · เข้าเกณฑ์ 1,656
+--
+-- ⚠️ sale_orders.company_id ไม่ใช่รหัสลูกค้า — เป็นบริษัทผู้ขาย (มีแค่ค่า 1 กับ 2)
+--    จุดเชื่อมลูกค้าคือ contact_id เท่านั้น ห้ามเผลอ join ด้วย company_id
+--
+-- ⚠️ นิยาม "นิติบุคคลเดียวกัน" ตรงนี้ต้องตรงกับ db/companyIdentity.ts เสมอ
+--    (เลขภาษี / รหัสอ้างอิง / ชื่อ ตรงข้อใดข้อหนึ่ง = รายเดียวกัน — 1 ชั้น ไม่ไล่ต่อเป็นทอด)
+--    ถ้าแยกกันเมื่อไหร่ ด่านตรวจกับป้ายเตือนจะให้คำตอบคนละอย่าง
+--    → scripts/diag/creditHoldSmoke.ts เทียบผลของสองที่นี้ทุกครั้งที่รัน
+--
+-- ทำไมต้องขยายเป็นนิติบุคคล ไม่ดูแค่ company_id ตัวเอง: Odoo แตกบริษัทเดียวเป็นหลายรหัส
+-- วัดบนข้อมูลจริง 2026-08-20 — ถ้าไม่ขยาย จะมี 1,259 บริษัทที่ซื้อจริงใต้รหัสสาขาอื่น
+-- ถูกนับเป็น "เงียบเกิน 1 ปี" ผิด ๆ (13% ของกลุ่มที่ยัง active อยู่)
+-- ประเภทการชำระเงินก็ต้องขยายด้วยเหตุผลเดียวกัน: 579 นิติบุคคล (จาก 2,031 ที่มีหลายรหัส)
+-- มีรหัสที่ประเภทไม่ตรงกัน ถ้าดูแค่รหัสที่เซลล์เลือก ลูกค้าเครดิตจะหลุดด่านได้ด้วยการ
+-- เลือกรหัสสาขาที่เป็น Cash (ต่างกัน 215 บริษัท วัด 2026-08-25)
+--
+-- ทำไมคำนวณตรงนี้แทนที่จะถามตอนออกใบ: ถามทีละบริษัทตอนใช้งานจริงราคา ~190ms และ
+-- ติดป้ายในผลค้นหา 30 รายพร้อมกันราคา 2.2 วิ (ใช้ไม่ได้) — ยุบมาคำนวณทั้งตารางรอบเดียว
+-- ด้วย hash aggregate ล้วนราคา 1.5 วิ ต่อรอบ build แล้วตอนใช้งานเหลือ index lookup
+-- ════════════════════════════════════════════════════════════════════
+so_last AS (
+  -- ใบล่าสุดต่อผู้ติดต่อ นับเฉพาะที่ออกบิลแล้ว/รอออกบิล
+  --
+  -- 'no' = Odoo บอกว่า "ไม่มีอะไรต้องวางบิล" ครอบทั้งใบที่ยกเลิก ใบร่าง และใบที่ยังไม่ส่งของ
+  -- จึงไม่ใช่หลักฐานว่าลูกค้าจ่ายเงินจริง — ด่านเครดิตต้องดูเฉพาะใบที่กลายเป็นเงิน
+  -- ถ้าใบล่าสุดของบริษัทเป็น 'no' ค่าจะตกไปใช้ใบที่ออกบิลของรหัสอื่นในนิติบุคคลเดียวกัน
+  -- และถ้าทั้งนิติบุคคลไม่มีใบที่ออกบิลเลย ก็คืน NULL (= ผ่านด่าน)
+  --
+  -- ⚠️ ตัวกรองนี้ทำให้ใช้ idx_so_contact_latest แบบ index-only ไม่ได้แล้ว (invoice_status
+  --    ไม่อยู่ใน index) กลายเป็น seq scan — วัด 2026-08-25: 90ms → 333ms บน build 2.1 วิ
+  --    ยังไม่คุ้มสร้าง index เพิ่ม ถ้าวันไหน build ช้าขึ้นจนสะดุด ค่อยมาดูตรงนี้
+  SELECT contact_id, max(order_date) AS d
+    FROM public.sale_orders
+   WHERE contact_id > 0
+     AND invoice_status IN ('invoiced', 'to invoice')
+   GROUP BY contact_id
+),
+own_last AS (
+  -- ยุบขึ้นมาระดับ company_id ของตัวเองก่อน
+  SELECT b.company_id, max(so.d) AS d
+    FROM base b
+    LEFT JOIN so_last so ON so.contact_id = b.contact_id
+   GROUP BY b.company_id
+),
+own_credit AS (
+  -- บริษัทนี้เป็นลูกค้าเครดิต/เช็คล่วงหน้าหรือไม่ (ยังไม่ขยายนิติบุคคล)
+  --
+  -- รูปแบบที่นับว่าเป็นเครดิต — ค่าที่มีจริงใน Odoo ณ 2026-08-25:
+  --   '7/14/15/20/30/40/45/60/65/90 Days'  → ตรง regex
+  --   'เช็คล่วงหน้า7/15/30/45วัน'              → ตรง LIKE
+  -- ที่เหลือไม่นับ: 'Cash', 'Immediate Payment', และ NULL (28,241 บริษัทไม่ได้ตั้งค่าใน Odoo)
+  --
+  -- ⚠️ COALESCE จำเป็น ไม่ใช่ของแถม — bool_or() บนบริษัทที่ payment terms เป็น NULL ทุกแถว
+  --    คืน NULL ไม่ใช่ false แล้วเงื่อนไขที่เขียนกลับด้าน (NOT credit) จะกินบริษัทกลุ่มนี้
+  --    หายไปเงียบ ๆ ทั้ง 28,241 ราย
+  --
+  -- ⚠️ ค่าใหม่ที่ Odoo เพิ่มมาทีหลัง (เช่น '2 Months' / 'เครดิต 30 วัน') จะไม่ตรงสักรูปแบบ
+  --    แล้วลูกค้ากลุ่มนั้นหลุดด่านโดยไม่มีใครรู้ → creditHoldSmoke.ts มีข้อที่ลิสต์ค่าที่
+  --    ไม่เข้าทั้งสองรูปแบบออกมาให้เห็นทุกครั้งที่รัน ห้ามลบทิ้ง
+  SELECT b.company_id,
+         COALESCE(bool_or(b.customer_payment_terms ~ '^[0-9]+ Days$'
+                       OR b.customer_payment_terms LIKE 'เช็คล่วงหน้า%'), false) AS c
+    FROM base b
+   GROUP BY b.company_id
+),
+ent_keys AS (
+  -- (บริษัท → คีย์บ่งชี้นิติบุคคล) หนึ่งแถวต่อคีย์ · base ผ่าน clean_text มาแล้ว
+  -- จึงไม่ต้อง NULLIF(TRIM(...)) ซ้ำเหมือนฝั่ง companyIdentity ที่รับค่าดิบ
+           SELECT DISTINCT company_id, 't'::text AS kind, customer_tax_id    AS k FROM base WHERE customer_tax_id    IS NOT NULL
+  UNION ALL SELECT DISTINCT company_id, 'r'::text,        customer_reference       FROM base WHERE customer_reference IS NOT NULL
+  UNION ALL SELECT DISTINCT company_id, 'n'::text,        customer_name            FROM base WHERE customer_name      IS NOT NULL
+),
+key_last AS (
+  -- คีย์แต่ละตัวถูกซื้อล่าสุดเมื่อไหร่ + เป็นเครดิตไหม (รวมทุกบริษัทที่ถือคีย์นี้)
+  SELECT ek.kind, ek.k, max(ol.d) AS d, bool_or(oc.c) AS c
+    FROM ent_keys ek
+    JOIN own_last   ol ON ol.company_id = ek.company_id
+    JOIN own_credit oc ON oc.company_id = ek.company_id
+   GROUP BY ek.kind, ek.k
+),
+ent_last AS (
+  -- แล้วกระจายกลับ: บริษัทหนึ่งได้วันล่าสุด/สถานะเครดิตของคีย์ที่ตัวเองถืออยู่ทุกตัว
+  SELECT ek.company_id, max(kl.d) AS d, COALESCE(bool_or(kl.c), false) AS c
+    FROM ent_keys ek
+    JOIN key_last kl ON kl.kind = ek.kind AND kl.k = ek.k
+   GROUP BY ek.company_id
 )
 SELECT
   b.company_id, b.contact_id, b.source,
@@ -350,9 +538,18 @@ SELECT
   b.invoice_street,
   COALESCE(b.invoice_district, comp.invoice_district)            AS invoice_district,
   COALESCE(b.invoice_sub_district, comp.invoice_sub_district)    AS invoice_sub_district,
-  b.invoice_state, b.invoice_zip
+  b.invoice_state, b.invoice_zip,
+  -- ไม่ใช่ลูกค้าเครดิต → NULL ตั้งแต่ต้นทาง ด่านจึงไม่ต้องรู้เรื่องเงื่อนไขการชำระเงินเลย
+  -- (own_credit/own_last เผื่อบริษัทที่ไม่มีคีย์เลยสักตัว = ไม่มีแถวใน ent_last)
+  -- GREATEST ข้าม NULL ให้เอง
+  CASE WHEN COALESCE(ent_last.c, own_credit.c, false)
+       THEN GREATEST(own_last.d, ent_last.d)
+  END                                                            AS last_order_at
 FROM base b
-LEFT JOIN comp ON comp.company_id = b.company_id;
+LEFT JOIN comp       ON comp.company_id       = b.company_id
+LEFT JOIN own_last   ON own_last.company_id   = b.company_id
+LEFT JOIN own_credit ON own_credit.company_id = b.company_id
+LEFT JOIN ent_last   ON ent_last.company_id   = b.company_id;
 
 -- ════════════════════════════════════════════════════════════════════
 -- แปลง customers_data_view: MATERIALIZED VIEW -> ตารางจริง
@@ -378,7 +575,9 @@ END $$;
 CREATE TABLE public.customers_data_view AS SELECT * FROM public.customers_data_build;
 
 CREATE UNIQUE INDEX idx_cdv_company_contact ON public.customers_data_view (company_id, contact_id);
-CREATE INDEX        idx_cdv_company         ON public.customers_data_view (company_id);
+-- INCLUDE (last_order_at) = ด่านตรวจเครดิตอ่านวันที่ซื้อล่าสุดจบใน index ไม่ต้องแตะ heap
+-- (ต้องตรงกับที่ scripts/sync/refreshCustomerDirectory.ts สร้างตอน build+swap)
+CREATE INDEX        idx_cdv_company         ON public.customers_data_view (company_id) INCLUDE (last_order_at);
 
 -- ANALYZE เต็มรูปแบบตารางนี้ใช้ 7.3 วิ (คอลัมน์ text ไทยต้อง sort 30,000 ตัวอย่างด้วย collation ไทย
 -- ต่อคอลัมน์ — วัดแยก: customer_name อย่างเดียว 5.1 วิ) → ลด sample ของคอลัมน์ text เหลือ target 10
@@ -645,9 +844,22 @@ CREATE TABLE public.quotations (
     contact_id integer,
     delivery_days_override integer,
     odoo_exported_at timestamp with time zone,
+    delivery_type_override text,
+    delivery_terms jsonb,
+    print_snapshot jsonb,
+    -- สถานะ "นำเข้า Odoo แล้ว" — snapshot เขียนครั้งเดียวตอนรอบ sync เห็นใบนี้ใน sale_orders ครั้งแรก
+    -- (ห้าม join สดกับ sale_orders.order_reference: Odoo เปลี่ยนชื่อเอกสารตอนยืนยัน แถวชื่อ Q* เป็นซาก
+    --  ที่วันหนึ่งจะหายไป → สถานะจะเด้งกลับจาก "นำเข้าแล้ว" เป็น "รอนำเข้า" เอง)
+    odoo_imported_at timestamp with time zone,
+    -- id ของเอกสารในฐาน Odoo — ไม่เปลี่ยนแม้เอกสารถูกเปลี่ยนชื่อ ใช้เป็นสมอตามหาสถานะปัจจุบันได้
+    odoo_so_id integer,
     CONSTRAINT quotations_delivery_days_override_check CHECK (
         (delivery_days_override IS NULL)
         OR ((delivery_days_override >= 0) AND (delivery_days_override <= 3650))
+    ),
+    CONSTRAINT quotations_delivery_type_override_check CHECK (
+        (delivery_type_override IS NULL)
+        OR (delivery_type_override = ANY (ARRAY['in_stock'::text, 'make_to_order'::text, 'import'::text, 'install'::text]))
     )
 );
 
@@ -665,7 +877,7 @@ CREATE TABLE public.quotation_blacklist (
     company_id  integer NOT NULL,
     contact_id  integer,
     reason      text,
-    created_by  integer REFERENCES public.admin_users(id) ON DELETE SET NULL,
+    created_by  integer,
     created_at  timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_at  timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
     CONSTRAINT quotation_blacklist_company_id_check CHECK (company_id > 0),
@@ -678,6 +890,48 @@ CREATE UNIQUE INDEX quotation_blacklist_company_uniq
 
 CREATE UNIQUE INDEX quotation_blacklist_contact_uniq
     ON public.quotation_blacklist (company_id, contact_id) WHERE contact_id IS NOT NULL;
+
+
+--
+-- Name: quotation_credit_policy; Type: TABLE; Schema: public; Owner: -
+--
+-- เกณฑ์ระงับการเสนอราคาบริษัทที่ไม่มีคำสั่งซื้อมานาน (แถวเดียว)
+-- ตัวข้อมูล "ซื้อล่าสุดเมื่อไหร่" อยู่ที่ customers_data_view.last_order_at ไม่ใช่ที่นี่
+-- แยกกันเพราะ customers_data_view ถูกสร้างใหม่ทั้งก้อนทุกรอบ sync — ค่าที่แอดมินตั้งจะหาย
+-- mode: off = ไม่ตรวจ · block = ห้ามออกใบ (หน้าแอดมินเป็นสวิตช์ เปิด/ปิด)
+-- เคยมีค่าที่ 3 คือ 'warn' (ตรวจ+log แต่ยังออกใบได้) — ปลดออกแล้ว 2026-08-25_02
+--
+
+CREATE TABLE public.quotation_credit_policy (
+    id              integer PRIMARY KEY DEFAULT 1,
+    mode            text    DEFAULT 'off' NOT NULL,
+    dormant_months  integer DEFAULT 12 NOT NULL,
+    updated_at      timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_by      integer,
+    CONSTRAINT quotation_credit_policy_single_row CHECK (id = 1),
+    CONSTRAINT quotation_credit_policy_mode CHECK (mode = ANY (ARRAY['off', 'block'])),
+    CONSTRAINT quotation_credit_policy_months CHECK (dormant_months > 0 AND dormant_months <= 240)
+);
+
+INSERT INTO public.quotation_credit_policy (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+
+
+--
+-- Name: quotation_counters; Type: TABLE; Schema: public; Owner: -
+--
+-- ตัวนับเลขที่ใบเสนอราคาแบบ atomic (migration 2026-07-20_02) — services/quotationService.ts
+-- ใช้ INSERT ... ON CONFLICT DO UPDATE ... RETURNING แทน COUNT-then-INSERT ที่ race กันได้
+-- counter_key: 'QP:2607' = เลขปกติ prefix QP งวด YYMM · 'REV:QP-260705012' = เลขใบฉบับแก้ไข
+--
+-- ⚠️ ไม่มีที่ไหนสร้างตารางนี้ให้ตอน runtime — DB ใหม่ที่ไม่มีตารางนี้จะออกเลขใบไม่ได้เลย
+--    (ต่างจาก sync_state/sync_settings/customers/products ที่โค้ด sync สร้างเองตอน boot)
+--
+
+CREATE TABLE public.quotation_counters (
+    counter_key text PRIMARY KEY,
+    last_seq integer DEFAULT 0 NOT NULL,
+    updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
 
 
 --
@@ -769,6 +1023,29 @@ CREATE TABLE public.shipping_fee_config (
 
 
 --
+-- Name: sync_settings; Type: TABLE; Schema: public; Owner: -
+--
+-- ตารางเวลา auto-sync แถวเดียว (id=1) — services/syncService.ts อ่านตอน boot
+-- โค้ดสร้าง/เติมคอลัมน์ตารางนี้เองด้วย (ensureSyncSettingsTable) แต่เก็บไว้ที่นี่ด้วย
+-- เพื่อให้ DB ที่ตั้งจากไฟล์นี้มีโครงตรงกับ DB จริงตั้งแต่ก่อน app สตาร์ต
+--
+
+CREATE TABLE public.sync_settings (
+    id integer PRIMARY KEY DEFAULT 1,
+    auto_enabled boolean DEFAULT false NOT NULL,
+    resources text[] DEFAULT ARRAY['products'::text, 'customers'::text, 'saleorders'::text] NOT NULL,
+    updated_at timestamp with time zone,
+    days integer[] DEFAULT '{0,1,2,3,4,5,6}'::integer[] NOT NULL,
+    window_start text DEFAULT '00:00'::text NOT NULL,
+    window_end text DEFAULT '23:59'::text NOT NULL,
+    interval_seconds integer DEFAULT 900 NOT NULL,
+    CONSTRAINT sync_settings_singleton CHECK ((id = 1))
+);
+
+INSERT INTO public.sync_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+
+
+--
 -- Name: sync_state; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -792,6 +1069,13 @@ CREATE TABLE public.sync_state (
 --
 
 ALTER TABLE ONLY public.admin_users ALTER COLUMN id SET DEFAULT nextval('public.admin_users_id_seq'::regclass);
+
+
+--
+-- Name: api_logs id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.api_logs ALTER COLUMN id SET DEFAULT nextval('public.api_logs_id_seq'::regclass);
 
 
 --
@@ -836,6 +1120,14 @@ ALTER TABLE ONLY public.admin_users
 
 ALTER TABLE ONLY public.admin_users
     ADD CONSTRAINT admin_users_username_key UNIQUE (username);
+
+
+--
+-- Name: api_logs api_logs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.api_logs
+    ADD CONSTRAINT api_logs_pkey PRIMARY KEY (id);
 
 
 --
@@ -975,6 +1267,20 @@ ALTER TABLE ONLY public.sync_state
 
 
 --
+-- Name: idx_api_logs_created_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_api_logs_created_at ON public.api_logs USING btree (created_at DESC, id DESC);
+
+
+--
+-- Name: idx_api_logs_request_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_api_logs_request_id ON public.api_logs USING btree (request_id);
+
+
+--
 -- Name: idx_optional_links_trigger; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -1000,6 +1306,87 @@ CREATE INDEX idx_products_model_trgm ON public.products USING gin (model public.
 --
 
 CREATE INDEX idx_products_name_trgm ON public.products USING gin (name public.gin_trgm_ops);
+
+
+--
+-- Name: idx_products_ref_trgm / idx_products_brand_trgm / idx_products_template_id_text; Type: INDEX
+--
+-- GET /api/products/search มี WHERE เป็น OR คร่อม 5 branch — Postgres ทำ BitmapOr ได้ก็ต่อเมื่อ
+-- *ทุก* branch indexable ไม่งั้นตกไป Seq Scan ทั้งชุด (199-322 ms/คำค้น → DB CPU ตันตอน
+-- concurrency สูง → HTTP 500) · ตัวที่ 3 เป็น expression index เพราะ branch นั้นเทียบ
+-- product_template_id::text ซึ่ง products_pkey ใช้ไม่ได้
+-- ⚠️ บน DB ที่มีข้อมูลแล้วให้สร้างด้วย CREATE INDEX CONCURRENTLY ผ่าน psql (ห้าม runMigration.ts)
+--
+
+CREATE INDEX idx_products_ref_trgm ON public.products USING gin (internal_reference public.gin_trgm_ops);
+
+CREATE INDEX idx_products_brand_trgm ON public.products USING gin (brand public.gin_trgm_ops);
+
+CREATE INDEX idx_products_template_id_text ON public.products USING btree (((product_template_id)::text));
+
+
+--
+-- Name: idx_products_*_norm / idx_products_*_norm_trgm; Type: INDEX; Schema: public; Owner: -
+--
+-- findProduct() ใน services/productService.ts ค้นบน "ค่าที่ normalize แล้ว" ไม่ใช่คอลัมน์ดิบ
+-- ⇒ idx_products_model_trgm / idx_products_name_trgm ข้างบนใช้กับ query พวกนี้ไม่ได้เลย
+-- ทุก stage (1 exact, 1.3 multi-token, 1.5 numeric LIKE, 1.7 split fuzzy, 2 pg_trgm)
+-- จึงตกไป Seq Scan บน 51,456 แถวทุกครั้ง — เป็นต้นทุนที่ใหญ่ที่สุดของการตอบ 1 ข้อความ
+--   btree 2 ตัว = stage 1 (norm = $1)
+--   gin  2 ตัว = stage 1.5/1.7 (LIKE '%...%') และ stage 2 (operator %)
+-- ⚠️ expression ต้องตรงกับ SQL ในโค้ด ไม่งั้น planner จับคู่ไม่ได้แล้วกลับไป Seq Scan เงียบ ๆ
+-- ⚠️ stage 2 ใช้ operator % ซึ่งอิง pg_trgm.similarity_threshold (default 0.3) ที่เข้มกว่า
+--    เกณฑ์ 0.25 ของโค้ด — productService.ts จึงสั่ง SET LOCAL 0.25 คร่อม query นั้นเอง
+--    ห้ามถอดออก ไม่งั้นผลค้นหาจะขาดแถวไปเงียบ ๆ
+-- ⚠️ บน DB ที่มีข้อมูลแล้วให้สร้างด้วย CREATE INDEX CONCURRENTLY ผ่าน psql (ห้าม runMigration.ts)
+--
+
+CREATE INDEX idx_products_model_norm ON public.products USING btree ((lower(regexp_replace(COALESCE(model, ''::text), '[\s,\(\)]'::text, ''::text, 'g'::text))));
+
+CREATE INDEX idx_products_name_norm ON public.products USING btree ((lower(regexp_replace(COALESCE(name, ''::text), '[\s,\(\)]'::text, ''::text, 'g'::text))));
+
+CREATE INDEX idx_products_model_norm_trgm ON public.products USING gin ((lower(regexp_replace(COALESCE(model, ''::text), '[\s,\(\)]'::text, ''::text, 'g'::text))) public.gin_trgm_ops);
+
+CREATE INDEX idx_products_name_norm_trgm ON public.products USING gin ((lower(regexp_replace(COALESCE(name, ''::text), '[\s,\(\)]'::text, ''::text, 'g'::text))) public.gin_trgm_ops);
+
+
+--
+-- Name: idx_products_internal_reference; Type: INDEX; Schema: public; Owner: -
+--
+-- internal_reference เป็น key ที่ใช้ join จริงหลายที่ (stock-rules, products/search, productService)
+-- ตรวจแล้วว่าไม่ซ้ำในข้อมูลจริง จึงเป็น UNIQUE เพื่อกันข้อมูล sync ซ้ำด้วย
+-- ค่าว่าง '' ถือเป็นค่าปกติใน Postgres (ไม่เหมือน NULL) จึงต้องกรองออกด้วย partial index
+--
+
+CREATE UNIQUE INDEX idx_products_internal_reference ON public.products USING btree (internal_reference) WHERE ((internal_reference IS NOT NULL) AND (TRIM(BOTH FROM internal_reference) <> ''::text));
+
+
+--
+-- Name: idx_so_salesperson_cover; Type: INDEX; Schema: public; Owner: -
+--
+-- listSalespeopleFromOrders() ใน db/repositories.ts: DISTINCT ON (salesperson) ... ORDER BY
+-- salesperson, order_date DESC — ก่อนมี index คือ Seq Scan 382MB + external sort 30MB = ~7 วิ
+-- ซึ่งใกล้ statement_timeout 15 วิ พอชนเพดานฟังก์ชันนี้จะ return [] เงียบ ๆ แล้ว POST ลงทะเบียน
+-- พนักงานขายจะปฏิเสธทุกคนโดยไม่มี error โผล่ที่ไหน
+-- ⚠️ INCLUDE จำเป็น — index ธรรมดา (salesperson, order_date DESC) planner ไม่เลือกใช้เลย
+--    (วัดแล้ว: ยัง Seq Scan 7.2-8.7 วิ) ต้องครบทุกคอลัมน์ที่ query ใช้จึงได้ Index Only Scan
+--
+
+CREATE INDEX idx_so_salesperson_cover ON public.sale_orders USING btree (salesperson, order_date DESC) INCLUDE (salesperson_id, salesperson_phone, customer_sale_area, sales_team);
+
+
+--
+-- Name: idx_messages_user_created; Type: INDEX; Schema: public; Owner: -
+--
+-- getRecentMessages() ใน db/repositories.ts: WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2
+-- ถูกเรียกทุกข้อความในเส้นทาง /callback (async) — ก่อนมี index คือ Seq Scan ทั้งตารางทุกครั้ง
+-- (seq_scan 3,821 / idx_scan 0 / seq_tup_read 12.4M เพื่อคืนแค่ 10 แถว) วัดได้ 2.0 ms / 414 buffers
+-- หลังสร้าง: Index Scan หยิบ 10 แถวแรกจาก index ตรง ๆ ไม่ต้อง sort = 0.046 ms / 6 buffers
+-- ไม่ใส่ INCLUDE (content, reply_content) เพราะเป็น text ยาว จะทำให้ index ใหญ่กว่าตารางเอง
+-- และทำให้ INSERT ทุกข้อความแพงขึ้น — query นี้ LIMIT 10 ตาม pointer ไป heap แค่ 10 แถวถูกกว่ามาก
+--
+
+CREATE INDEX idx_messages_user_created ON public.messages USING btree (user_id, created_at DESC);
 
 
 --
@@ -1073,6 +1460,61 @@ ALTER TABLE ONLY public.quotation_export_log
 
 ALTER TABLE ONLY public.quotation_export_log
     ADD CONSTRAINT quotation_export_log_quotation_id_fkey FOREIGN KEY (quotation_id) REFERENCES public.quotations(id) ON DELETE SET NULL;
+
+
+--
+-- Name: quotation_blacklist quotation_blacklist_created_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+-- FK 2 ตัวนี้ต้องอยู่ตรงนี้ ไม่ใช่ในตัว CREATE TABLE — admin_users_pkey ถูกสร้างในหมวด
+-- CONSTRAINT ด้านบน ซึ่งอยู่หลัง CREATE TABLE ทุกตัว ถ้าเขียน REFERENCES ไว้ในตาราง
+-- ไฟล์นี้จะล้มตอนตั้ง DB ใหม่จากศูนย์ ("no unique constraint matching given keys")
+--
+
+ALTER TABLE ONLY public.quotation_blacklist
+    ADD CONSTRAINT quotation_blacklist_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.admin_users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: quotation_credit_policy quotation_credit_policy_updated_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.quotation_credit_policy
+    ADD CONSTRAINT quotation_credit_policy_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES public.admin_users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: sync_api_keys; Type: TABLE; Schema: public; Owner: -
+--
+-- กุญแจของเครื่องภายนอกที่มาดึงข้อมูลผ่าน /api/sync/v1/* (ดู services/externalSync.ts)
+-- ตัวกุญแจจริงไม่เคยถูกเก็บ — เก็บแค่ sha256 · ตารางนี้ไม่ถูกส่งออกไปกับ sync เอง
+--
+
+CREATE TABLE public.sync_api_keys (
+    id serial PRIMARY KEY,
+    name character varying(80) NOT NULL,
+    key_prefix character varying(16) NOT NULL,
+    key_hash character(64) NOT NULL UNIQUE,
+    allowed_tables text[],
+    is_active boolean DEFAULT true NOT NULL,
+    created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    created_by character varying(80),
+    last_used_at timestamp with time zone,
+    revoked_at timestamp with time zone,
+    note text
+);
+
+
+--
+-- Name: index สำหรับ keyset pagination ของ sync API; Type: INDEX; Schema: public; Owner: -
+--
+-- ต้องเป็น (cursor, pk) ไม่ใช่ cursor เดี่ยว ๆ — upsert เป็น batch ทำให้หลายพันแถวมี updated_at
+-- ค่าเดียวกันเป๊ะ ถ้าตัดหน้าด้วยเวลาอย่างเดียว แถวที่เหลือของกองนั้นจะถูกข้ามไปเงียบ ๆ
+--
+
+CREATE INDEX idx_sale_orders_sync_cursor ON public.sale_orders (updated_at, order_reference);
+CREATE INDEX idx_customers_sync_cursor   ON public.customers (updated_at, company_id, contact_id);
+CREATE INDEX idx_products_sync_cursor    ON public.products (updated_at, product_template_id);
+CREATE INDEX idx_quotations_sync_cursor  ON public.quotations (updated_at, id);
 
 
 --

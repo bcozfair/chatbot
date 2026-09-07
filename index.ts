@@ -5,7 +5,7 @@ import path from 'path';
 import fs from 'fs';
 dotenv.config();
 
-import { lineConfig, lineClient } from './config/clients.js';
+import { lineConfig, lineClient, newLlmTiming, withLlmTiming } from './config/clients.js';
 import { KeyedTaskQueue, replyBudget, runWithDeadline, BUDGET_MS } from './services/webhookQueue.js';
 import {
   searchCustomersAdmin,
@@ -34,8 +34,13 @@ import {
   unmarkExportBatch,
   getExportBatches,
   countExportBatches,
+  listApiLogs,
+  countApiLogs,
+  getApiLogById,
+  getApiLogStats,
 } from './db/repositories.js';
 import { confirmQuotationAtomic, enrichQuotationData, buildItemSnapshots } from './services/quotationService.js';
+import { pdfCacheKey, getCachedPdf, setCachedPdf, isPrintFrozen, invalidatePdfCache } from './services/pdfCache.js';
 import {
   listBlacklist,
   addBlacklistEntry,
@@ -46,6 +51,12 @@ import {
   listRelatedCompanies,
   listRelatedContacts,
 } from './services/blacklistService.js';
+import {
+  findCreditHeldCompanyIds,
+  checkCreditHold,
+  getCreditPolicyFresh,
+  saveCreditPolicy,
+} from './services/creditHoldService.js';
 import {
   buildOdooSaleOrderRows,
   selectExportableQuotes,
@@ -71,6 +82,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { pool, withTransaction, type DbExecutor } from './config/db.js';
 import { getJwtSecret } from './config/jwt.js';
+import { getAppUrl } from './config/appUrl.js';
 import { adminAuthMiddleware, requireRole, type Role } from './config/auth.js';
 import {
   getClientIp,
@@ -80,6 +92,31 @@ import {
 } from './config/loginRateLimit.js';
 import { sumLineTotals } from './utils/pricing.js';
 import { isCustomerInfoIncomplete } from './utils/flexTemplates.js';
+import { thaiDateParts } from './utils/thaiTime.js';
+import { parseDeliveryTypeOverride } from './utils/deliveryTerms.js';
+import { apiLogMiddleware, getRequestId } from './config/apiLogger.js';
+import { logsRouter } from './routes/logs.js';
+import {
+  initApiLogWriter,
+  stopApiLogWriter,
+  flushApiLogs,
+  recordWebhookProcessing,
+  type WebhookOutcome,
+} from './services/apiLogService.js';
+import {
+  getTableDef,
+  fetchPage,
+  fetchIds,
+  buildManifest,
+  DEFAULT_LIMIT,
+  MAX_LIMIT,
+} from './services/externalSync.js';
+import {
+  syncApiAuthMiddleware,
+  syncConcurrencyGuard,
+  keyCanRead,
+  type SyncApiRequest,
+} from './config/syncApiAuth.js';
 import {
   startSync,
   isRunning,
@@ -94,13 +131,33 @@ import {
 // ตรวจ JWT_SECRET ตั้งแต่ boot — ถ้าขาด ให้ล้มทันทีแทนที่จะไปพังตอนแอดมิน login ครั้งแรก
 getJwtSecret();
 
+// ตรวจ APP_URL ตั้งแต่ boot ด้วยเหตุผลเดียวกัน แต่โหดกว่า — JWT ที่ขาดจะพังตอน login ซึ่ง "ดัง"
+// ส่วน APP_URL ที่ผิดจะไม่พังอะไรเลยฝั่งเรา แต่ลิงก์ที่ส่งออกไปหาลูกค้าจะเปิดไม่ได้ทุกใบแบบเงียบ ๆ
+// (เกิดขึ้นจริง 2026-08-20 — เสียไป 4 ใบกว่าจะรู้ตัว) · รายละเอียดใน config/appUrl.ts
+getAppUrl();
+
 const app = express();
+
+// ── บันทึกการเรียก API (ตาราง api_logs) — ต้องเป็น middleware ตัวแรกสุด ────────────────────
+// วางบนสุดเพราะ app.use() ที่วางไว้ล่างสุดจะทำงานเฉพาะ request ที่ไม่มี route ไหนรับ (เห็นแค่ 404)
+// ส่วนวางบนสุดเห็นทุก request แล้วรอเก็บผลตอน res.on('finish') · และเวลาที่วัดต้องเริ่มก่อนทุกอย่าง
+//
+// ⚠️ ห้ามเติม express.json() หรือ body parser ตัวใดก็ตามแบบ global ตรงนี้เด็ดขาด
+//    line.middleware(lineConfig) ที่ POST /callback ต้องได้เนื้อ request แบบดิบไปคำนวณ HMAC ของ
+//    x-line-signature ถ้ามีใคร parse ก่อน ลายเซ็นจะตรวจไม่ผ่าน = บอทหยุดตอบทั้งระบบ
+//    (middleware ตัวนี้ปลอดภัยเพราะไม่แตะ stream ของ request เลย — ดู config/apiLogger.ts)
+app.use(apiLogMiddleware);
 
 // Serve static files from the public folder
 app.use(express.static(path.join(process.cwd(), 'public')));
 
 // Serve data folder dynamically for signature image previews
 app.use('/data', express.static(path.join(process.cwd(), 'data')));
+
+// ── บันทึกและรายงาน (traffic / audit / system log) — ดู routes/logs.ts ────────────────────
+// สิทธิ์บังคับที่บรรทัดนี้บรรทัดเดียว: เปิดให้ role 'admin' เท่านั้น เท่ากับหน้า "บันทึกการเรียก API" เดิม
+// ถอนทั้งแผน log ออก = ลบ 2 บรรทัดนี้ (import ด้านบน + บรรทัดล่าง) แล้วระบบกลับไปเหมือนเดิมทันที
+app.use('/api/admin/logs', adminAuthMiddleware, requireRole('admin'), logsRouter);
 
 // Serve admin portal dashboard
 app.get('/admin', (req: any, res: any) => {
@@ -137,17 +194,18 @@ app.post('/callback', line.middleware(lineConfig), (req: any, res: any) => {
   //   ทั้งที่ token ตายไปตั้งแต่ก่อนตัวจับเวลาเริ่มนับแล้ว
   const receivedAt = Date.now();
 
+  // อ่าน id ของ request นี้ก่อน res ปิด — ใช้ผูกแถว "งานจริง" (method=TASK) เข้ากับแถว HTTP นี้
+  // เพราะแถว HTTP จะบันทึก duration ~1ms เสมอ (ตอบก่อนทำงาน) ซึ่งไม่ใช่เวลาที่ผู้ใช้รอจริง
+  const reqId = getRequestId(req);
+
   res.sendStatus(200);
 
   console.log(">>> Webhook Received! Events:", JSON.stringify(req.body.events, null, 2));
 
-  // Dynamically set APP_URL from incoming webhook request headers if not set in .env
-  const protocol = req.headers['x-forwarded-proto'] || req.protocol;
-  const host = req.get('host');
-  if (!process.env.APP_URL) {
-    process.env.APP_URL = `${protocol}://${host}`;
-    console.log(`>>> Dynamically set APP_URL to: ${process.env.APP_URL}`);
-  }
+  // ⚠️ เคยมีโค้ดตรงนี้ที่เดา APP_URL จาก Host header ของ webhook แรกแล้วเขียนทับ process.env
+  //    ห้ามเอากลับมาเด็ดขาด — วันที่ 2026-08-20 curl ตรวจสุขภาพจากในเครื่องดันเป็น request แรก
+  //    ค่าจึงถูกล็อกเป็น http://127.0.0.1:3011 และใบเสนอราคา 4 ใบส่งลิงก์ที่เปิดไม่ได้ออกไปเงียบ ๆ
+  //    ตอนนี้ APP_URL ถูกตรวจตั้งแต่ boot แล้ว (config/appUrl.ts) จึงไม่ต้องเดาอีก
 
   if (Array.isArray(req.body.events)) {
     req.body.events.forEach((event: any) => {
@@ -162,16 +220,32 @@ app.post('/callback', line.middleware(lineConfig), (req: any, res: any) => {
         if (expired) {
           queueMetrics.droppedBeforeStart++;
           console.warn(`[queue] DROP ก่อนเริ่ม (รอคิว ${waited}ms > งบ ${BUDGET_MS}ms) ${who} · สะสม ${queueMetrics.droppedBeforeStart}`);
+          // ต้องบันทึกก่อน return ด้วย — event ที่ถูกทิ้งเพราะคิวตันคือหลักฐานสำคัญที่สุด
+          // ว่าทรัพยากรไม่พอ ถ้าไม่บันทึกตรงนี้มันจะหายไปจากสถิติทั้งที่เป็นเคสที่ต้องเห็นที่สุด
+          recordWebhookProcessing({
+            requestId: reqId, lineUserId: queueKey, outcome: 'dropped',
+            waitedMs: waited, totalMs: Date.now() - receivedAt,
+            // ถูกทิ้งตั้งแต่ยังไม่เริ่ม ⇒ ไม่ได้เรียก LLM และไม่ได้ทำงานของเราเองเลยจริง ๆ
+            // ใส่ 0 ไม่ใช่ null เพราะนี่คือ "วัดแล้วได้ศูนย์" ไม่ใช่ "ไม่มีข้อมูล"
+            llmMs: 0, llmCalls: 0, ownMs: 0, llmPromptTokens: 0, llmCachedTokens: 0,
+          });
           return;
         }
         if (waited > 5_000) console.warn(`[queue] รอคิวนาน ${waited}ms ${who}`);
 
         const startedAt = Date.now();
+        // ผลลัพธ์ที่ finally ต้องใช้บันทึกลง api_logs — ตั้งต้นเป็น failed เพื่อให้กรณีที่
+        // runWithDeadline โยน error ออกมาเองโดยไม่คืน outcome ถูกนับเป็นล้มเหลว ไม่ใช่หายเงียบ
+        let outcome: WebhookOutcome = 'failed';
+        // P4a — ตัวสะสมเวลา LLM ของ "งานนี้" โดยเฉพาะ ต้องประกาศนอก try เพราะ finally ต้องอ่าน
+        const llm = newLlmTiming();
         try {
           // timeout = งบที่เหลือจริงหลังหักเวลารอคิว ไม่ใช่ 25,000 คงที่เหมือนเดิม
           // (งานที่เข้าคิวได้ทันทีจึงได้เวลามากกว่าเดิม — ตั้งใจ: มีงบก็ควรได้ใช้ ดีกว่าถูกตัดที่ 25 วิ
           //  ทั้งที่ตอบทันที่ 30 วิ ส่วนเพดานของ LLM คุมด้วย timeout ของ SDK ใน C.2 อีกชั้น)
-          const res = await runWithDeadline(
+          // ห่อด้วย withLlmTiming: ทุก createChatCompletion ที่เกิดใต้บรรทัดนี้ (ไม่ว่าจะลึกกี่ชั้น)
+          // จะสะสมเวลาลง llm ของงานนี้ ไม่ปนกับอีก 11 งานที่รันพร้อมกันอยู่ในคิว
+          const res = await withLlmTiming(llm, () => runWithDeadline(
             remaining,
             // signal = ธงยกเลิกของ C.3: Promise.race ตัดได้แค่ "การรอ" ไม่ได้หยุดงานที่รันอยู่
             // ธงนี้คือช่องทางเดียวที่จะบอก handler ว่าอย่าเริ่มขั้นตอนหนักขั้นถัดไป
@@ -182,11 +256,13 @@ app.post('/callback', line.middleware(lineConfig), (req: any, res: any) => {
               signal
             }),
             (e: any) => console.error(`[queue] งานที่ถูก abort พังหลังหมดเวลา ${who}:`, e?.message || e)
-          );
+          ));
 
           if (res.outcome === 'ok') {
             queueMetrics.replied++;
+            outcome = 'replied';
           } else if (res.outcome === 'timeout') {
+            outcome = 'timeout';
             // ห้าม replyMessage ที่นี่ — reply token เป็น single-use และ handler เดิม (handleEvent)
             // อาจกำลังจะตอบสำเร็จอยู่พอดี (abort หยุดมันได้แค่ที่ "ด่านตรวจถัดไป" ไม่ตัดกลางคัน)
             // การยิงซ้ำจะแย่ง token กัน ทำให้ผู้ใช้เห็นข้อความผิด และ Push Message ก็ถูกห้ามอยู่แล้ว
@@ -200,11 +276,29 @@ app.post('/callback', line.middleware(lineConfig), (req: any, res: any) => {
           const now = Date.now();
           const total = now - receivedAt;
           const m = queueMetrics;
+          const processed = now - startedAt;
+          // P4a — แยก "รอ LLM" ออกจาก "งานของเราเอง (DB + LINE API + โค้ด)" ในบรรทัดเดียวกัน
+          // own สูง = ไปไล่โค้ด/query · llm สูง = ไปลดจำนวนการเรียกหรือแก้ prompt
+          // calls บอกด้วยว่าเรียกซ้อนกันกี่ครั้งต่อ 1 ข้อความ ซึ่งเป็นตัวคูณที่มองไม่เห็นมาตลอด
+          // หมายเหตุ: งานที่ถูก abort ยังรันต่อเบื้องหลังและบวกเวลาเข้า llm ต่อได้หลังบรรทัดนี้
+          // ค่าที่พิมพ์จึงเป็น "เท่าที่นับได้ ณ ตอนจบงาน" ซึ่งตรงกับ processed พอดี
           console.log(
-            `[queue] ${who} waited=${waited}ms processed=${now - startedAt}ms total=${total}ms` +
+            `[queue] reqId=${reqId ?? '-'} ${who} waited=${waited}ms processed=${processed}ms` +
+            ` llm=${llm.ms}ms/${llm.calls}call${llm.errors > 0 ? `/${llm.errors}err` : ''}` +
+            ` own=${processed - llm.ms}ms total=${total}ms` +
+            // cache ของ DeepSeek — พิมพ์เฉพาะตอนมีการเรียกจริง ไม่งั้นบรรทัดรกด้วย 0/0 ของ event ที่ไม่เรียก LLM
+            `${llm.promptTokens > 0 ? ` tok=${llm.promptTokens}/cached=${llm.cachedTokens}` : ''}` +
             `${total > BUDGET_MS ? ' ⚠️เกินงบ' : ''}` +
             ` [replied=${m.replied} timedOut=${m.timedOut} dropped=${m.droppedBeforeStart} failed=${m.failed}]`
           );
+          // แถวที่บอกเวลาทำงานจริง — total นับจาก receivedAt จึงเป็นเวลาที่ผู้ใช้รอทั้งหมด
+          recordWebhookProcessing({
+            requestId: reqId, lineUserId: queueKey, outcome, waitedMs: waited, totalMs: total,
+            // ตัวเลขชุดเดียวกับบรรทัด [queue] ข้างบนเป๊ะ ๆ — บรรทัดนั้นหายทุกครั้งที่ recreate
+            // container ส่วนแถวนี้อยู่ยาวตาม retention ของ api_logs
+            llmMs: llm.ms, llmCalls: llm.calls, ownMs: processed - llm.ms,
+            llmPromptTokens: llm.promptTokens, llmCachedTokens: llm.cachedTokens,
+          });
         }
       });
     });
@@ -569,7 +663,20 @@ app.get('/api/customers/search', async (req: any, res: any) => {
     } catch (err) {
       console.error('[customers/search] annotate blacklist failed (ปล่อยผ่าน):', err);
     }
-    res.json(data.map((c: any) => ({ ...c, is_blacklisted: blockedIds.has(Number(c.id)) })));
+
+    // ป้ายเดียวกันแต่คนละสาเหตุ — แยก try เพราะตารางคนละตัว ล้มตัวหนึ่งอีกตัวต้องยังติดป้ายได้
+    let creditHeldIds = new Set<number>();
+    try {
+      creditHeldIds = await findCreditHeldCompanyIds(data.map((c: any) => c.id));
+    } catch (err) {
+      console.error('[customers/search] annotate credit hold failed (ปล่อยผ่าน):', err);
+    }
+
+    res.json(data.map((c: any) => ({
+      ...c,
+      is_blacklisted: blockedIds.has(Number(c.id)),
+      is_credit_hold: creditHeldIds.has(Number(c.id)),
+    })));
   } catch (err: any) {
     console.error("API GET customers search error:", err);
     res.status(500).json({ error: err.message });
@@ -601,6 +708,14 @@ app.get('/api/customer/:id/contacts', async (req: any, res: any) => {
         console.error('[customer/:id/contacts] annotate blacklist failed (ปล่อยผ่าน):', err);
       }
 
+      // ด่านเครดิตเป็นระดับบริษัทล้วน — ติดทั้งบริษัทก็ติดทุกผู้ติดต่อ ค่าจึงเหมือนกันทุกแถว
+      let creditHeld = false;
+      try {
+        creditHeld = (await checkCreditHold(req.params.id)).held;
+      } catch (err) {
+        console.error('[customer/:id/contacts] annotate credit hold failed (ปล่อยผ่าน):', err);
+      }
+
       formatted = data.map((c: any) => {
         const hasAddr = (c.invoice_street && c.invoice_street.trim()) || (c.invoice_state && c.invoice_state.trim());
         const target = hasAddr ? c : (companyDefaultAddr || c);
@@ -619,7 +734,8 @@ app.get('/api/customer/:id/contacts', async (req: any, res: any) => {
           invoice_state: parts.state,
           invoice_zip: target.invoice_zip,
           address_complete: parts.full,
-          is_blacklisted: blocked.wholeCompany || blocked.contactIds.has(Number(c.id))
+          is_blacklisted: blocked.wholeCompany || blocked.contactIds.has(Number(c.id)),
+          is_credit_hold: creditHeld
         };
       });
     }
@@ -713,14 +829,17 @@ app.post('/api/quotation/draft-cart', express.json(), async (req: any, res: any)
 app.put('/api/quotation/:id', express.json(), async (req: any, res: any) => {
   try {
     const quoteId = req.params.id;
-    const { items, total_sum, customer_name, customer_id, contact_id, userId, delivery_days_override } = req.body;
+    const { items, total_sum, customer_name, customer_id, contact_id, userId,
+      delivery_days_override, delivery_type_override } = req.body;
     if (!items) return res.status(400).json({ error: 'Missing items' });
 
-    // วันจัดส่งที่เซลล์แก้เอง — undefined = client เก่าไม่ได้ส่งมา (คงค่าเดิม), null = รีเซ็ตกลับค่าอัตโนมัติ
+    // กำหนดส่งที่เซลล์แก้เอง — undefined = client เก่าไม่ได้ส่งมา (คงค่าเดิม), null = รีเซ็ตกลับค่าอัตโนมัติ
     let parsedDeliveryOverride: number | null | undefined;
+    let parsedDeliveryType: string | null | undefined;
     try {
       const { parseDeliveryDaysOverride } = await import('./services/quotationService.js');
       parsedDeliveryOverride = parseDeliveryDaysOverride(delivery_days_override);
+      parsedDeliveryType = parseDeliveryTypeOverride(delivery_type_override);
     } catch (err: any) {
       return res.status(400).json({ error: err.message });
     }
@@ -991,8 +1110,9 @@ app.put('/api/quotation/:id', express.json(), async (req: any, res: any) => {
         customer_id = $5,
         contact_id = $6,
         delivery_days_override = $7,
+        delivery_type_override = $8,
         updated_at = NOW()
-      WHERE id = $8 AND status <> 'confirmed' AND status <> 'cancelled'
+      WHERE id = $9 AND status <> 'confirmed' AND status <> 'cancelled'
     `, [
       finalSum,
       finalStatus,
@@ -1002,6 +1122,8 @@ app.put('/api/quotation/:id', express.json(), async (req: any, res: any) => {
       resolvedContactId,
       // ค่าที่เซลล์ตั้งไว้ต้องอยู่ยงแม้จะเพิ่ม/ลบสินค้าหรือแก้จำนวน จนกว่าจะกดรีเซ็ตเอง
       parsedDeliveryOverride === undefined ? (quote.delivery_days_override ?? null) : parsedDeliveryOverride,
+      // ประเภทการจัดส่งใช้กติกาเดียวกับจำนวนวัน — client เก่าที่ไม่ส่ง field นี้มาต้องไม่ล้างค่าที่ตั้งไว้
+      parsedDeliveryType === undefined ? (quote.delivery_type_override ?? null) : parsedDeliveryType,
       quoteId
     ]);
 
@@ -1099,12 +1221,8 @@ app.post('/api/quotation/:id/confirm', express.json(), async (req: any, res: any
       return res.status(422).json({ error: 'VALIDATION_ERROR', violations: confirmViolations });
     }
 
-    const protocol = req.headers['x-forwarded-proto'] || req.protocol;
-    const reqUrl = process.env.APP_URL || `${protocol}://${req.get('host')}`;
-    if (!process.env.APP_URL) {
-      process.env.APP_URL = reqUrl;
-      console.log(`>>> Dynamically set APP_URL from confirm API to: ${process.env.APP_URL}`);
-    }
+    // ห้ามกลับไปเดาจาก req.get('host') — ดูเหตุผลที่ /callback และ config/appUrl.ts
+    const reqUrl = getAppUrl();
     // ยืนยันแบบ atomic + idempotent (ออกเลข + เปลี่ยน status ใน transaction เดียวพร้อม row lock
     // cancelOldRevision กรณี revision อยู่ใน tx เดียวกัน และไม่เขียนทับ created_at เพราะเลขคำนวณจากมัน)
     let confirmResult;
@@ -1399,6 +1517,20 @@ const downloadPdfHandler = async (req: any, res: any) => {
       return res.redirect(302, qs === -1 ? canonicalPath : canonicalPath + req.originalUrl.slice(qs));
     }
 
+    const sendPdf = (buf: Buffer, filename: string) => {
+      res.setHeader('Content-Disposition', `inline; filename="${filename}.pdf"`);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.send(buf);
+    };
+
+    // ใบที่ออกเลขแล้วเจน PDF จากแถวนี้แถวเดียว (ดูเหตุผลเต็มใน services/pdfCache.ts)
+    // คีย์คิดจากแถวดิบก่อน enrich — hit แล้วจึงข้าม enrich (~26ms) และการเจน (~1.4s) ได้ทั้งก้อน
+    const cacheKey = pdfCacheKey(quoteDb);
+    const cachedPdf = getCachedPdf(cacheKey);
+    if (cachedPdf) {
+      return sendPdf(cachedPdf, quoteDb.quotation_no);
+    }
+
     // Enrich ก่อนเพื่อให้ items มีข้อมูลสำหรับ resolveQuoteCompany ใน allocateQuotationNo และ pdfGenerator
     const enrichedQuote = await enrichQuotationData(quoteDb);
 
@@ -1408,10 +1540,15 @@ const downloadPdfHandler = async (req: any, res: any) => {
     const quoteNo = enrichedQuote.quotation_no || 'DRAFT';
 
     // ดึงข้อมูลพนักงานขาย (Salesperson) เพื่อนำชื่อและเบอร์โทรไปใส่ใน PDF
+    //
+    // ใบที่ออกเลขแล้วใช้ employee_details ที่ตรึงไว้ในใบเท่านั้น (enrichQuotationData เติมมาให้แล้ว)
+    // — เอกสารที่ส่งลูกค้าไปแล้วต้องพิมพ์ซ้ำได้เหมือนเดิม เซลแก้เบอร์/เปลี่ยนชื่อทีหลังไม่ควรย้อนไปแก้ใบเก่า
+    // ผลพลอยได้: ตัด query ตาราง salesperson ออกจากการเจน PDF ของใบที่ออกแล้วทุกใบ
+    const isIssuedQuote = !!String(enrichedQuote.quotation_no || '').trim();
     let salespersonName = '';
     let salespersonPhone = '';
     let salespersonEmployeeCode = null;
-    if (enrichedQuote.user_id) {
+    if (!isIssuedQuote && enrichedQuote.user_id) {
       try {
         const spRes = await pool.query(
           'SELECT name, phone, salesperson_id FROM salesperson WHERE user_id = $1 LIMIT 1',
@@ -1428,21 +1565,26 @@ const downloadPdfHandler = async (req: any, res: any) => {
       }
     }
 
-    // ข้อมูลสดมาก่อน แล้วค่อย fallback ไป snapshot ที่ enrichQuotationData เติมไว้จาก employee_details
-    // จำเป็นตอนพนักงานถูกลบ — FK ตั้ง quotations.user_id = NULL ทำให้ query ข้างบนไม่เจอใคร
-    // ถ้าไม่ fallback ใบเก่าที่โหลดซ้ำจะไม่มีชื่อผู้ขาย เบอร์ และลายเซ็น
+    // ใบร่าง: ข้อมูลสดมาก่อน แล้ว fallback ไป snapshot จาก employee_details
+    // ใบที่ออกเลขแล้ว: ตัวแปรสดทั้งสามเป็นค่าว่างเสมอ (ข้ามการ query ไปข้างบน) จึงตกมาใช้ snapshot
+    //
+    // snapshot ครอบเคส "พนักงานถูกลบ" ที่ fallback เดิมมีไว้กันอยู่แล้ว — FK ตั้ง user_id = NULL
+    // แล้วหาไม่เจอ ถ้าไม่มี fallback ใบเก่าจะไม่มีชื่อผู้ขาย เบอร์ และลายเซ็น
     enrichedQuote.salesperson_name = salespersonName || enrichedQuote.salesperson_name || '';
     enrichedQuote.salesperson_phone = salespersonPhone || enrichedQuote.salesperson_phone || '';
     enrichedQuote.salesperson_employee_code =
       salespersonEmployeeCode || enrichedQuote.salesperson_employee_code || enrichedQuote.salesperson_id || null;
 
     // 2. สร้าง PDF สดๆ ณ ตอนดาวน์โหลด
-    const pdfBuffer = await generateQuotationPDF(enrichedQuote, quoteNo);
+    const pdfBuffer = Buffer.from(await generateQuotationPDF(enrichedQuote, quoteNo));
 
-    // 3. ส่งไฟล์ให้หน้าเว็บแสดงผลหรือดาวน์โหลด
-    res.setHeader('Content-Disposition', `inline; filename="${quoteNo}.pdf"`);
-    res.setHeader('Content-Type', 'application/pdf');
-    res.send(Buffer.from(pdfBuffer));
+    // 3. เก็บเข้า cache เฉพาะใบที่ freezePrintItems() ตรึงค่าสดให้จริงแล้วเท่านั้น
+    if (isPrintFrozen(quoteDb, enrichedQuote.items)) {
+      setCachedPdf(cacheKey, pdfBuffer);
+    }
+
+    // 4. ส่งไฟล์ให้หน้าเว็บแสดงผลหรือดาวน์โหลด
+    sendPdf(pdfBuffer, quoteNo);
   } catch (err) {
     console.error('Generate PDF error:', err);
     res.status(500).send('Internal Server Error');
@@ -1972,6 +2114,9 @@ app.post('/api/admin/signatures/upload', adminAuthMiddleware, requireRole('admin
     fs.writeFileSync(targetPath, dataBuffer);
     console.log(`Successfully saved signature to: ${targetPath}`);
 
+    // ลายเซ็นเป็น input เดียวของ PDF ที่อยู่นอกแถว quotations — เปลี่ยนแล้วต้องล้าง cache ทันที
+    invalidatePdfCache(`อัปโหลดลายเซ็น ${fileKey}`);
+
     res.json({
       success: true,
       message: `Signature uploaded successfully as ${fileKey}.${cleanExt}`,
@@ -2222,6 +2367,9 @@ app.delete('/api/admin/signatures/:salespersonId', adminAuthMiddleware, requireR
     if (deletedCount === 0) {
       return res.status(404).json({ error: `Signature file for salesperson "${salespersonId}" was not found.` });
     }
+
+    // เหมือนตอนอัปโหลด — PDF ที่ cache ไว้ยังมีลายเซ็นเดิมฝังอยู่
+    invalidatePdfCache(`ลบลายเซ็น ${salespersonId}`);
 
     res.json({
       success: true,
@@ -2835,6 +2983,46 @@ app.put('/api/admin/shipping-fee-config', adminAuthMiddleware, requireRole('admi
   }
 });
 
+// ============================================================
+//  API Endpoints: Credit Policy (ระงับบริษัทที่ไม่มีคำสั่งซื้อมานาน)
+//  ตารางแถวเดียว (id = 1) จึงมีแค่ GET กับ PUT เหมือนค่าขนส่ง
+//  แสดงรวมอยู่ในหน้า "ค่าขนส่ง & เครดิต" ของหน้าแอดมิน แต่คนละตาราง/คนละ endpoint
+//  ตัวบล็อกจริงอยู่ที่ validateQuotationItems ไม่ใช่ที่นี่ — เส้นพวกนี้แค่ตั้งเกณฑ์
+// ============================================================
+
+app.get('/api/admin/credit-policy', adminAuthMiddleware, requireRole('admin'), async (_req: any, res: any) => {
+  try {
+    res.json(await getCreditPolicyFresh());
+  } catch (err: any) {
+    console.error('GET /api/admin/credit-policy error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+app.put('/api/admin/credit-policy', adminAuthMiddleware, requireRole('admin'), express.json(), async (req: any, res: any) => {
+  try {
+    const saved = await saveCreditPolicy({
+      mode: req.body?.mode,
+      dormantMonths: req.body?.dormant_months,
+      updatedBy: req.admin.id,
+    });
+
+    if (!saved) {
+      return res.status(400).json({
+        error: 'ค่าไม่ถูกต้อง — mode ต้องเป็น off/block และจำนวนเดือนต้องเป็นจำนวนเต็ม 1–240',
+      });
+    }
+
+    // ต้องล้าง cache ทันที ไม่งั้นเกณฑ์ที่เพิ่งบันทึกจะยังไม่มีผลไปอีกไม่เกิน 60 วินาที
+    invalidateRuleCache('quotation_credit_policy');
+
+    res.json(saved);
+  } catch (err: any) {
+    console.error('PUT /api/admin/credit-policy error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
 // --- API Endpoints: Products and Customers Search (for Promotions Modal) ---
 
 // 1. GET /api/admin/products/search - Search product models
@@ -3089,6 +3277,7 @@ app.get('/api/admin/quotations/export', adminAuthMiddleware, requireRole('admin'
     const built = await withTransaction(async (client) => {
       const result = await client.query(
         `SELECT q.id, q.quotation_no, q.created_at, q.updated_at, q.customer_details, q.item_details, q.employee_details,
+                q.delivery_terms,
                 ${SP_NAME_SQL} AS salesperson_name, cust.sales_team AS customer_sales_team,
                 s.employee_quotation_id AS salesperson_employee_quotation_id,
                 ${ODOO_EXPORT_RAW_NAME_COLS}
@@ -3612,11 +3801,212 @@ app.delete('/api/admin/moq-rules/:internal_reference', adminAuthMiddleware, requ
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  บันทึกการเรียก API — เฉพาะ role admin (subadmin/user ไม่เห็นเมนูและยิงตรงก็ไม่ผ่าน)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** ค่าตั้งต้น 7 วันล่าสุด — ทุก query ต้องมีขอบเขตเวลาเสมอ ไม่งั้นจะสแกนทั้งตาราง */
+function apiLogDateRange(q: any): { dateFrom: string; dateTo: string } {
+  const today = thaiDateParts();
+  const todayStr = `${today.year}-${today.month}-${today.day}`;
+  const d = new Date(`${todayStr}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - 6);                       // รวมวันนี้ด้วย = 7 วัน
+  const defaultFrom = d.toISOString().slice(0, 10);
+  const valid = (s: any) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s);
+  return {
+    dateFrom: valid(q.dateFrom) ? q.dateFrom : defaultFrom,
+    dateTo: valid(q.dateTo) ? q.dateTo : todayStr,
+  };
+}
+
+const API_LOG_METHODS = new Set(['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'TASK']);
+
+app.get('/api/admin/api-logs', adminAuthMiddleware, requireRole('admin'), async (req: any, res: any) => {
+  try {
+    const q = req.query;
+    const { dateFrom, dateTo } = apiLogDateRange(q);
+    const limit = Math.min(Math.max(parseInt(q.limit) || 50, 1), 200);
+    const offset = Math.min(Math.max(parseInt(q.offset) || 0, 0), 10000);
+
+    const filters = {
+      // ระบุ requestId = ตามรอยจาก id ที่ผู้ใช้แคปมา ไม่รู้วันที่ → ต้องไม่ถูกกรองด้วยช่วงวัน
+      ...(q.requestId ? { requestId: String(q.requestId) } : { dateFrom, dateTo }),
+      method: API_LOG_METHODS.has(String(q.method)) ? String(q.method) : undefined,
+      status: q.status ? String(q.status) : undefined,
+      path: q.path ? String(q.path) : undefined,
+      route: q.route ? String(q.route) : undefined,
+      adminUserId: q.adminUserId ? parseInt(q.adminUserId) : undefined,
+      lineUserId: q.lineUserId ? String(q.lineUserId) : undefined,
+      ip: q.ip ? String(q.ip) : undefined,
+      minDuration: q.minDuration ? parseInt(q.minDuration) : undefined,
+    };
+
+    const [data, total] = await Promise.all([
+      listApiLogs(filters, limit, offset),
+      countApiLogs(filters),
+    ]);
+    res.json({ data, total, limit, offset, dateFrom, dateTo });
+  } catch (err: any) {
+    console.error('GET /api/admin/api-logs error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/api-logs/stats', adminAuthMiddleware, requireRole('admin'), async (req: any, res: any) => {
+  try {
+    const { dateFrom, dateTo } = apiLogDateRange(req.query);
+    const stats = await getApiLogStats(dateFrom, dateTo);
+    res.json({ ...stats, dateFrom, dateTo });
+  } catch (err: any) {
+    console.error('GET /api/admin/api-logs/stats error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/api-logs/:id', adminAuthMiddleware, requireRole('admin'), async (req: any, res: any) => {
+  try {
+    // ต้องตรวจก่อน ไม่งั้น cast เป็น bigint จะพังเป็น 500 แทนที่จะเป็น 400
+    if (!/^\d+$/.test(req.params.id)) {
+      return res.status(400).json({ error: 'id ต้องเป็นตัวเลข' });
+    }
+    const row = await getApiLogById(req.params.id);
+    if (!row) {
+      return res.status(404).json({ error: 'ไม่พบรายการนี้ (อาจถูกลบไปแล้วตามอายุการเก็บ)' });
+    }
+    res.json(row);
+  } catch (err: any) {
+    console.error('GET /api/admin/api-logs/:id error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  /api/sync/v1/* — ให้ระบบภายนอกดึงข้อมูลออกไป sync (เครื่องปลายทางเป็นฝ่ายเรียกเข้ามา)
+//
+//  อ่านอย่างเดียวทั้งชุด ไม่มี endpoint ไหนเขียนอะไรลง DB นอกจาก last_used_at ของกุญแจตัวเอง
+//  ตารางไหนเปิดให้ดึงบ้าง/ดึงยังไง อยู่ที่ TABLE_REGISTRY ใน services/externalSync.ts ที่เดียว
+//  ตารางที่ไม่อยู่ในทะเบียน = 404 เสมอ (default deny) ตารางใหม่จึงไม่หลุดออกไปเองโดยไม่มีคนตัดสินใจ
+//
+//  ลำดับ middleware: นับ concurrent ก่อนตรวจกุญแจ — ตอน 429 จะได้ไม่ต้องยิง DB ตรวจกุญแจก่อน
+//  ซึ่งขัดกับเหตุผลที่มีตัวนับนี้อยู่ (คือกัน DB ไม่ให้โดนถล่ม)
+// ═════════════════════════════════════════════════════════════════════════════
+const syncApiGuards = [syncConcurrencyGuard, syncApiAuthMiddleware];
+
+/** แปลง limit ที่ผู้เรียกส่งมาให้อยู่ในกรอบเสมอ — ค่าเพี้ยน/ไม่ส่ง = ค่าตั้งต้น ไม่ใช่ error */
+function parseSyncLimit(raw: any): number {
+  const n = parseInt(String(raw ?? ''), 10);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_LIMIT;
+  return Math.min(n, MAX_LIMIT);
+}
+
+/** หาตารางจากทะเบียน + ตรวจว่ากุญแจนี้มีสิทธิ์เห็น — ตอบ 404 เหมือนกันทั้งสองกรณีโดยเจตนา */
+function resolveSyncTable(req: any, res: any) {
+  const def = getTableDef(String(req.params.table));
+  if (!def || !keyCanRead((req as SyncApiRequest).syncKey, def.table)) {
+    res.status(404).json({ error: 'ไม่พบตารางนี้ หรือกุญแจนี้ไม่มีสิทธิ์อ่าน' });
+    return null;
+  }
+  return def;
+}
+
+// รายการตารางทั้งหมดที่กุญแจนี้ดึงได้ + วิธี sync ของแต่ละตาราง (ตัวดึงอ่านตัวนี้ตอนเริ่มทำงาน)
+app.get('/api/sync/v1/tables', ...syncApiGuards, async (req: any, res: any) => {
+  try {
+    const key = (req as SyncApiRequest).syncKey!;
+    res.json({
+      server_time: new Date().toISOString(),
+      key_name: key.name,
+      max_limit: MAX_LIMIT,
+      default_limit: DEFAULT_LIMIT,
+      tables: await buildManifest(key.allowedTables),
+    });
+  } catch (err: any) {
+    console.error('GET /api/sync/v1/tables error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ข้อมูลหนึ่งหน้า
+//   ?since=<ISO>   เฉพาะโหมด incremental และเฉพาะการเรียกครั้งแรกของรอบ (เทียบแบบ >= จงใจ)
+//   ?cursor=<tok>  token จากหน้าก่อน — มีแล้วจะเหนือกว่า since เสมอ
+//   ?limit=<n>     ไม่เกิน MAX_LIMIT
+app.get('/api/sync/v1/tables/:table', ...syncApiGuards, async (req: any, res: any) => {
+  const def = resolveSyncTable(req, res);
+  if (!def) return;
+
+  try {
+    const page = await fetchPage({
+      def,
+      since: typeof req.query.since === 'string' ? req.query.since : undefined,
+      cursor: typeof req.query.cursor === 'string' ? req.query.cursor : undefined,
+      limit: parseSyncLimit(req.query.limit),
+    });
+
+    res.json({
+      table: def.table,
+      mode: def.mode,
+      pk: def.pk,
+      // เวลาของ "ฝั่งเรา" — ปลายทางต้องเก็บค่านี้ไว้เป็น since ของรอบถัดไป ห้ามใช้นาฬิกาตัวเอง
+      // เพราะนาฬิกา 2 เครื่องไม่มีวันตรงกันเป๊ะ และคลาดไปทางลบเมื่อไหร่คือข้อมูลหายเงียบ
+      server_time: new Date().toISOString(),
+      count: page.rows.length,
+      has_more: page.hasMore,
+      next_cursor: page.nextCursor,
+      generation: page.generation,
+      rows: page.rows,
+    });
+  } catch (err: any) {
+    if (err?.message === 'cursor ไม่ถูกต้อง') {
+      return res.status(400).json({ error: 'cursor ไม่ถูกต้อง — เริ่มรอบใหม่โดยไม่ส่ง cursor' });
+    }
+    console.error(`GET /api/sync/v1/tables/${def.table} error:`, err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// รายการ pk ทั้งตาราง — ปลายทางใช้ไล่ลบแถวที่หายไปจากต้นทาง (โหมด incremental เท่านั้น)
+// ไม่ต้องเรียกทุกรอบ · quotations เป็นตารางเดียวในกลุ่มนี้ที่มีการลบจริง
+app.get('/api/sync/v1/tables/:table/ids', ...syncApiGuards, async (req: any, res: any) => {
+  const def = resolveSyncTable(req, res);
+  if (!def) return;
+
+  if (def.mode !== 'incremental') {
+    return res.status(400).json({
+      error: `ตาราง ${def.table} เป็นโหมด ${def.mode} — ไม่ต้อง reconcile ด้วย /ids`,
+    });
+  }
+
+  try {
+    const page = await fetchIds(
+      def,
+      typeof req.query.cursor === 'string' ? req.query.cursor : undefined,
+      parseSyncLimit(req.query.limit)
+    );
+    res.json({
+      table: def.table,
+      pk: def.pk,
+      server_time: new Date().toISOString(),
+      count: page.rows.length,
+      has_more: page.hasMore,
+      next_cursor: page.nextCursor,
+      rows: page.rows,
+    });
+  } catch (err: any) {
+    if (err?.message === 'cursor ไม่ถูกต้อง') {
+      return res.status(400).json({ error: 'cursor ไม่ถูกต้อง — เริ่มรอบใหม่โดยไม่ส่ง cursor' });
+    }
+    console.error(`GET /api/sync/v1/tables/${def.table}/ids error:`, err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const port = process.env.PORT || 3011;
 const server = app.listen(port, () => {
   console.log(`listening on ${port}`);
   // เริ่มตัวตั้งเวลา auto-sync (อ่าน config จากตาราง sync_settings)
   initScheduler().catch((err) => console.error('[scheduler] init ล้มเหลว:', err));
+  // เริ่มตัวเขียน api_logs แบบ batch + ตัวลบของเก่า (ทั้งคู่เป็น timer แยก ไม่แตะเส้นทางของ request)
+  initApiLogWriter();
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3667,6 +4057,14 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
         `pending=${webhookQueue.pendingCount} · ข้อความเหล่านี้จะหายเงียบ`
       );
     }
+
+    // 3.5 เขียน api_logs ที่ยังกองอยู่ใน memory ลง DB ให้หมด
+    //     ต้องทำ "หลัง" drain เพราะงานที่เพิ่งตอบจบไปก็สร้างแถวใหม่เข้ามาเหมือนกัน
+    //     (ปิดปกติ/deploy จึงไม่มี log หาย — จะหายเฉพาะตอนโดน SIGKILL/OOM เหมือนคิว webhook)
+    stopApiLogWriter();
+    await flushApiLogs().catch((e: any) =>
+      console.error('[api-log] flush ตอนปิดล้มเหลว:', e?.message || e)
+    );
 
     // 4. ปิด Chrome ที่ pdfGenerator ใช้ร่วมกัน ไม่งั้นจะค้างเป็น process กำพร้าทุกครั้งที่ restart
     //    (ต้องทำ "หลัง" drain — งานที่กำลังออก PDF อยู่ยังต้องใช้ browser ตัวนี้)

@@ -1,0 +1,68 @@
+-- ─────────────────────────────────────────────────────────────────────────────
+--  index สำหรับดึง "รายชื่อพนักงานขาย + ข้อมูลล่าสุดของแต่ละคน" จาก sale_orders
+--
+--  ปัญหาที่แก้ — listSalespeopleFromOrders() ใน db/repositories.ts:
+--      SELECT DISTINCT ON (salesperson) salesperson, salesperson_id, salesperson_phone,
+--             COALESCE(customer_sale_area, sales_team)
+--      FROM sale_orders
+--      WHERE salesperson IS NOT NULL AND salesperson != '' AND salesperson_id IS NOT NULL
+--      ORDER BY salesperson, order_date DESC
+--    ก่อนมี index (309,978 แถว / ตาราง 382 MB) — Seq Scan ทั้งตาราง แล้ว Sort external merge
+--    ลงดิสก์ 30 MB เพื่อคืน 130 แถว · วัดจริงอุ่นเครื่องแล้ว: 6,824 / 6,911 / 7,048 ms
+--
+--  ทำไมเป็นเรื่องเร่งด่วน ไม่ใช่แค่ "ช้า":
+--    pool ใน config/db.ts ตั้ง statement_timeout 15 วิ — เราอยู่ที่ ~7-8 วิ และต้นทุนโตเชิงเส้น
+--    ตามจำนวนแถว sale_orders ที่ sync เพิ่มทุก 15 นาที พอชนเพดานเมื่อไหร่ repositories.ts จะ
+--    catch แล้ว return [] "เงียบ ๆ" ⇒ POST ลงทะเบียนพนักงานขาย (index.ts) ที่เรียกฟังก์ชันนี้
+--    มาตรวจชื่อ+รหัส จะตอบ "ชื่อและรหัสพนักงานไม่ตรงกับรายชื่อพนักงานขายในระบบ" กับทุกคน
+--    โดยไม่มี error โผล่ที่ไหนเลย
+--
+--  ⚠️ ทำไมต้องมี INCLUDE — index ธรรมดา (salesperson, order_date DESC) "ใช้ไม่ได้" บนตารางจริง
+--    ลองแล้ววัดแล้ว: planner ไม่เลือกใช้เลย ยังคง Seq Scan + external sort ที่ 7.2-8.7 วิเหมือนเดิม
+--    เพราะ Index Scan ต้องตาม pointer ไปหยิบ heap ทีละแถวครบ 310k แถวจากตาราง 382 MB
+--    ด้วย random_page_cost = 4 (ค่า default สำหรับจานหมุน) planner ตีราคาไว้ 192,718
+--    เทียบกับ Seq Scan+Sort ที่ 93,503 ⇒ เลือกทางเดิม
+--    (บังคับด้วย enable_seqscan=off แล้ววัดได้ 1.41-1.72 วิ คือ planner ประเมินผิดจริง แต่การไป
+--     ลด random_page_cost ทั้งระบบเพื่อ query เดียวคือเปลี่ยนแผนของ query ทุกตัวในแอป — ไม่คุ้ม)
+--
+--    ใส่ 4 คอลัมน์ที่เหลือเป็น INCLUDE แล้วทุกอย่างที่ query ต้องใช้อยู่ใน index ครบ
+--    ⇒ ได้ Index Only Scan ที่ไม่ต้องแตะ heap เลย (Heap Fetches 4,637 จาก 310k)
+--    ⇒ planner ตีราคาเหลือ 32,167 = ถูกกว่า Seq Scan+Sort ชัดเจน จึงเลือกเอง ไม่ต้องบังคับ
+--
+--  ผลวัดจริง 5 รอบหลังสร้าง: 137 / 141 / 147 / 159 / 196 ms  (จาก ~7,000 ms = เร็วขึ้น ~47 เท่า)
+--    ตรวจแล้วว่าผลลัพธ์เหมือนเดิมเป๊ะ: เทียบกับสำเนาที่เก็บไว้ก่อนสร้าง index ด้วย EXCEPT ALL
+--    ทั้งสองทาง = 0 แถว, ได้ 130 แถวเท่าเดิม
+--
+--  ทำไมไม่ทำ partial index ตาม WHERE: วัดแล้วไม่มีแถวไหนถูกตัดออกเลย —
+--    salesperson ไม่ว่างแต่ salesperson_id เป็น NULL = 0 แถว จึงไม่ประหยัดอะไร แลกกับความเปราะ
+--
+--  ต้นทุนที่จ่าย:
+--    - พื้นที่ 43 MB (ตารางรวม index โตจาก 382 → 426 MB)
+--    - INCLUDE 4 คอลัมน์ทำให้การ UPDATE คอลัมน์เหล่านั้นเป็น HOT update ไม่ได้ แต่ auto sync
+--      ทุก 15 นาทีเป็น incremental (รอบล่าสุด 15 แถว) → ไม่มีนัย จะรู้สึกก็เฉพาะตอน
+--      `npm run sync:saleorders -- --full` ที่ upsert ทีละแถวครบ 310k ซึ่งรันด้วยมือนาน ๆ ครั้ง
+--    - Index Only Scan พึ่ง visibility map ถ้าปล่อยให้ตารางค้าง dead tuple เยอะ Heap Fetches
+--      จะพุ่งแล้วช้าลง — ตารางนี้ใช้ค่า autovacuum ปกติซึ่งพอสำหรับ ~15 แถว/15 นาที
+--
+--  ⚠️ ห้ามรันไฟล์นี้ผ่าน scripts/runMigration.ts — ใช้ psql ตรงเท่านั้น
+--    runMigration ใช้ pool เดียวกับแอปที่ตั้ง statement_timeout/query_timeout = 15 วิ
+--    การสร้าง index นี้วัดได้ 6.8 วิ (ยังไม่ชน แต่เหลือระยะแค่ ~2 เท่าและโตตามขนาดตาราง)
+--    ถ้าชนเพดานกลางคัน จะเหลือ index สถานะ INVALID ค้างในฐาน ที่ planner ไม่ใช้
+--    แต่ทุก INSERT/UPDATE ต้องมาอัปเดต = แย่กว่าไม่มีเลย
+--    และถ้าวันหน้ามีใครเติม statement ที่สองลงไฟล์นี้ client.query() จะห่อเป็น implicit
+--    transaction ทันที ซึ่ง CREATE INDEX CONCURRENTLY รันข้างในไม่ได้
+--
+--  วิธีรัน (รันตอนระบบเปิดอยู่ได้ CONCURRENTLY ไม่ล็อกอ่าน/เขียน):
+--    docker exec -i primus-chatbot-db-1 psql -U postgres -d chatbot_primus \
+--      -f - < migrations/changes/2026-08-10_02_sale_orders_salesperson_idx.sql
+--
+--  แล้วต้องตรวจว่าสร้างสำเร็จจริง (CONCURRENTLY ล้มแล้วทิ้งซากไว้ได้ โดยตัว CREATE ไม่ error):
+--    SELECT indisvalid FROM pg_index WHERE indexrelid = 'idx_so_salesperson_cover'::regclass;
+--    ถ้าได้ f ให้ DROP INDEX CONCURRENTLY idx_so_salesperson_cover; แล้วเริ่มใหม่
+--
+--  ไฟล์นี้ idempotent — รันซ้ำได้ผลเท่าเดิม
+-- ─────────────────────────────────────────────────────────────────────────────
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_so_salesperson_cover
+  ON public.sale_orders (salesperson, order_date DESC)
+  INCLUDE (salesperson_id, salesperson_phone, customer_sale_area, sales_team);

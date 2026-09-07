@@ -2,27 +2,257 @@
 
 @import "tailwindcss";
 
+/* ─────────────────────────────────────────────────────────────
+   ธีมเขียว-ดำ — แก้สีทั้งแอปได้จากไฟล์นี้ไฟล์เดียว
+
+   วิธีทำงาน: ตัวแปร --c-* ข้างล่างคือ "จานสี" ตัวจริง
+   แล้ว @theme เอาไปทับ token ของ Tailwind (slate/red/emerald/…)
+   คอมโพเนนต์ยังเขียน bg-card / text-slate-900 / border-slate-200
+   เหมือนเดิม แต่ได้สีมืดอัตโนมัติทุกหน้า ไม่ต้องแก้ทีละไฟล์
+
+   มี 2 ธีม: :root = มืด (ค่าเริ่มต้น) · :root[data-theme="light"] = สว่าง
+   สลับด้วยการเซ็ต data-theme บน <html> (ปุ่มอยู่ที่ ThemeToggle.tsx)
+   จะปรับโทน: แก้แค่ 2 block นี้ ไม่ต้องแตะ .tsx เลย
+   ───────────────────────────────────────────────────────────── */
+:root {
+  /* พื้นผิว ไล่จากมืดสุด (พื้นหน้าจอ) ขึ้นมาหาสว่าง (การ์ด → แถบ → chip) */
+  --c-bg: #070b09;
+  --c-surface: #0f1512;
+  --c-surface-2: #141b17;
+  --c-surface-3: #1b241f;
+  --c-line: #243029;
+  --c-line-strong: #33423a;
+  --c-scroll-track: #0f1512;
+  --c-scroll-thumb: #2c3a33;
+  --c-scroll-thumb-hover: #405349;
+
+  /* ตัวอักษร ไล่จากจางไปเข้ม (map เข้า slate-400 … slate-950) */
+  --c-text-faint: #7d9088;
+  --c-text-muted: #93a69d;
+  --c-text-soft: #adbdb4;
+  --c-text: #c4d1ca;
+  --c-text-strong: #dbe5df;
+  --c-text-max: #edf3ef;
+
+  /* เขียวแบรนด์ — แยก 2 ค่าเพราะพื้นปุ่มกับตัวอักษรต้องการความสว่างคนละแบบ
+     brand = ใช้เป็นพื้น (ตัวอักษรขาวทับแล้วยังอ่านออก)
+     brand-fg = ใช้เป็นตัวอักษร/ไอคอน/เส้นขอบบนพื้นมืด (ต้องสว่างกว่า) */
+  --brand: #009032;
+  --brand-hover: #00a83b;
+  --brand-fg: #2fcf72;
+  --brand-soft: rgba(47, 207, 114, 0.12);
+  --brand-soft-strong: rgba(47, 207, 114, 0.18);
+  --brand-border: rgba(47, 207, 114, 0.28);
+  --brand-border-strong: rgba(47, 207, 114, 0.45);
+}
+
+@theme {
+  /* พื้นการ์ด — คอมโพเนนต์ใช้ bg-card แทน bg-white เดิม */
+  --color-card: var(--c-surface);
+
+  /* slate = โครงสร้างทั้งแอป กลับด้าน: เลขน้อย = มืด, เลขมาก = สว่าง */
+  --color-slate-50: var(--c-surface-2);
+  --color-slate-100: var(--c-surface-3);
+  --color-slate-200: var(--c-line);
+  --color-slate-300: var(--c-line-strong);
+  --color-slate-400: var(--c-text-faint);
+  --color-slate-500: var(--c-text-muted);
+  --color-slate-600: var(--c-text-soft);
+  --color-slate-700: var(--c-text);
+  --color-slate-800: var(--c-text-strong);
+  --color-slate-900: var(--c-text-max);
+  --color-slate-950: #f7fbf9;
+
+  /* สีสถานะ: 50-300 = พื้น/ขอบกล่องแจ้งเตือน (มืด), 400-800 = ตัวอักษร/ไอคอน (สว่าง) */
+  --color-red-50: #2a1315;
+  --color-red-100: #331619;
+  --color-red-200: #4d2126;
+  --color-red-300: #6b2f34;
+  --color-red-500: #f2555a;
+  --color-red-600: #e5484d;
+  --color-red-700: #ee5a5f;
+  --color-red-800: #ff9296;
+
+  --color-emerald-50: #0d2419;
+  --color-emerald-100: #10301f;
+  --color-emerald-200: #1a4630;
+  --color-emerald-500: #2fbd63;
+  --color-emerald-600: #22a957;
+  --color-emerald-700: #34c96f;
+  --color-emerald-800: #6fe3a0;
+  --color-emerald-950: #071711;
+
+  --color-amber-50: #2a1e08;
+  --color-amber-100: #33250b;
+  --color-amber-200: #4d3a12;
+  --color-amber-300: #6b5220;
+  --color-amber-400: #f0b429;
+  --color-amber-500: #eab308;
+  --color-amber-600: #e0a318;
+  --color-amber-700: #f2c14e;
+  --color-amber-800: #ffd98a;
+  --color-amber-900: #ffe9b8;
+
+  --color-sky-50: #0c2233;
+  --color-sky-100: #0f2b40;
+  --color-sky-200: #17415e;
+  --color-sky-500: #38bdf8;
+  --color-sky-600: #29a8e0;
+  --color-sky-700: #5cc7f5;
+  --color-sky-800: #93dcff;
+  --color-sky-900: #c4ecff;
+
+  --color-blue-50: #0d1c33;
+  --color-blue-100: #112340;
+  --color-blue-200: #1b3a63;
+  --color-blue-400: #60a5fa;
+  --color-blue-600: #3b82f6;
+  --color-blue-700: #6aa8ff;
+
+  --color-orange-50: #2c1a0a;
+  --color-orange-200: #4f3316;
+  --color-orange-500: #f97316;
+  --color-orange-700: #f8a35a;
+
+  --color-purple-50: #1e142e;
+  --color-purple-100: #271a3b;
+  --color-purple-600: #a855f7;
+
+  --color-violet-50: #1c1633;
+  --color-violet-200: #3a2e63;
+  --color-violet-700: #a78bfa;
+
+  --color-yellow-50: #2a250a;
+  --color-yellow-200: #4d4412;
+  --color-yellow-800: #f2d24e;
+}
+
+/* ─── ธีมสว่าง — ทับตัวแปรชุดเดียวกับข้างบน ─────────────────────
+   สีสถานะต้องทับ --color-* ตรง ๆ เพราะใน @theme เป็นค่าคงที่ของธีมมืด
+   (rule นี้อยู่นอก @layer จึงชนะ @theme เสมอ)
+   ───────────────────────────────────────────────────────────── */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --c-bg: #f8fafc;
+  --c-surface: #ffffff;
+  --c-surface-2: #f8fafc;
+  --c-surface-3: #f1f5f9;
+  --c-line: #e2e8f0;
+  --c-line-strong: #cbd5e1;
+  --c-scroll-track: #f1f5f9;
+  --c-scroll-thumb: #cbd5e1;
+  --c-scroll-thumb-hover: #94a3b8;
+
+  --c-text-faint: #94a3b8;
+  --c-text-muted: #64748b;
+  --c-text-soft: #475569;
+  --c-text: #334155;
+  --c-text-strong: #1e293b;
+  --c-text-max: #0f172a;
+
+  /* พื้นสว่างแล้ว เขียวเข้มอ่านออกทั้งสองบทบาท ใช้ค่าเดียวกันได้ */
+  --brand: #009032;
+  --brand-hover: #007b2b;
+  --brand-fg: #009032;
+  --brand-soft: rgba(0, 144, 50, 0.10);
+  --brand-soft-strong: rgba(0, 144, 50, 0.16);
+  --brand-border: rgba(0, 144, 50, 0.24);
+  --brand-border-strong: rgba(0, 144, 50, 0.45);
+
+  --color-slate-950: #020617;
+
+  --color-red-50: #fef2f2;
+  --color-red-100: #fee2e2;
+  --color-red-200: #fecaca;
+  --color-red-300: #fca5a5;
+  --color-red-500: #ef4444;
+  --color-red-600: #dc2626;
+  --color-red-700: #b91c1c;
+  --color-red-800: #991b1b;
+
+  --color-emerald-50: #ecfdf5;
+  --color-emerald-100: #d1fae5;
+  --color-emerald-200: #a7f3d0;
+  --color-emerald-500: #10b981;
+  --color-emerald-600: #059669;
+  --color-emerald-700: #047857;
+  --color-emerald-800: #065f46;
+  --color-emerald-950: #022c22;
+
+  --color-amber-50: #fffbeb;
+  --color-amber-100: #fef3c7;
+  --color-amber-200: #fde68a;
+  --color-amber-300: #fcd34d;
+  --color-amber-400: #fbbf24;
+  --color-amber-500: #f59e0b;
+  --color-amber-600: #d97706;
+  --color-amber-700: #b45309;
+  --color-amber-800: #92400e;
+  --color-amber-900: #78350f;
+
+  --color-sky-50: #f0f9ff;
+  --color-sky-100: #e0f2fe;
+  --color-sky-200: #bae6fd;
+  --color-sky-500: #0ea5e9;
+  --color-sky-600: #0284c7;
+  --color-sky-700: #0369a1;
+  --color-sky-800: #075985;
+  --color-sky-900: #0c4a6e;
+
+  --color-blue-50: #eff6ff;
+  --color-blue-100: #dbeafe;
+  --color-blue-200: #bfdbfe;
+  --color-blue-400: #60a5fa;
+  --color-blue-600: #2563eb;
+  --color-blue-700: #1d4ed8;
+
+  --color-orange-50: #fff7ed;
+  --color-orange-200: #fed7aa;
+  --color-orange-500: #f97316;
+  --color-orange-700: #c2410c;
+
+  --color-purple-50: #faf5ff;
+  --color-purple-100: #f3e8ff;
+  --color-purple-600: #9333ea;
+
+  --color-violet-50: #f5f3ff;
+  --color-violet-200: #ddd6fe;
+  --color-violet-700: #6d28d9;
+
+  --color-yellow-50: #fefce8;
+  --color-yellow-200: #fef08a;
+  --color-yellow-800: #854d0e;
+}
+
 :root {
   font-family: 'Outfit', 'Sarabun', sans-serif;
+  /* บอกเบราว์เซอร์ว่าเป็นธีมมืด — input/date picker/dropdown/autofill ของ native จะมืดตาม */
+  color-scheme: dark;
 }
 
 body {
-  background-color: #f8fafc; /* Slate 50 */
-  color: #0f172a; /* Slate 900 */
+  background-color: var(--c-bg);
+  color: var(--c-text-max);
 }
 
-/* Custom scrollbar for Light Mode */
+::selection {
+  background: var(--brand-border-strong);
+  color: #ffffff;
+}
+
+/* Custom scrollbar for Dark Mode */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: #f1f5f9;
+  background: var(--c-scroll-track);
 }
 ::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
+  background: var(--c-scroll-thumb);
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+  background: var(--c-scroll-thumb-hover);
 }

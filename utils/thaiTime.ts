@@ -73,3 +73,22 @@ export function thaiYearMonth(at: Date = new Date()): string {
   const { year, month } = thaiDateParts(at);
   return `${year.slice(-2)}${month}`;
 }
+
+/**
+ * เวลาไทยรูปแบบ 'HH:MM:SS' — ใช้เป็นหมุดเวลาบน log (รอบ sync เริ่ม/จบ, ตำแหน่ง cursor)
+ * มี formatter แยกจาก THAI_PARTS_FORMAT เพราะต้องการวินาที ซึ่ง thaiDateParts ไม่ได้ใช้
+ */
+const THAI_CLOCK_FORMAT = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Asia/Bangkok',
+  hour12: false,
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+});
+
+export function thaiClock(at: Date = new Date()): string {
+  if (Number.isNaN(at.getTime())) {
+    throw new Error('[thaiClock] ได้ Date ที่ไม่ถูกต้อง (Invalid Date)');
+  }
+  return THAI_CLOCK_FORMAT.format(at).replace(/^24:/, '00:'); // Intl อาจคืน 24 ตอนเที่ยงคืน
+}

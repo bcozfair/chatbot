@@ -18,8 +18,10 @@ import { expandOptionalProducts, checkStockRules, StockViolation } from './produ
 import { sumLineTotals, calcNetPrice } from '../utils/pricing.js';
 import { validateProductPriceWithPromotions } from '../utils/promotionValidator.js';
 import { buildThaiAddress } from '../utils/address.js';
+import { resolveDeliveryTerms } from '../utils/deliveryTerms.js';
 import { isBlacklisted } from './blacklistService.js';
-import { thaiYearMonth } from '../utils/thaiTime.js';
+import { checkCreditHold, type CreditHoldResult } from './creditHoldService.js';
+import { thaiDateDMY, thaiYearMonth } from '../utils/thaiTime.js';
 import {
   loadQuotationRules,
   resolveQuotationRule,
@@ -33,7 +35,7 @@ import {
 export type ValidationStage = 'draft' | 'save' | 'confirm';
 
 export interface Violation {
-  type: 'BLOCKED' | 'OUT_OF_STOCK' | 'MOQ_VIOLATION' | 'MIN_PRICE_VIOLATION' | 'CUSTOMER_BLACKLISTED' | 'SYSTEM_ERROR';
+  type: 'BLOCKED' | 'OUT_OF_STOCK' | 'MOQ_VIOLATION' | 'MIN_PRICE_VIOLATION' | 'CUSTOMER_BLACKLISTED' | 'CUSTOMER_CREDIT_HOLD' | 'SYSTEM_ERROR';
   model: string;
   display_message: string;
   warn_msg?: string;
@@ -45,6 +47,8 @@ export interface Violation {
   min_order_qty?: number;
   qty?: number;
   quantity_on_hand_unreserved?: number;
+  last_order_at?: string | null;
+  dormant_months?: number;
 }
 
 /** สร้างข้อความพร้อมโชว์จาก violation — ถ้อยคำเดียวของทั้งระบบ (server เป็น source of truth) */
@@ -72,6 +76,15 @@ export function buildViolationDisplay(v: Omit<Violation, 'display_message'>): st
     // ไม่บอกเหตุผลที่แอดมินกรอกไว้ และไม่บอกว่าติดระดับบริษัทหรือระดับผู้ติดต่อ — เซลล์ต้องไปถามแอดมิน
     case 'CUSTOMER_BLACKLISTED':
       return '🚫 บริษัท/ผู้ติดต่อ รายนี้ถูกระงับการเสนอราคา กรุณาติดต่อแอดมิน';
+    // ตรงข้ามกับ blacklist: เคสนี้ต้องบอกวันที่ซื้อล่าสุด เพราะเซลล์ต้องเอาไปคุยกับแอดมินต่อ
+    // ต้องพูดว่า "ที่ออกบิล" ให้ชัด — ใบที่ยังไม่วางบิล (invoice_status='no') ไม่นับตั้งแต่
+    // 2026-08-25 ถ้าไม่บอก เซลล์จะงงว่าเพิ่งมีใบเมื่อเดือนก่อนแล้วทำไมยังโดนบล็อก
+    case 'CUSTOMER_CREDIT_HOLD': {
+      const months = v.dormant_months ?? 12;
+      const since = v.last_order_at ? thaiDateDMY(new Date(v.last_order_at)) : null;
+      const when = since ? `ตั้งแต่ ${since} ` : '';
+      return `⛔ บริษัทนี้ไม่มีคำสั่งซื้อที่ออกบิล ${when}(เกิน ${months} เดือน) กรุณาติดต่อแอดมินเพื่อตรวจสอบเครดิตก่อน`;
+    }
     case 'SYSTEM_ERROR':
       return '⚠️ ตรวจสอบกฎไม่สำเร็จ กรุณาลองใหม่หรือติดต่อแอดมิน';
     default:
@@ -82,6 +95,16 @@ export function buildViolationDisplay(v: Omit<Violation, 'display_message'>): st
 /** violation สำเร็จรูปสำหรับด่านที่อยู่นอก validateQuotationItems — ถ้อยคำต้องมาจากที่เดียวกัน */
 export const blacklistViolation = (): Violation => {
   const v: Omit<Violation, 'display_message'> = { type: 'CUSTOMER_BLACKLISTED', model: '-' };
+  return { ...v, display_message: buildViolationDisplay(v) };
+};
+
+export const creditHoldViolation = (result: CreditHoldResult): Violation => {
+  const v: Omit<Violation, 'display_message'> = {
+    type: 'CUSTOMER_CREDIT_HOLD',
+    model: '-',
+    last_order_at: result.last_order_at ? result.last_order_at.toISOString() : null,
+    dormant_months: result.dormant_months,
+  };
   return { ...v, display_message: buildViolationDisplay(v) };
 };
 
@@ -192,15 +215,32 @@ export async function confirmQuotationAtomic(
     const quotationNo = row.quotation_no
       || await allocateQuotationNo(enrichedQuote, client);
 
+    // 2.5) ตรึงกำหนดส่งลงใบ — ประเภทอัตโนมัติคิดจาก "สต๊อก ณ ตอนนี้" ซึ่ง item_details ไม่ได้เก็บไว้
+    //      ถ้าไม่ตรึง ไฟล์ export ที่กดทีหลังจะได้ค่าคนละตัวกับ PDF ที่ลูกค้าถืออยู่
+    //      enrichedQuote มี delivery_days_auto / delivery_all_in_stock ติดมาแล้วจาก
+    //      enrichQuotationData() จึงไม่ต้อง query เพิ่มในนี้ (อยู่ใน transaction ห้ามยิงงานหนัก)
+    const deliveryTerms = resolveDeliveryTerms(enrichedQuote);
+
+    // 2.6) ตรึงสต๊อกลงใบ — เป็นค่าเดียวที่ PDF ใช้แล้วไม่มีเก็บไว้ที่ไหนเลย (item_details ไม่มีคีย์
+    //      stock) ถ้าไม่ตรึง บรรทัด "(*** สินค้าคงเหลือ N pcs. ***)" จะเปลี่ยนไปเรื่อยตามของเข้า/ออก
+    //      ทั้งที่ลูกค้าถือเอกสารเวอร์ชันเดิมอยู่ · เรียงตรง index กับ item_details
+    //      ค่ามาจาก enrichedQuote.items ที่ enrichQuotationData เพิ่งดึงสดมา — ไม่ query เพิ่มในล็อก
+    const printSnapshot = {
+      item_stock: (enrichedQuote?.items || []).map((it: any) => Number(it?.stock) || 0),
+      frozen_at: new Date().toISOString(),
+    };
+
     // 3) UPDATE แบบมีเงื่อนไข status + เช็ค rowCount (ห้ามเขียนทับ created_at เพราะเลขคำนวณจากมัน)
     const upd = await client.query(
       `UPDATE quotations
           SET status = 'confirmed',
               quotation_no = COALESCE(quotation_no, $1),
+              delivery_terms = $3::jsonb,
+              print_snapshot = $4::jsonb,
               updated_at = NOW()
         WHERE id = $2 AND status <> 'confirmed' AND status <> 'cancelled'
       RETURNING quotation_no`,
-      [quotationNo, quoteId]
+      [quotationNo, quoteId, JSON.stringify(deliveryTerms), JSON.stringify(printSnapshot)]
     );
     if (upd.rowCount === 0) {
       // มี FOR UPDATE แล้วยังโดน 0 แถว = มีทางเขียน status ที่เรายังไม่รู้ ให้ rollback ทั้งชุด
@@ -443,6 +483,26 @@ export function parseDeliveryDaysOverride(raw: any): number | null | undefined {
   return n;
 }
 
+/**
+ * ชื่อบริษัทใน snapshot ต้องมาจาก "แถวเดียวกัน" กับที่ให้รหัสลูกค้า/เลขภาษี
+ *
+ * ── ทำไมต้องมีกฎนี้ ──
+ * ชื่อบริษัทที่ไหลเข้ามาคือชื่อที่เซลส์ค้นตอนแรก แต่รหัส/เลขภาษีถูกดึงใหม่จาก
+ * (customer_id, contact_id) ที่ผูกใบจริง สองค่านี้เป็นคนละบริษัทกันได้เมื่อผู้ติดต่อที่เลือก
+ * อยู่ใต้บริษัทพี่น้อง — รายชื่อผู้ติดต่อค้นข้ามนิติบุคคลให้ (getRelatedContactsByCustomerId)
+ * และการเลือกผู้ติดต่อ = เลือกสาขา/นิติบุคคลไปในตัว
+ *
+ * เคสจริง 2026-08-21 (QT-260805193): เซลส์ค้น "บริษัท โปรต้าวัน" (A/35080) แล้วกดปุ่ม
+ * "คุณเอกชัย" ที่อยู่ใต้ "บริษัท เอ.เอ็น.เอ็น. เทรดดิ้ง" (A/32533, เลขภาษีเดียวกัน)
+ * ใบจึงออกมาเป็นชื่อโปรต้าวัน คู่กับรหัส A/32533 = ชื่อกับรหัสคนละบริษัท
+ *
+ * ⚠️ ทุกที่ที่หยิบ customer_reference/customer_tax_id จากแถวลูกค้า ต้องเรียกตัวนี้ด้วยเสมอ
+ *    ไม่งั้นชื่อกับรหัสหลุดจากกันได้อีก · แถวไม่มีชื่อ = คงชื่อเดิมไว้ ไม่ล้างทิ้ง
+ */
+export function companyNameOfRow(row: any, current: string): string {
+  return String(row?.customer_name ?? row?.display_name ?? '').trim() || current;
+}
+
 export async function insertDraftQuotations(
   userId: string,
   customerName: string,
@@ -602,6 +662,7 @@ export async function insertDraftQuotations(
 
       if (custData) {
         // ── ระดับบริษัท: ใช้ได้ไม่ว่าแถวที่ได้จะเป็นผู้ติดต่อคนไหน ──
+        companyName = companyNameOfRow(custData, companyName);
         customerCode = custData.customer_reference || '';
         customerTaxId = custData.customer_tax_id || '';
         paymentTerms = custData.customer_payment_terms || '';
@@ -1039,13 +1100,18 @@ export async function validateQuotationItems(
   let expanded: any[] = items ?? [];
 
   // เงื่อนไขระดับ "ลูกค้า" — ตรวจก่อนรายการสินค้าเสมอ และตรวจแม้ใบยังไม่มีสินค้าสักบรรทัด
+  // ทั้งสองด่านอยู่ใน try เดียวกันเพราะเป็น fail-closed เหมือนกัน: ตรวจไม่สำเร็จ = ห้ามออกใบ
+  // และแจ้งพร้อมกันได้ถ้าติดทั้งคู่ (คนละสาเหตุ เซลล์ต้องรู้ทั้งสองอย่างก่อนไปหาแอดมิน)
   try {
     if (await isBlacklisted(opts.customerId, opts.contactId)) {
       const v: Omit<Violation, 'display_message'> = { type: 'CUSTOMER_BLACKLISTED', model: '-' };
       violations.push({ ...v, display_message: buildViolationDisplay(v) });
     }
+
+    const credit = await checkCreditHold(opts.customerId);
+    if (credit.held) violations.push(creditHoldViolation(credit));
   } catch (err) {
-    console.error(`[validateQuotationItems] stage=${opts.stage} blacklist check failed (fail-closed):`, err);
+    console.error(`[validateQuotationItems] stage=${opts.stage} customer gate failed (blacklist/credit, fail-closed):`, err);
     const v: Omit<Violation, 'display_message'> = { type: 'SYSTEM_ERROR', model: '-' };
     return { items: expanded, violations: [{ ...v, display_message: buildViolationDisplay(v) }] };
   }
@@ -1238,8 +1304,16 @@ export async function resolveContactFlow(
     if (await isBlacklisted(customerId, null)) {
       return { text: buildViolationText([blacklistViolation()]) };
     }
+
+    // ด่านเครดิตอยู่ระดับบริษัทล้วน ไม่เกี่ยวกับผู้ติดต่อ จึงตรวจตรงนี้ได้เลยทั้งที่ยังไม่รู้ว่า
+    // เซลล์จะเลือกผู้ติดต่อคนไหน · ถ้าหลังจากนี้ใบถูกย้ายไปผูกบริษัทพี่น้อง (resolvedCustomerId
+    // ด้านล่าง) ก็ไม่ต้องตรวจซ้ำ เพราะ last_order_at เป็นค่าระดับนิติบุคคล ทุกรหัสในกลุ่มได้ค่าเดียวกัน
+    const credit = await checkCreditHold(customerId);
+    if (credit.held) {
+      return { text: buildViolationText([creditHoldViolation(credit)]) };
+    }
   } catch (err) {
-    console.error('[resolveContactFlow] blacklist check failed (fail-closed):', err);
+    console.error('[resolveContactFlow] customer gate failed (blacklist/credit, fail-closed):', err);
     return { text: buildViolationText([systemErrorViolation()]) };
   }
 
@@ -1266,7 +1340,7 @@ export async function resolveContactFlow(
     const contactId = finalCandidates[0].item.id;
 
     // ผู้ติดต่อที่ค้นเจออาจอยู่ใต้ company_id ของสาขาอื่นในนิติบุคคลเดียวกัน
-    // (findContactCandidates ค้นข้ามสาขาให้ — ดู getRelatedContactsByCustomerId)
+    // (findContactCandidates ค้นข้ามสาขาให้เมื่อบริษัทที่เลือกตอบไม่ได้ — ดู preferAnchorCompany)
     // ต้องผูกใบเข้ากับบริษัทของ "คนที่เลือกจริง" ไม่ใช่บริษัทที่ค้นเจอตอนแรก ไม่งั้นคู่
     // (customer_id, contact_id) จะชี้แถวที่ไม่มีอยู่ → snapshot/ด่านตรวจ lookup ไม่เจอ
     // เลือกผู้ติดต่อ = เลือกสาขาไปในตัว ชื่อบริษัทที่โชว์จึงต้องเปลี่ยนตามด้วย
@@ -1381,7 +1455,8 @@ export async function resolveContactFlow(
     usedFallbackList = optionSource.length > 0;
   }
 
-  // สาขาของผู้ติดต่อแต่ละคน — จำเป็นเมื่อรายชื่อข้ามสาขา (ดู getRelatedContactsByCustomerId)
+  // สาขาของผู้ติดต่อแต่ละคน — จำเป็นเมื่อรายชื่อข้ามสาขา ซึ่งตอนนี้เกิดเฉพาะตอนบริษัทที่เซลส์
+  // เลือกตอบไม่ได้เลย (ดู preferAnchorCompany ใน services/customerService.ts)
   // ชื่อคนซ้ำกันข้ามสาขาได้จริง (เบียร์ทิพย์มี "คุณธนาพร"/"คุณอัญชลี" ทั้งที่สำนักงานใหญ่และสาขา
   // 00001) ถ้าไม่บอกสาขา เซลส์จะเห็นปุ่มข้อความเหมือนกันเป๊ะสองปุ่มแล้วแยกไม่ออก
   //
@@ -1496,7 +1571,7 @@ export async function updateQuotationCustomerSnapshot(
     if (customerId) {
       if (contactId) {
         custRes = await pool.query(
-          `SELECT customer_reference AS reference, customer_tax_id AS tax_id, customer_payment_terms AS payment_terms,
+          `SELECT customer_name, customer_reference AS reference, customer_tax_id AS tax_id, customer_payment_terms AS payment_terms,
                   COALESCE(contact_phone, phone) AS contact_phone, COALESCE(contact_email, email) AS contact_email,
                   invoice_street AS contact_address,
                   invoice_district, invoice_sub_district, invoice_state, invoice_zip
@@ -1507,7 +1582,7 @@ export async function updateQuotationCustomerSnapshot(
       }
       if (!custRes || custRes.rows.length === 0) {
         custRes = await pool.query(
-          `SELECT DISTINCT ON (company_id) customer_reference AS reference, customer_tax_id AS tax_id,
+          `SELECT DISTINCT ON (company_id) customer_name, customer_reference AS reference, customer_tax_id AS tax_id,
                   customer_payment_terms AS payment_terms
            FROM customers_data_view
            WHERE company_id = $1 ORDER BY company_id, contact_id LIMIT 1`,
@@ -1539,6 +1614,7 @@ export async function updateQuotationCustomerSnapshot(
 
     if (custRes && custRes.rows.length > 0) {
       const row = custRes.rows[0];
+      customerDetails.customer_name = companyNameOfRow(row, companyName) || null;
       if (row.reference) customerDetails.customer_code = row.reference;
       if (row.tax_id && !customerDetails.customer_tax_id) customerDetails.customer_tax_id = row.tax_id;
       if (row.contact_phone && !customerDetails.phone) customerDetails.phone = row.contact_phone;

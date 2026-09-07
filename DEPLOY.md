@@ -61,6 +61,7 @@ nano .env                     # หรือแก้ผ่าน VSCode Remote-
 - `PG_PASSWORD=` ← **ตั้งรหัสใหม่** (จำไว้ ใช้ตอน restore ด้านล่าง)
 - `JWT_SECRET=` ← ตั้งค่าใหม่
 - `APP_PORT=` ← พอร์ตที่จะให้ IT route subdomain มา (ถ้ายังไม่รู้ ใช้ `3011` ไปก่อน แล้วเปลี่ยนทีหลัง)
+- `APP_URL=` ← **โดเมนสาธารณะเต็ม ๆ** เช่น `https://bot.company.com` (ยังไม่รู้ตอนนี้ก็ข้ามไปก่อน แต่**ต้องกลับมาเติมให้ได้ก่อนเปิดใช้จริง** — ดูส่วนที่ 3)
 - LINE / DeepSeek / LIFF / sync keys → ใส่ค่าเดิมจาก `.env` เครื่องคุณ
 
 ### 2.3 ขึ้น database container ก่อน แล้ว restore ข้อมูล
@@ -85,6 +86,7 @@ docker compose exec db psql -U "$PG_USER" -d "$PG_DATABASE" -c "SELECT count(*) 
 ```bash
 docker compose up -d --build         # ครั้งแรก build นาน (โหลด Chromium + ฟอนต์) รอสักครู่
 docker compose logs -f app           # เห็น "listening on 3011" = สำเร็จ (กด Ctrl+C ออกจาก log ได้ แอปยังรันอยู่)
+docker image prune -f --filter "until=24h"   # ลบ image เก่าที่ไม่มีใครใช้ (ของอายุน้อยกว่า 24 ชม. ไม่โดน)
 ```
 
 ### 2.5 เช็คว่าแอปตอบ (บน server)
@@ -97,6 +99,19 @@ curl -I http://127.0.0.1:${APP_PORT:-3011}/        # ควรได้ HTTP 200
 ## ส่วนที่ 3 — แจ้ง IT
 บอก IT: **subdomain ที่ต้องการ** (เช่น `bot.company.com`) + **พอร์ต** ที่ตั้งใน `APP_PORT` (ผูกไว้ที่ `127.0.0.1`)
 IT จะตั้ง reverse proxy + HTTPS ให้ชี้ subdomain → พอร์ตนั้น
+
+> **🔴 ได้ subdomain มาแล้วต้องเติม `APP_URL` ใน `.env` ทันที แล้ว `docker compose up -d --force-recreate app`**
+> ลิงก์ PDF ที่บอทส่งเข้าแชทประกอบขึ้นจากค่านี้ · **ถ้า `APP_URL` ว่าง แอปจะเดาจาก Host header ของ
+> webhook ตัวแรกที่เข้ามาหลัง container เกิดใหม่** แล้วล็อกไว้ในหน่วยความจำจนกว่าจะ recreate —
+> ซึ่งแปลว่า `curl` ตรวจสุขภาพจากในเครื่อง (ขั้น 4) ที่บังเอิญยิง `/callback` ก่อน LINE ตัวจริง
+> จะทำให้ทุกลิงก์กลายเป็น `http://127.0.0.1:3011` ที่มือถือลูกค้าเปิดไม่ได้ **โดยไม่มี error ใด ๆ ให้เห็น**
+> เกิดขึ้นจริงเมื่อ 2026-08-20 (ใบเสนอราคาเสียไป 4 ใบ) · ตั้ง `APP_URL` แล้วเส้นทางเดานี้จะไม่ทำงานเลย
+>
+> ตรวจว่าตั้งติดจริง: `docker compose exec -T app printenv APP_URL` ต้องขึ้นโดเมน ไม่ใช่ค่าว่าง
+> · ตั้งแต่ 2026-08-20 แอป **ปฏิเสธที่จะสตาร์ท**ถ้า `APP_URL` ขาด/ไม่ใช่ https/มี path ต่อท้าย
+>   ดังนั้นถ้า container ขึ้นแล้ว log ว่า `[APP_URL] ...` แล้วดับ ให้ไปแก้ค่าใน `.env` แล้ว
+>   `docker compose up -d --force-recreate app` — ไม่ใช่ปัญหาอื่น · ตรวจค่าล่วงหน้าได้ด้วย
+>   `npm run diag:app-url` (อ่านอย่างเดียว รันบน prod ได้)
 
 > ถ้า IT บอกว่า proxy ของเขาอยู่ใน docker network (ไม่ใช่ host) อาจต้องปรับ `docker-compose.yml` ให้ join network ของเขาแทนการ publish port — แจ้งผมได้ เดี๋ยวปรับให้
 
@@ -195,16 +210,41 @@ git pull --ff-only origin main
 เช็คสถานะ DB จริงว่าขาดตัวไหน (คำสั่งเดียวตอบครบ — เพิ่มบรรทัดเองได้เมื่อมี migration ใหม่):
 ```bash
 docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" -c "
-SELECT to_regclass('public.customers_data_view') AS matview,
-       to_regproc('public.clean_text(text)')     AS clean_text,
+SELECT to_regclass('public.customers_data_view')  AS matview,
+       to_regprocedure('public.clean_text(text)') AS clean_text,
        EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('public.customers_data_view')
               AND attname='sales_team' AND NOT attisdropped)                                  AS sales_team,
        EXISTS(SELECT 1 FROM information_schema.columns
               WHERE table_name='salesperson' AND column_name='employee_quotation_id')         AS employee_qid,
        EXISTS(SELECT 1 FROM information_schema.columns
               WHERE table_name='quotations' AND column_name='odoo_exported_at')               AS exported_at,
-       to_regclass('public.quotation_export_batches')                                         AS export_batches;"
+       to_regclass('public.quotation_export_batches')                                         AS export_batches,
+       to_regclass('public.api_logs')                                                         AS api_logs,
+       EXISTS(SELECT 1 FROM information_schema.columns
+              WHERE table_name='api_logs' AND column_name='ip')                               AS api_logs_ip,
+       to_regclass('public.quotation_credit_policy')                                          AS credit_policy,
+       EXISTS(SELECT 1 FROM pg_constraint WHERE contype='p'
+              AND conrelid=to_regclass('public.quotation_credit_policy'))                     AS credit_policy_pk,
+       EXISTS(SELECT 1 FROM information_schema.columns
+              WHERE table_name='customers_data_view' AND column_name='last_order_at')         AS cdv_last_order,
+       (pg_get_viewdef('public.customers_data_build'::regclass) LIKE '%to invoice%')          AS cdv_billed_only,
+       (SELECT pg_get_constraintdef(oid) NOT LIKE '%warn%' FROM pg_constraint
+         WHERE conname='quotation_credit_policy_mode')                                        AS credit_mode_2_values,
+       EXISTS(SELECT 1 FROM information_schema.columns
+              WHERE table_name='sale_orders' AND column_name='order_status')                  AS so_status_cols,
+       EXISTS(SELECT 1 FROM information_schema.columns
+              WHERE table_name='quotations' AND column_name='odoo_imported_at')               AS q_odoo_link,
+       EXISTS(SELECT 1 FROM information_schema.columns
+              WHERE table_name='api_logs' AND column_name='llm_ms')                           AS api_logs_llm,
+       EXISTS(SELECT 1 FROM information_schema.columns
+              WHERE table_name='api_logs' AND column_name='llm_cached_tokens')                AS api_logs_llm_tok,
+       EXISTS(SELECT 1 FROM pg_extension WHERE extname='pg_stat_statements')                  AS pg_stat_stmts;"
 ```
+> `pg_stat_stmts` = false ทั้งที่รัน `2026-09-03_02` ไปแล้ว แปลว่ากล่อง db ยังไม่ได้ start ด้วย
+> `-c shared_preload_libraries=pg_stat_statements` — ต้อง `docker compose up -d db` (recreate) ก่อน
+> แล้วค่อยรัน migration นั้น ไม่ใช่รัน migration ซ้ำ
+> คอลัมน์ `clean_text` ต้องใช้ **`to_regprocedure`** ไม่ใช่ `to_regproc` — `to_regproc` รับได้แค่ชื่อฟังก์ชันเปล่า
+> ใส่ `(text)` ต่อท้ายจะคืน null ทุกครั้งแม้ฟังก์ชันมีอยู่จริง = สัญญาณเตือนหลอกว่า migration ขาด
 รันเฉพาะไฟล์ที่ผลข้างบนบอกว่ายังไม่มี เรียงตามชื่อไฟล์ (วันที่):
 ```bash
 for f in migrations/changes/<ไฟล์ที่ขาด>.sql ; do
@@ -219,6 +259,51 @@ done
 - **ไฟล์ที่สร้าง matview ทับกัน ให้รันแค่ตัวล่าสุด** — เช่น `2026-08-05_02` `DROP` แล้วสร้างใหม่ทั้งก้อนอยู่แล้ว
   ไม่ต้องรัน `_01` ก่อน (รันสองรอบ = ค้นหาลูกค้าล่มนานเป็นเท่าตัวเปล่า ๆ)
 - **มีช่วงที่ค้นหาลูกค้าพัง** — ระหว่างสร้าง matview ใหม่ (ราว 1–3 นาที) `customers_data_view` หายชั่วคราว → ทำนอกเวลาใช้งาน
+- **ข้อยกเว้น: `2026-08-10_01_api_logs.sql` รันได้ทุกเวลา** — สร้างตารางใหม่ล้วน ไม่ ALTER ตารางเดิม ไม่แตะ matview จบในไม่กี่ ms
+- **ข้อยกเว้น: `2026-08-20_04_quotation_credit_policy.sql` รันได้ทุกเวลา และรัน "ก่อน" deploy โค้ดใหม่ได้**
+  สร้างตารางใหม่ + `CREATE OR REPLACE VIEW` (แก้แค่ catalog) + `ADD COLUMN` แบบ nullable ไม่มี DEFAULT
+  → ไม่ rebuild `customers_data_view` ในไฟล์ ไม่มีช่วงที่ค้นหาลูกค้าพัง จบในไม่กี่ ms
+  ⚠️ หลังรันแล้ว `last_order_at` จะเป็น NULL ทั้งตารางจนกว่า **รอบ sync ถัดไป** จะ rebuild ตารางจาก view
+  (NULL = "ไม่เคยซื้อ" = ปล่อยผ่าน จึงไม่มีใครถูกบล็อกผิด และเกณฑ์ยังตั้งต้นเป็น `mode='off'` อยู่แล้ว)
+  ถ้าอยากให้มีค่าทันทีโดยไม่รอ sync ให้ทำ build+swap มือตามขั้นตอนใน `scripts/sync/refreshCustomerDirectory.ts`
+- **ข้อยกเว้น: `2026-08-21_01_quotation_credit_policy_pk.sql` รันได้ทุกเวลา**
+  เติม PK ให้ตารางแถวเดียว `quotation_credit_policy` — ล็อกเสี้ยววินาที ไม่แตะ `customers_data_view`
+  ล้มพร้อมข้อความภาษาคนถ้าเจอแถว id=1 ซ้ำ (ไม่ลบให้เอง — ต้องให้คนเลือกว่าจะเก็บแถวไหน)
+  (`CREATE TABLE customers_data_view_new AS SELECT * FROM customers_data_build` → สร้าง index
+  `(company_id) INCLUDE (last_order_at)` → ANALYZE → สลับชื่อใน transaction) — วัดจริง build 4.7 วิ สลับ 13 ms
+- **ข้อยกเว้น: `2026-08-25_01_credit_hold_billed_orders_credit_customers_only.sql` รันได้ทุกเวลา และรัน "ก่อน" deploy โค้ดใหม่ได้**
+  เปลี่ยนนิยาม `last_order_at`: นับเฉพาะใบที่ `invoice_status IN ('invoiced','to invoice')` และเฉพาะ
+  ลูกค้าเครดิต/เช็คล่วงหน้า (นอกนั้น NULL = ผ่านด่าน) · **ไม่มีคอลัมน์ใหม่** โค้ดด่านตรวจไม่ต้องแก้
+  สักบรรทัด ลำดับ migration/deploy จึงสลับกันได้อิสระ
+  ไฟล์ทำ build+swap ให้ในตัว (ทั้งไฟล์อยู่ใน transaction เดียว) → ไม่มีช่วงที่ค้นหาลูกค้าพัง
+  ล็อก AccessExclusive ระดับ ms ตอนสลับ ส่วน build 2–3 วิ ไม่ล็อกใคร · ล้มกลางคัน = rollback ทั้งไฟล์
+  มี guard ล้มเองถ้า build ได้ 0 แถว หรือไม่มีบริษัทไหนได้ `last_order_at` เลย (เงื่อนไขเครดิตกลับด้าน)
+  ⚠️ หลังรันเสร็จให้ `VACUUM (ANALYZE false) public.customers_data_view` — ตารางที่เพิ่งสร้างยังไม่มี
+  visibility map ด่านตรวจจะตกจาก Index Only Scan ไปเป็น Index Scan จนกว่า autovacuum จะมาถึง
+  ตรวจผล: `npm run diag:credit-hold` ต้องเขียวหมด และบรรทัด "ขอบเขต" ต้องบอกจำนวนที่เข้าเกณฑ์
+  (1,656 บริษัท ณ 2026-08-25 — ถ้าได้ 10,926 แปลว่า view ยังไม่ถูก rebuild)
+- **ข้อยกเว้น: `2026-08-25_02_credit_policy_drop_warn_mode.sql` รันได้ทุกเวลา และสลับลำดับกับ deploy ได้**
+  ปลดโหมด `warn` (เฝ้าดู) ทิ้ง: ไล่แถวที่ค้างเป็น `warn` → `off` แล้วแคบ CHECK ให้เหลือ `off`/`block`
+  ตามหน้าแอดมินที่เปลี่ยนเป็นสวิตช์ เปิด/ปิด · แตะตารางแถวเดียว ไม่ยุ่งกับ `customers_data_view` จบในไม่กี่ ms
+  ⚠️ **`warn` ต้อง map เป็น `off` ไม่ใช่ `block`** — `warn` ไม่เคยบล็อกใคร ต่างจาก `off` แค่บรรทัด log
+  ถ้า map เป็น `block` = เปิดกฎให้เองโดยไม่มีใครสั่ง แล้วใบเสนอราคาจะถูกบล็อกจริงทันที
+  ลำดับสลับได้: โค้ดเก่ายอมรับทั้ง 3 ค่าอยู่แล้ว (แคบ CHECK ไม่ทำให้พัง) · โค้ดใหม่อ่านค่าที่ไม่รู้จักเป็น `off`
+  ตรวจผล: `npm run diag:credit-hold` มีข้อ "CHECK ของ mode รับแค่ off/block" คอยจับว่ารันแล้วหรือยัง
+- **ข้อยกเว้น: `2026-08-20_03_api_logs_ip.sql` รันได้ทุกเวลา และรัน "ก่อน" deploy โค้ดใหม่ได้**
+  `ADD COLUMN` แบบ nullable ไม่มี DEFAULT = PostgreSQL แก้แค่ metadata ไม่ล็อกตาราง ไม่เขียนแถวใหม่
+  และโค้ดเก่าที่ยังรันอยู่ระบุชื่อคอลัมน์ใน INSERT ครบทุกตัว จึงเขียน log ต่อได้ตามปกติ (คอลัมน์ใหม่เป็น NULL)
+- **ข้อยกเว้น: `2026-09-02_02_sale_orders_status_source.sql` รันได้ทุกเวลา และรัน "ก่อน" deploy โค้ดใหม่ได้**
+  เก็บ 3 field ที่ gateway ส่งมาแล้ว sync ทิ้ง (`order_status` / `invoice_date` / `source`)
+  `ADD COLUMN` nullable ไม่มี DEFAULT → แก้แค่ metadata ไม่ล็อกตาราง 316k แถว
+  โค้ดเก่าไม่รู้จักคอลัมน์ใหม่ก็ไม่พัง (upsert ระบุชื่อคอลัมน์ครบทุกตัว)
+  ⚠️ แถวเก่าเป็น NULL หมดจนกว่า Odoo จะแก้เอกสารนั้นแล้ว incremental sync ดึงมาทับ
+  ถ้าอยากได้ครบทันทีต้อง `docker compose exec app npm run sync:saleorders -- --full` (กวาดทั้งฐาน ทำนอกเวลา)
+- **ข้อยกเว้น: `2026-09-02_03_quotations_odoo_import_link.sql` รันได้ทุกเวลา และรัน "ก่อน" deploy โค้ดใหม่ได้**
+  เพิ่ม `quotations.odoo_imported_at` / `odoo_so_id` = สถานะ "นำเข้า Odoo แล้ว" ของหน้าประวัติใบเสนอราคา
+  `ADD COLUMN` nullable ไม่มี DEFAULT บนตาราง ~1.3k แถว จบในไม่กี่ ms
+  สลับลำดับกับ deploy ได้: โค้ดใหม่ที่เจอว่ายังไม่มีคอลัมน์จะเตือนบรรทัดเดียวแล้วข้าม ไม่ล้มรอบ sync
+  ⚠️ ค่ายังว่างทั้งตารางจนกว่า **รอบ sync ถัดไป** จะมาร์กให้ (มาร์กย้อนหลังให้เองในคำสั่งเดียว ไม่ต้อง backfill)
+  ตรวจผล: หน้าประวัติใบเสนอราคาต้องมีป้าย "นำเข้า Odoo แล้ว" ไม่ใช่ "รอนำเข้า" ทั้งหน้า
 
 ### ขั้น 4.5 — เปลี่ยนชื่อค่าภาษีใน `.env` (ครั้งเดียว ตอนขึ้น export แยก QP/QT)
 export แยกไฟล์ตามบริษัทแล้ว ชื่อภาษีจึงแยกเป็น 2 คีย์ — คีย์เดิม `ODOO_EXPORT_TAX` ไม่ถูกอ่านอีกต่อไป
@@ -233,13 +318,304 @@ ODOO_EXPORT_TAX_QT="Output VAT 7%(Exc)"
 - ⚠️ QT **ไม่มีเว้นวรรค** หน้าวงเล็บ ส่วน QP มี — ต่างกันจริง ห้ามแก้ให้เหมือนกัน
 - ไม่แก้ก็ไม่พัง โค้ดมีค่าตั้งต้นสองตัวนี้อยู่แล้ว แต่คีย์เดิมที่ค้างใน `.env` จะกลายเป็นค่าที่ไม่มีใครอ่าน
 
+### ขั้น 4.6 — ตั้งค่า API log (ครั้งเดียว ตอนขึ้นตาราง `api_logs`)
+```
+API_LOG_ENABLED=false        # ⚠️ ขึ้นครั้งแรกให้ตั้ง false ก่อน
+API_LOG_RETENTION_DAYS=120
+```
+> ⚠️ **ห้ามตั้งต่ำกว่า 90** — พ.ร.บ.คอมพิวเตอร์ ม.26 บังคับให้เก็บข้อมูลจราจรไม่น้อยกว่า 90 วัน
+> ตั้ง 120 เพื่อกันเผื่อ (ตัวลบทำงานทุกชั่วโมงตามเวลาจริง ถ้าตั้ง 90 พอดีแล้ววันไหนมีคนมาขอข้อมูลช้า
+> วันที่ 90 จะถูกลบไปแล้ว) · ต้นทุนของส่วนเผื่อ 30 วันนี้คือ ~6 MB
+> ค่าตั้งต้นในโค้ดยังเป็น 30 (ต่ำกว่ากฎหมาย) ⇒ **ต้องตั้งคีย์นี้เสมอ ห้ามปล่อยว่าง**
+- **ขึ้นครั้งแรกให้ปิดไว้ก่อน** แล้วทำขั้น 5-6 ให้ผ่าน = พิสูจน์ว่าโค้ดใหม่ขึ้นแล้วระบบเหมือนเดิมทุกอย่าง
+  จากนั้นค่อยแก้ `.env` เป็น `true` แล้ว **ไม่ต้อง build ใหม่** แค่สร้างคอนเทนเนอร์ใหม่:
+  ```bash
+  docker compose up -d --force-recreate app
+  ```
+  ⚠️ **ห้ามใช้ `docker compose restart app`** — compose ผูกค่า env เข้ากับคอนเทนเนอร์ตอน *สร้าง*
+  ไม่ใช่ตอนสตาร์ท `restart` จึงรันด้วยค่าเดิมทั้งที่แก้ `.env` ไปแล้ว (ดูเหมือนสำเร็จแต่ไม่มีอะไรเปลี่ยน)
+  เช็คได้ด้วย `docker compose exec app sh -c 'echo $API_LOG_ENABLED'`
+  แยกตัวแปรสองอย่าง (โค้ดใหม่ / การเก็บ log) คนละครั้ง ถ้ามีอะไรผิดจะรู้ทันทีว่าเกิดจากอะไร
+  ถ้าเปิดแล้วมีปัญหา กลับเป็น `false` + `up -d --force-recreate app` = ระบบกลับไปเหมือนเดิมภายใน 10 วินาที
+- ไม่ตั้ง `API_LOG_ENABLED` ก็รันได้ (ค่าตั้งต้นคือเปิด) แต่ `API_LOG_RETENTION_DAYS` ต้องตั้งเสมอ
+  เพราะค่าตั้งต้นในโค้ด (30 วัน) ต่ำกว่าที่กฎหมายบังคับ
+- **เช็คขนาดตารางหลังเปิดใช้จริง ~14 วัน** แล้วคูณ ~2 เพื่อประมาณค่าที่ 30 วัน:
+  ```bash
+  docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" -c "
+  SELECT pg_size_pretty(pg_total_relation_size('public.api_logs')) AS size,
+         count(*) AS rows, min(created_at) AS oldest FROM public.api_logs;"
+  ```
+  เกินคาดเมื่อไหร่ให้ลด `API_LOG_RETENTION_DAYS` แล้ว restart — ตัวลบจะเก็บกวาดให้เองในรอบถัดไป
+- ⚠️ **ตารางนี้มีข้อมูลส่วนบุคคลตั้งแต่ `2026-08-20_03_api_logs_ip.sql` เป็นต้นไป**
+  ยังไม่เก็บ request body จึงไม่มีชื่อ/เบอร์ลูกค้าและไม่มีข้อความแชทเหมือนเดิม **แต่คอลัมน์ `ip`
+  ที่วางอยู่แถวเดียวกับ `line_user_id` ทำให้ระบุตัวบุคคลได้** → ก่อนส่ง dump ให้คนนอกต้องตัดคอลัมน์นี้
+  ออกก่อน หรือ dump โดยไม่เอาตารางนี้ไปเลย:
+  ```bash
+  docker compose exec -T db pg_dump -U "$PG_USER" -d "$PG_DATABASE" -Fc \
+    --exclude-table-data=public.api_logs > dump-ไม่มี-api-logs.dump
+  ```
+  ตัวช่วยที่มีอยู่แล้วคือ retention ซึ่งลบให้อัตโนมัติทุกชั่วโมง — ข้อมูลไม่ค้างเกินที่ตั้งไว้
+
+### ขั้น 4.7 — จูน PostgreSQL ให้ตรงสเปกเครื่อง (ครั้งเดียวต่อ server)
+
+⚠️ **ค่าเหล่านี้ไม่ได้อยู่ในโค้ด** — เก็บอยู่ใน `postgresql.auto.conf` ข้างใน volume `pgdata`
+ถ้าย้ายเครื่องหรือสร้าง volume ใหม่ ต้องตั้งใหม่ ไม่งั้น Postgres จะกลับไปใช้ค่า default
+ซึ่งคิดว่าตัวเองอยู่บนเครื่องเล็กและดิสก์เป็นจานหมุน
+
+ตั้งครั้งแรก 2026-09-02 บน server 8 core / 32 GB (แชร์กับ `appsale-mongo-prod` ที่กิน ~5 GB):
+
+```bash
+docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" \
+ -c "ALTER SYSTEM SET work_mem = '32MB'" \
+ -c "ALTER SYSTEM SET maintenance_work_mem = '512MB'" \
+ -c "ALTER SYSTEM SET effective_cache_size = '12GB'" \
+ -c "ALTER SYSTEM SET random_page_cost = 1.1" \
+ -c "ALTER SYSTEM SET max_parallel_workers_per_gather = 4" \
+ -c "ALTER SYSTEM SET track_io_timing = on" \
+ -c "SELECT pg_reload_conf()"
+```
+
+- **ไม่ต้อง restart ไม่มี downtime** — ทั้งหกค่าเป็น reload-only `pg_reload_conf()` พอ
+- เหตุผลของแต่ละค่า (วัดจาก `pg_stat_database` ตอนตั้ง):
+  - `work_mem` 4MB → 32MB — query spill ลงดิสก์ไปแล้ว **temp_files 6,299 / temp_bytes 24 GB**
+  - `maintenance_work_mem` 64MB → 512MB — เร่ง `CREATE INDEX` / `ANALYZE` ตอน rebuild `customers_data_view`
+  - `effective_cache_size` 4GB → 12GB — เครื่องมี buff/cache จริง ~15 GB
+  - `random_page_cost` 4 → 1.1 — เครื่องเป็น SSD และ DB ทั้งก้อนแค่ ~626 MB อยู่ใน OS cache ครบ
+  - `max_parallel_workers_per_gather` 2 → 4 — มี 8 core (`max_parallel_workers` default = 8 อยู่แล้ว)
+  - `track_io_timing` off → on — จำเป็นสำหรับแยก "อ่านนอก shared_buffers" ออกจาก "รอดิสก์จริง"
+    ต้นทุนแทบเป็นศูนย์บนเครื่องที่มี clocksource เร็ว (เช็คด้วย `pg_test_timing`)
+- **ตรวจว่าขึ้นจริง** — ต้องได้ `source = configuration file` และ `pending_restart = f` ทุกแถว:
+  ```bash
+  docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" -c "
+  SELECT name, setting, unit, source, pending_restart FROM pg_settings
+  WHERE name IN ('work_mem','maintenance_work_mem','effective_cache_size','random_page_cost',
+                 'max_parallel_workers_per_gather','track_io_timing') ORDER BY name;"
+  ```
+- **ย้อนกลับได้ทันทีถ้ามีปัญหา** (ทีละค่าหรือทั้งหมด) แล้ว reload:
+  ```bash
+  docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" \
+    -c "ALTER SYSTEM RESET random_page_cost" -c "SELECT pg_reload_conf()"
+  ```
+- ⚠️ **`shared_buffers` ยังคงไว้ที่ 128MB โดยตั้งใจ** — วัดแล้วไม่ใช่คอขวด: ตอน rebuild
+  `customers_data_view` มี `Buffers: shared read=85074` (~665 MB) แต่ `I/O Timings: shared read=25.9 ms`
+  จาก ~5,000 ms ทั้ง query ⇒ OS page cache รับไปหมดแล้ว ต้นทุนจริงเป็น CPU ล้วน
+  (และ `shared_buffers` ต้อง restart ถึงจะมีผล จึงไม่คุ้มเสี่ยงโดยไม่มีหลักฐานว่าช่วย)
+- ⚠️ **`work_mem` เป็นค่าต่อ sort/hash node ไม่ใช่ต่อ connection** — query ที่ซับซ้อนใช้ได้หลายก้อน
+  pool ในแอปตั้ง max 40 (`config/db.ts`) ⇒ กรณีสุดโต่งประมาณ 1.3 GB ซึ่งเครื่องนี้รับไหว
+  แต่ถ้าวันหน้าขยาย pool หรือเพิ่มบริการอื่นบนเครื่องเดียวกัน ต้องคิดเพดานนี้ใหม่
+
+### ขั้น 4.8 — สร้าง expression index ของ `products` (ครั้งเดียวต่อ DB)
+
+`findProduct()` ค้นบน "ค่าที่ normalize แล้ว" ไม่ใช่คอลัมน์ดิบ ⇒ index เดิมบน `model`/`name`
+ใช้ไม่ได้เลย ทุก stage ตกไป Seq Scan บน 51,456 แถวทุกครั้งที่มีคนพิมพ์รหัสสินค้าเข้ามา
+
+```bash
+docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" -v ON_ERROR_STOP=1 \
+  -f - < migrations/changes/2026-09-02_04_products_expression_indexes.sql
+```
+
+- ⚠️ **ต้องรันผ่าน `psql` เท่านั้น ห้ามผ่าน `scripts/runMigration.ts`** — `CREATE INDEX CONCURRENTLY`
+  อยู่ใน transaction ไม่ได้
+- ใช้เวลา ~6 วินาที ไม่ล็อกตาราง เพิ่มขนาด `products` จาก 47 → 62 MB
+- **ต้องขึ้นคู่กับโค้ด** — [`services/productService.ts`](services/productService.ts) stage 2 เติมด่าน
+  `%` เข้าไปเพื่อให้ใช้ GIN index ได้ ถ้าขึ้นโค้ดโดยไม่มี index จะ**ช้ากว่าเดิม** (Seq Scan เดิม
+  บวกการคำนวณ similarity อีกชุดจาก `%`) ส่วนการมี index โดยยังไม่ขึ้นโค้ดนั้นปลอดภัย
+  (stage 1/1.3/1.5/1.7 ได้ประโยชน์ทันที มีแต่ stage 2 ที่ต้องรอโค้ด)
+- ⚠️ **ห้ามถอด `SET LOCAL pg_trgm.similarity_threshold = 0.25` ใน `fuzzySearch()` ออก** —
+  operator `%` เทียบกับค่านี้ ซึ่ง default = 0.3 คือ "เข้มกว่า" เกณฑ์ `> 0.25` ของโค้ด
+  ถ้าไม่ตั้ง แถวที่ similarity อยู่ใน [0.25, 0.3) จะหายไปเงียบ ๆ โดยไม่มี error ให้เห็น
+  (เลือกตั้งในโค้ดแทน `ALTER DATABASE` เพราะค่าที่ผูกกับ DB จะหายไปตอนสร้าง DB ใหม่จาก schema.sql)
+- วัดจริงบน prod (`EXPLAIN ANALYZE`, ตารางเดียวกัน):
+
+  | stage | ก่อน | หลัง |
+  |---|---|---|
+  | 1 — exact (`norm = $1`) | 348.6 ms · Seq Scan 1,833 buffers | **0.081 ms** · BitmapOr 7 buffers |
+  | 1.5 — numeric (`LIKE '%220%'`) | 441.9 ms · Seq Scan | **46.1 ms** · Bitmap Index Scan |
+  | 2 — fuzzy (`similarity > 0.25`) | 1,080.0 ms · Seq Scan | **195.4 ms** · Bitmap Index Scan |
+
+- ตรวจว่าใช้ได้จริง (ต้องได้ 4 แถว `indisvalid = t`):
+  ```bash
+  docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" -c "
+  SELECT indexrelid::regclass AS idx, indisvalid, pg_size_pretty(pg_relation_size(indexrelid))
+  FROM pg_index WHERE indrelid = 'public.products'::regclass
+    AND indexrelid::regclass::text LIKE '%_norm%' ORDER BY 1;"
+  ```
+- ย้อนกลับ: `DROP INDEX CONCURRENTLY IF EXISTS <ชื่อ>;` (ต้อง revert โค้ด stage 2 ด้วย ไม่งั้นช้ากว่าเดิม)
+
+### ขั้น 4.9 — เปิด API ให้ระบบภายนอกดึงข้อมูลไป sync (ครั้งเดียวต่อ DB)
+
+เปิด `/api/sync/v1/*` ให้เครื่องภายนอก (ตัวแรกคือ **NUC-Kay** `192.168.109.69` ที่เก็บลง MongoDB)
+ดึงข้อมูลออกไปเองผ่าน **HTTPS สาธารณะ** ไม่ต้องต่อ LAN ไม่ต้องเปิดพอร์ตเพิ่มทั้งสองฝั่ง
+(ยืนยันแล้วว่า LAN ใช้ไม่ได้: เซิร์ฟเวอร์อยู่ `192.168.100.17/24` NUC อยู่คนละ subnet และ TCP ยิงไม่ถึง)
+
+```bash
+docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" -v ON_ERROR_STOP=1 \
+  -f - < migrations/changes/2026-09-02_05_sync_api.sql
+```
+
+- ⚠️ **ต้องรันผ่าน `psql` เท่านั้น ห้ามผ่าน `scripts/runMigration.ts`** — `CREATE INDEX CONCURRENTLY`
+  อยู่ใน transaction ไม่ได้
+- สร้างตาราง `sync_api_keys` + index `(updated_at, pk)` ของ 4 ตารางโหมด incremental
+  (`sale_orders` `customers` `products` `quotations`) เพิ่มพื้นที่รวม ~30 MB
+- **CONCURRENTLY จะ "รอ" ทุก transaction ที่เปิดค้างอยู่ก่อนหน้าให้จบก่อน** — ถ้ารอบ refresh
+  `customers_data_view` กำลังวิ่ง (กินหลายนาที) คำสั่งนี้จะค้างรอจนกว่ามันจบ ซึ่งเป็นพฤติกรรมปกติ
+  ไม่ใช่อาการแฮงก์ · ห้ามกด Ctrl-C ทิ้งกลางคัน จะเหลือ index ที่ `indisvalid = false` ค้างไว้
+- ตรวจว่าครบและใช้ได้จริง:
+  ```bash
+  docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" -c "
+  SELECT indexrelid::regclass AS idx, indisvalid FROM pg_index
+   WHERE indexrelid::regclass::text LIKE '%sync_cursor%' ORDER BY 1;"
+  ```
+  ต้องได้ 4 แถวและ `indisvalid` เป็น `t` ทั้งหมด · ถ้าเจอ `f` ให้ `DROP INDEX CONCURRENTLY <ชื่อ>;` แล้วรันใหม่
+- รันได้ทุกเวลา — สร้างของใหม่ล้วน ไม่ ALTER ตารางเดิม ไม่ rebuild matview ไม่ล็อกการเขียน
+
+**หลัง rebuild (ขั้น 5) แล้วค่อยออกกุญแจให้เครื่องปลายทาง:**
+
+```bash
+docker compose exec app npm run sync:key -- --name "NUC-Kay"   # กุญแจแสดงครั้งเดียว
+docker compose exec app npm run sync:key -- --list             # ดูว่ามีกุญแจอะไรอยู่ ใช้ล่าสุดเมื่อไหร่
+docker compose exec app npm run sync:key -- --revoke 1         # เพิกถอน มีผลทันทีในครั้งถัดไป
+docker compose exec app npm run diag:sync-api                  # ต้องเขียวหมด (อ่านอย่างเดียว)
+```
+
+- กุญแจใช้ได้อย่างเดียวคือ **อ่านผ่าน `/api/sync/v1/*`** ไม่ใช่สิทธิ์แอดมิน และเพิกถอนได้รายตัว
+- ตารางไหนเปิดให้ดึงบ้างอยู่ใน `TABLE_REGISTRY` ที่ [`services/externalSync.ts`](services/externalSync.ts)
+  **ตารางที่ไม่อยู่ในทะเบียนตอบ 404 เสมอ** — ตารางใหม่จาก migration จึงไม่หลุดออกไปเองโดยไม่มีคนตัดสินใจ
+  (`npm run diag:sync-api` มีข้อคอยเตือนว่ามีตารางตกทะเบียน)
+- คอลัมน์ที่ตัดไม่ให้ออกไปเด็ดขาด: `admin_users.password_hash` และ `messages.reply_token`
+- สคริปต์ฝั่งเครื่องปลายทางอยู่ที่ [`integrations/nuc-sync-client/`](integrations/nuc-sync-client/) พร้อม README
+- **คู่มือใช้งาน API ฉบับเต็ม** (endpoint, พารามิเตอร์, วิธีดึงที่ถูกต้อง, รหัสข้อผิดพลาด): [`docs/SYNC_API.md`](docs/SYNC_API.md)
+
+### ขั้น 4.10 — ระบบเก็บ log และรายงาน ตาม พ.ร.บ.คอมพิวเตอร์ (ครั้งเดียวต่อ DB)
+
+ขึ้นพร้อมกับแผน [`docs/plan-logging-audit-compliance.md`](docs/plan-logging-audit-compliance.md)
+สร้างของใหม่ล้วน ไม่ ALTER ตารางเดิม ไม่แตะ matview → รันตอนระบบเปิดอยู่ได้ จบในไม่กี่วินาที
+
+```bash
+docker compose exec app npx tsx scripts/runMigration.ts migrations/changes/2026-09-03_03_system_logs.sql
+docker compose exec app npx tsx scripts/runMigration.ts migrations/changes/2026-09-03_04_audit_logs.sql
+docker compose exec app npx tsx scripts/runMigration.ts migrations/changes/2026-09-03_05_traffic_daily.sql
+```
+
+จากนั้นติดตั้ง logworker บน host ตาม [`deploy/logworker/README.md`](deploy/logworker/README.md)
+
+**ตรวจหลังขึ้น:**
+```bash
+docker compose exec app npm run diag:log-worker
+```
+
+> ⚠️ ไฟล์ที่ 2 ติด trigger `trg_audit` กับ **ตารางตั้งค่า 11 ตัวเท่านั้น**
+> ห้ามเติมตารางในเส้นทางออกใบเสนอราคา (`quotations`, `quotation_counters`, `messages`)
+> หรือตารางที่ sync เขียนรัว (`products`, `customers`, `sale_orders`, `customers_data_view`) เด็ดขาด
+> รายชื่อและเหตุผลอยู่ในหัวไฟล์ migration และมีเคสตรวจใน `npm run diag:log-worker`
+
+**ถอนออกถ้ามีปัญหา** (ระบบกลับไปเหมือนเดิมทันที ไม่ต้อง build ใหม่):
+```bash
+sudo systemctl stop logworker                       # หยุดตัวเก็บ — แอปไม่รู้สึกอะไร
+docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" -c "
+  DO \$\$ DECLARE t record; BEGIN
+    FOR t IN SELECT c.relname FROM pg_trigger g JOIN pg_class c ON c.oid=g.tgrelid
+              WHERE g.tgname='trg_audit'
+    LOOP EXECUTE format('DROP TRIGGER trg_audit ON public.%I', t.relname); END LOOP;
+  END \$\$;"                                        # ถอด trigger ทั้งหมด
+```
+ตารางทั้ง 4 ทิ้งไว้ได้ ไม่มีใครเขียนต่อ · ส่วนหน้าจอถอนด้วยการลบ 2 บรรทัดใน `index.ts`
+(`import { logsRouter }` และ `app.use('/api/admin/logs', ...)`)
+
+---
+
+## เอกสารการเก็บข้อมูลจราจรทางคอมพิวเตอร์ (พ.ร.บ.คอมพิวเตอร์ ม.26)
+
+> หัวข้อนี้คือ "หลักฐานการปฏิบัติตามกฎหมาย" ไม่ใช่คู่มือติดตั้ง
+> ให้ปรับชื่อ/ตำแหน่งให้ตรงกับความจริงขององค์กรก่อนใช้อ้างอิงจริง
+
+### 1. ผู้มีหน้าที่ประสานงาน
+
+| บทบาท | ผู้รับผิดชอบ | หน้าที่ |
+| --- | --- | --- |
+| ผู้ประสานงานกับพนักงานเจ้าหน้าที่ | *(ระบุชื่อ-ตำแหน่ง-เบอร์ติดต่อ)* | รับหมายเรียก ตรวจสอบความถูกต้องของคำขอ ส่งมอบข้อมูล |
+| ผู้ดูแลระบบ (ปฏิบัติการ) | *(ระบุชื่อ)* | ดึงข้อมูลตามคำขอ ดูแล retention และการสำรอง |
+| สำรอง | *(ระบุชื่อ)* | ทำหน้าที่แทนเมื่อผู้ประสานงานหลักไม่อยู่ |
+
+### 2. ชั้นความลับและสิทธิ์เข้าถึงของแต่ละตาราง
+
+| ตาราง | ชั้นความลับ | มีข้อมูลส่วนบุคคล | ใครเข้าถึงได้ | เก็บนานแค่ไหน |
+| --- | --- | --- | --- | --- |
+| `api_logs` | ลับ | ✅ `ip`, `line_user_id` | role `admin` เท่านั้น | 120 วัน |
+| `audit_logs` | ลับ | ✅ ชื่อผู้ใช้, `ip` | role `admin` เท่านั้น | 2 ปี |
+| `system_logs` | ลับ | ⚠️ อาจมีเศษ PII ในข้อความ | role `admin` เท่านั้น | 90 วัน (warn+) · 14 วัน (info) |
+| `traffic_daily` | ภายใน | ❌ ตัวเลขสรุปล้วน | role `admin` เท่านั้น | ไม่ลบ |
+
+การบังคับสิทธิ์อยู่ที่ `index.ts` บรรทัดเดียว:
+`app.use('/api/admin/logs', adminAuthMiddleware, requireRole('admin'), logsRouter)`
+และหน้าเดิม `/api/admin/api-logs` ก็ใช้ `requireRole('admin')` เหมือนกัน — **ไม่มี role ใหม่ในระบบ**
+
+**ทุกครั้งที่มีคนเปิดดูหรือส่งออก log จะถูกบันทึกลง `audit_logs` เอง** (`log.view` / `log.export`)
+ดูได้จากหน้า "บันทึกการแก้ไข" โดยติ๊กช่อง "แสดงการเข้าดู log ด้วย"
+
+### 3. ความถูกต้องแท้จริงของข้อมูล (ข้อมูลแก้ไขโดยง่ายไม่ได้)
+
+| มาตรการ | รายละเอียด |
+| --- | --- |
+| ไม่มีเส้นทางแก้ไขในแอป | ไม่มีโค้ดที่ `UPDATE`/`DELETE` บน `audit_logs` เลยสักบรรทัด (มีแต่ `INSERT` จาก trigger และ `log.view`/`log.export`) |
+| `REVOKE UPDATE, DELETE, TRUNCATE` | ประกาศไว้ใน migration · **ไม่มีผลกับ superuser** ซึ่งแอปใช้อยู่ตอนนี้ ⇒ เป็นการกันพลาด ไม่ใช่กำแพง (กำแพงจริงต้องรอเฟส 6: ให้แอปใช้ DB role จำกัดสิทธิ์) |
+| ลายนิ้วมือรายวัน | `traffic_daily.audit_digest` = `sha256` ของแถว audit ทั้งวัน ต่อโซ่กับ digest ของเมื่อวาน · แถวของวันที่ปิดไปแล้วห้ามคำนวณทับ (บังคับไว้ใน SQL) |
+| สำเนาออกนอกเครื่อง | ⚠️ **digest มีค่าก็ต่อเมื่อสำเนาออกไปเก็บนอกเครื่องพร้อม backup** — เก็บไว้ใน DB เครื่องเดียวกับของที่มันเฝ้าอยู่ ไม่ได้พิสูจน์อะไรเลย |
+
+ตรวจโซ่ย้อนหลังได้ด้วย:
+```bash
+docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" -c "
+SELECT day, audit_changes, audit_digest IS NOT NULL AS has_digest,
+       audit_prev_digest = lag(audit_digest) OVER (ORDER BY day) AS chain_ok
+  FROM traffic_daily ORDER BY day DESC LIMIT 30;"
+```
+
+### 4. นาฬิกาตรงตามเวลาสากล
+
+บันทึกผลตรวจล่าสุด (`timedatectl` บน host, 2026-09-03):
+
+```
+System clock synchronized: yes
+NTP service: active
+```
+
+ให้ตรวจซ้ำและบันทึกผลใหม่ทุกครั้งที่ย้ายเครื่องหรือติดตั้ง server ใหม่
+
+### 5. ข้อจำกัดที่ต้องบันทึกไว้ตามความจริง
+
+| ข้อจำกัด | ผลกระทบ | ทำไมแก้ไม่ได้ด้วยวิธีอื่น |
+| --- | --- | --- |
+| ลิงก์ `/download-pdf/...` เป็นลิงก์สาธารณะ | ระบุตัว "คนที่กดลิงก์" ไม่ได้ ระบุได้แค่ "เอกสารนี้เป็นของเซลล์คนไหน" | เซลล์ forward ลิงก์ให้ลูกค้าปลายทางต่อ ซึ่งเป็นเจตนาของฟีเจอร์ · ถ้าบังคับ login ก่อนเปิด ลูกค้าจะเปิดใบเสนอราคาไม่ได้ |
+| บรรทัด `console.*` เดิมส่วนใหญ่ไม่มี `request_id` | โยง `system_logs` กับ `api_logs` ได้เฉพาะบางบรรทัด | ต้องทยอยเปลี่ยนเป็นบรรทัด JSON ทีละโมดูล (เฟส 6) — worker แกะได้อยู่แล้ว ไม่ต้องแก้ทีเดียวทั้งระบบ |
+| ชื่อผู้แก้ไขบางแถวเป็น "จับคู่จากเวลา" | ไม่ใช่ความแน่นอน 100% | trigger ในฝั่ง DB ไม่รู้จัก JWT · ทางที่แม่น 100% คือเติม `SET LOCAL app.actor` ทีละ endpoint (เฟส 6) · หน้าจอแสดงป้ายบอกที่มาทุกแถวอยู่แล้ว |
+| ไม่เก็บ request/response body | ตอบไม่ได้ว่า "ส่งค่าอะไรเข้ามา" | เป็นการตัดสินใจเดิมของ `api_logs` เพื่อไม่ให้ตารางมี PII และไม่กิน CPU ทุก request |
+
+### 6. วิธีส่งมอบเมื่อมีหมายเรียก
+
+1. ตรวจความถูกต้องของคำขอ (หน่วยงาน อำนาจตามกฎหมาย ช่วงเวลาที่ขอ ขอบเขตข้อมูล) — **บันทึกไว้เป็นเอกสาร**
+2. เข้า Admin Portal → **บันทึกและรายงาน** → เลือกหน้าที่ตรงกับคำขอ ตั้งช่วงวันและตัวกรอง
+3. กด **ส่งออก CSV** (การกดนี้ถูกบันทึกลง `audit_logs` เป็น `log.export` โดยอัตโนมัติ)
+4. ถ้าต้องการข้อมูลดิบทั้งตาราง:
+   ```bash
+   docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" -c "\copy (
+     SELECT * FROM api_logs WHERE created_at >= '2026-08-01' AND created_at < '2026-09-01'
+   ) TO STDOUT WITH CSV HEADER" > api-logs-2026-08.csv
+   ```
+5. แนบค่า `audit_digest` ของช่วงวันที่ส่งมอบไปด้วย เป็นหลักฐานว่าข้อมูลไม่ถูกแก้ระหว่างทาง
+6. บันทึกการส่งมอบ (วันที่ ผู้รับ ขอบเขต) เก็บไว้คู่กับสำเนาคำขอ
+
+---
+
 ### ขั้น 5 — rebuild + up
 ```bash
 docker compose up -d --build          # สร้างกล่องใหม่จากโค้ดล่าสุด แล้วสลับให้อัตโนมัติ
 docker compose ps                     # db ต้อง healthy, app ต้อง running
 docker compose logs -f app            # เห็น listening on 3011 = สำเร็จ
 curl -I http://127.0.0.1:${APP_PORT:-3011}/
+docker image prune -f --filter "until=24h"   # ⚠️ ทำทุกครั้งหลัง build — ไม่งั้น image เก่าสะสมจนดิสก์ตัน
 ```
+- **`docker image prune` ต่อท้ายทุก build ห้ามข้าม** — แต่ละ build ทิ้ง image เก่าไว้ 1 ตัว วันละ ~20 ตัว
+  ประมาณ 2 เดือนดิสก์เต็ม · `--filter "until=24h"` กันไม่ให้ลบ image ที่เพิ่ง build (เผื่อต้อง rollback)
 - ข้อมูลใน database **ไม่หาย** (อยู่ใน volume `pgdata`) และรูปลายเซ็นก็ไม่หาย (volume `sig_*`)
 - แก้เฉพาะหน้า admin (frontend) ก็ต้อง `--build` เหมือนกัน
 - ถ้า `docker-compose.yml` เปลี่ยนในช่วงที่ค้าง **กล่อง db จะถูก recreate ด้วย ไม่ใช่แค่ app** → เช็คขั้น 3 ให้ผ่านก่อนเสมอ
@@ -251,6 +627,9 @@ docker compose exec app npx tsx scripts/diag/odooExportSmoke.ts --company qp
 docker compose exec app npx tsx scripts/diag/odooExportSmoke.ts --company qt
 docker compose exec app npx tsx scripts/diag/dateFilterSmoke.ts
 docker compose exec app npx tsx scripts/diag/quoteValidationSmoke.ts
+docker compose exec app npx tsx scripts/diag/apiLogSmoke.ts
+docker compose exec app npx tsx scripts/diag/pdfCacheSmoke.ts
+docker compose exec app npx tsx scripts/diag/appUrlSmoke.ts
 ```
 > ❌ ห้ามรันบน prod: `diag:export-tracking`, `diag:shipping-fee`, `diag:confirm-race` — สามตัวนี้เขียนข้อมูลทดสอบลง DB
 

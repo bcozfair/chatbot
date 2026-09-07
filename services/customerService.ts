@@ -188,13 +188,38 @@ function trigramSimilarity(aSet: Set<string>, bSet: Set<string>): number {
 const CUSTOMER_CACHE_TTL_MS = 10 * 60 * 1000;
 let customerCache: { rows: any[]; loadedAt: number } | null = null;
 let customerCacheLoading: Promise<any[]> | null = null;
+/**
+ * ตัวนับรุ่นของ cache — เพิ่มทุกครั้งที่ "ข้อมูลเปลี่ยนแล้ว" (ล้าง/สั่งโหลดใหม่)
+ * โหลดที่ยังวิ่งค้างอยู่จาก snapshot ก่อนหน้าจะรู้ตัวว่าตกรุ่น แล้วไม่เอาผลไปทับของใหม่
+ */
+let customerCacheGen = 0;
+
+/**
+ * เพดานความเก่าที่ยอมคืนของค้างได้ เกินนี้กลับไปบล็อกโหลดใหม่ตามเดิม —
+ * กันเคสโหลดพังเงียบ ๆ แล้วเสิร์ฟข้อมูลเก่ายาวโดยไม่มีใครรู้
+ */
+const CUSTOMER_CACHE_MAX_STALE_MS = 60 * 60 * 1000;
 
 async function loadCustomerSearchCache(): Promise<any[]> {
   if (customerCache && Date.now() - customerCache.loadedAt < CUSTOMER_CACHE_TTL_MS) {
     return customerCache.rows;
   }
+  // TTL หมด = "ถึงเวลารีเฟรช" ไม่ใช่ "ข้อมูลผิด" — syncService เรียก clearCustomerSearchCache()
+  // (customerCache = null) ทุกครั้งที่ข้อมูลเปลี่ยนจริงอยู่แล้ว ด่านนี้จึงไม่มีทางข้ามข้อมูลใหม่
+  // → คืนของเดิมทันที แล้วโหลดใหม่เบื้องหลัง ไม่ให้คนที่บังเอิญมาชนจังหวะจ่ายค่าโหลด ~700ms
+  if (customerCache && Date.now() - customerCache.loadedAt < CUSTOMER_CACHE_MAX_STALE_MS) {
+    if (!customerCacheLoading) {
+      startCustomerCacheLoad().catch(err =>
+        console.error('[customerSearchCache] background refresh failed:', err));
+    }
+    return customerCache.rows;
+  }
   if (customerCacheLoading) return customerCacheLoading;
+  return startCustomerCacheLoad();
+}
 
+function startCustomerCacheLoad(): Promise<any[]> {
+  const gen = customerCacheGen;
   customerCacheLoading = (async () => {
     const t0 = Date.now();
     // อ่านจาก customers_data_view (ไม่ใช่ customers ตรง ๆ) เพื่อให้ company search ครอบคลุม
@@ -213,19 +238,49 @@ async function loadCustomerSearchCache(): Promise<any[]> {
       const norm_name = normalizeCompanyNameTS(r.display_name);
       return { ...r, norm_name, trigrams: trigramsOf(norm_name) };
     });
-    customerCache = { rows: cached, loadedAt: Date.now() };
-    customerCacheLoading = null;
+    // ตกรุ่น = ระหว่างที่ query นี้วิ่งอยู่ มีคนสั่งล้าง/โหลดใหม่ แปลว่า snapshot ที่เพิ่งอ่านมา
+    // เก่ากว่าที่ระบบรู้แล้ว ห้ามเอาไปทับ ไม่งั้น cache จะค้างข้อมูลก่อน rebuild ยาวจน TTL หมด
+    if (gen === customerCacheGen) {
+      customerCache = { rows: cached, loadedAt: Date.now() };
+    }
     console.log(`[customerSearchCache] loaded ${cached.length} companies in ${Date.now() - t0}ms`);
     return cached;
   })();
+  // เดิมเคลียร์ flag เฉพาะตอนโหลดสำเร็จ — ถ้า query พัง customerCacheLoading จะค้างเป็น promise
+  // ที่ reject ตลอดกาล แล้วทุก request หลังจากนั้นได้ error ตัวเดิมซ้ำไปเรื่อย ๆ ไม่มีวันหาย
+  customerCacheLoading.finally(() => { customerCacheLoading = null; }).catch(() => {});
   return customerCacheLoading;
 }
 
-/** ล้าง cache (ใช้ในเทส/หลัง sync ข้อมูล) */
+/** ล้าง cache (ใช้ในเทส/เป็นทางถอยเมื่อโหลดใหม่หลัง sync ไม่สำเร็จ) */
 export function clearCustomerSearchCache(): void {
+  customerCacheGen++;
   customerCache = null;
   customerCacheLoading = null;
 }
+
+/**
+ * โหลด cache ใหม่ทันทีโดยไม่ทิ้งของเดิม — syncService เรียกหลัง rebuild customers_data_view เสร็จ
+ *
+ * ทำไมไม่ล้างทิ้งเหมือนเดิม: sync วิ่งทุก 10 นาทีและ rebuild ทุกรอบ พอล้างเป็น null
+ * เซลส์คนแรกที่ค้นหาหลัง sync ต้องจ่ายค่าโหลด 52k แถว ~700ms เต็ม ๆ กลางทางแชท
+ * (วัดบน prod 2026-09-03: 2 ใน 8 การค้นหาแรกหลัง deploy เจอเคสนี้)
+ * ย้ายมาโหลดตรงนี้แทน = จ่ายตอน sync เพิ่งเสร็จซึ่งไม่มีใครรอ และระหว่างโหลดคนที่ค้นหา
+ * ยังได้ของรอบก่อนไปใช้ทันที ไม่มีใครถูกบล็อก (วัดจริง 562ms → 0ms)
+ */
+export function reloadCustomerSearchCache(): Promise<any[]> {
+  customerCacheGen++;          // ตัดผลของโหลดที่ค้างอยู่จาก snapshot ก่อน rebuild
+  customerCacheLoading = null; // อย่าไปใช้ผลร่วมกับโหลดรุ่นเก่า
+  return startCustomerCacheLoad();
+}
+
+/** จำนวนแถวจากการค้นด้วยชื่อที่ส่งต่อเข้า pipeline ปกติ */
+const NORM_ROWS_LIMIT = 25;
+/**
+ * เพดานการสแกนเมื่อเซลส์พิมพ์ชื่อผู้ติดต่อมาด้วย — แถวที่เกิน NORM_ROWS_LIMIT จะถูกคัด
+ * ด้วย "ผู้ติดต่อตรงไหม" ก่อนเข้า pipeline (ดู searchCompaniesWithContactSeed)
+ */
+const CONTACT_SEED_SCAN_LIMIT = 200;
 
 /**
  * searchCustomersNormalized — stage ค้นหาใหม่ (normalized + trigram)
@@ -234,7 +289,7 @@ export function clearCustomerSearchCache(): void {
  *  - trigram similarity รองรับสะกดต่าง ("แมสชีนเนอรี่" ↔ "แมชชินเนอรี่")
  * คืน rows: { id, display_name, reference, branch_code, salesperson, norm_name, max_sim, has_exact, has_substr }
  */
-export async function searchCustomersNormalized(variants: string[]): Promise<any[]> {
+export async function searchCustomersNormalized(variants: string[], limit = NORM_ROWS_LIMIT): Promise<any[]> {
   const t0 = Date.now();
   const queryNorms = Array.from(new Set(
     variants.map(v => normalizeCompanyNameTS(v)).filter(n => n.length >= 2)
@@ -281,9 +336,52 @@ export async function searchCustomersNormalized(variants: string[]): Promise<any
     Number(b.has_exact) - Number(a.has_exact) ||
     b.best_signal - a.best_signal
   );
-  const limited = results.slice(0, 25);
+  const limited = results.slice(0, limit);
   console.log(`[searchCustomersNormalized] ${limited.length}/${results.length} rows in ${Date.now() - t0}ms | norms: ${JSON.stringify(queryNorms)}`);
   return limited;
+}
+
+/**
+ * ค้นบริษัทด้วยชื่อ แล้ว "เก็บตก" บริษัทที่ชื่อไม่เด่นแต่มีผู้ติดต่อตรงกับที่เซลส์พิมพ์มา
+ *
+ * ทำไมต้องมี: อันดับของ searchCustomersNormalized วัดจาก coverage (ความยาวคำค้น ÷ ความยาวชื่อ)
+ * ชื่อยิ่งยาวยิ่งได้สัญญาณต่ำ — บริษัทชื่อยาวที่เป็นตัวจริงจึงตกท้ายแถวและโดน limit ตัดทิ้ง
+ * ตั้งแต่ยังไม่ทันคำนวณหลักฐานผู้ติดต่อ (เคสจริง 2026-08-10: เซลส์พิมพ์ "เค.พี.เอส" +
+ * "คุณประสิทธิ์" — "หจก. เค.พี.เอส. ออโตเมชั่น แอนด์ เซอร์วิส" ติดอันดับ 26 จาก 31 จึงหลุด
+ * limit 25 แล้วระบบไปออกใบให้ "บริษัท เคพีเอส จำกัด" ที่ชื่อสั้นกว่าและไม่มีคุณประสิทธิ์)
+ *
+ * สแกนกว้างขึ้นในการเรียกครั้งเดียว (ไม่เพิ่มรอบ CPU) แล้วดึงเฉพาะแถวส่วนเกินที่ผู้ติดต่อ
+ * ตรง (เป๊ะ "หรือใกล้เคียง") เข้ามา — ชื่อยังต้องเข้าเค้ากับที่เซลส์พิมพ์อยู่แล้ว จึงไม่เปิดประตูให้บริษัทมั่ว
+ *
+ * ทำไมต้องรับ "ใกล้เคียง" ด้วย: เซลส์พิมพ์ชื่อคนตกตัวอักษรบ่อยมาก (เคสจริง 2026-08-10:
+ * "คุณบพิต" ↔ "คุณบพิตร" ในระบบ) ถ้ากรองแค่ตรงเป๊ะ บริษัทที่ถูกก็ยังหลุด limit เหมือนเดิม
+ * — แถวที่เก็บตกมาไม่ได้ถูก auto-select ทันที ยังต้องผ่านการชั่งหลักฐานขั้นถัดไปอยู่ดี
+ */
+async function searchCompaniesWithContactSeed(
+  variants: string[], contactQuery: string
+): Promise<{ rows: any[]; seededIds: Set<any> }> {
+  const seededIds = new Set<any>();
+  const wantSeed = !!contactQuery.trim();
+  const scanned = await searchCustomersNormalized(variants, wantSeed ? CONTACT_SEED_SCAN_LIMIT : NORM_ROWS_LIMIT);
+  const head = scanned.slice(0, NORM_ROWS_LIMIT);
+  const overflow = scanned.slice(NORM_ROWS_LIMIT);
+  if (!wantSeed || overflow.length === 0) return { rows: head, seededIds };
+
+  const contactRows = await getContactNamesByCustomerIds(overflow.map(r => r.id));
+  const matchedIds = new Set(
+    contactRows
+      .filter((r: any) => {
+        const m = contactNamesMatch(contactQuery, r.name);
+        return m.exact || m.partial;
+      })
+      .map((r: any) => r.customer_id)
+  );
+  const seeded = overflow.filter(r => matchedIds.has(r.id));
+  seeded.forEach(r => seededIds.add(r.id));
+  if (seeded.length > 0) {
+    console.log(`[searchCompaniesWithContactSeed] เก็บตก ${seeded.length} บริษัทที่ผู้ติดต่อ "${contactQuery}" ตรง/ใกล้เคียง: ${seeded.map(r => r.display_name).join(' | ')}`);
+  }
+  return { rows: head.concat(seeded), seededIds };
 }
 
 /**
@@ -299,10 +397,28 @@ export async function searchCustomersNormalized(variants: string[]): Promise<any
  */
 const NAME_ONLY_DEMOTED_SCORE = 0.06;
 
-/** น้ำหนักหลักฐานตอนคะแนนเท่ากัน: ชื่อตรงเป๊ะทั้งบรรทัด > ผู้ติดต่อตรง > ชื่อตรงแบบ normalize */
+/**
+ * คะแนนที่ให้ candidate ที่ "ผู้ติดต่อใกล้เคียง (ไม่เป๊ะ) ตัวเดียวในลิสต์"
+ *
+ * ตั้งไว้ > auto-select gate (0.05) โดยตั้งใจ — ให้ขึ้นเป็นตัวเลือกแรกที่เซลส์เห็น
+ * แต่ "ห้ามเลือกให้อัตโนมัติ" เพราะหลักฐานชั้นนี้อ่อนกว่าชื่อตรง/ผู้ติดต่อตรง:
+ * ชื่อบริษัทพิมพ์คลาดจนเทียบไม่ติด + ชื่อคนก็ตกตัวอักษร = เดาแทนเซลส์ไม่ได้
+ * (เคสจริง 2026-08-10: "บริษัท เอเชีย แปซิฟิต" + "คุณบพิต" ↔ ตัวจริงคือ
+ *  "บริษัท เอเซีย แปซิฟิค พาราวู้ด จำกัด" + "คุณบพิตร" — ชื่อคล้ายแค่ 33%)
+ */
+const PARTIAL_CONTACT_ONLY_SCORE = 0.055;
+
+/**
+ * น้ำหนักหลักฐานตอนคะแนนเท่ากัน:
+ * ชื่อตรงเป๊ะทั้งบรรทัด > ผู้ติดต่อตรง > ผู้ติดต่อใกล้เคียง > ชื่อตรงแบบ normalize
+ *
+ * "ผู้ติดต่อใกล้เคียง" (1.5) แทรกอยู่ระหว่างผู้ติดต่อตรง (2) กับชื่อ norm-exact (1) —
+ * ชื่อคนที่พิมพ์ตกตัวอักษรยังชี้บริษัทได้แม่นกว่าชื่อบริษัทที่ normalize แล้วบังเอิญตรง
+ */
 const evidenceWeight = (c: any) =>
   (c.evidence?.isExactRaw ? 4 : 0) +
   ((c.evidence?.matchedContacts?.length ?? 0) > 0 ? 2 : 0) +
+  ((c.evidence?.partialContacts?.length ?? 0) > 0 ? 1.5 : 0) +
   (c.evidence?.isExactNorm ? 1 : 0);
 
 /**
@@ -384,9 +500,20 @@ export function dedupeIdenticalCompanies(candidates: any[]): any[] {
 export function buildCompanyOptionLabel(c: any): string {
   const base = formatLineLabel(c.item?.display_name);
   const ref = String(c.item?.reference || '').trim();
-  const matched = c.evidence?.matchedContacts?.[0];
   const head = ref ? `${base} · ${ref}` : base;
-  return matched ? `${head}\n👤 ${matched}` : head;
+
+  const matched = c.evidence?.matchedContacts?.[0];
+  if (matched) return `${head}\n👤 ${matched}`;
+
+  // ไม่มีคนที่ตรงเป๊ะ แต่มีคนที่ชื่อใกล้เคียง (เซลส์พิมพ์ตกตัวอักษร) — ตัวชี้ขาดที่แรงที่สุด
+  // ที่เซลส์ใช้ตัดสินใจได้ ต้องโชว์ พร้อมบอกให้ชัดว่า "ไม่ตรงเป๊ะ" จะได้ไม่กดผิดโดยเข้าใจว่าตรง
+  // เลือกชื่อที่สั้นที่สุด = ชื่อคนล้วน ไม่ใช่แถวหมายเหตุยาวๆ ("คุณขวัญสกุล cc. คุณบพิตร")
+  const partials: string[] = c.evidence?.partialContacts ?? [];
+  if (partials.length > 0) {
+    const shortest = partials.reduce((a, b) => (b.length < a.length ? b : a));
+    return `${head}\n👤 ${shortest} (ชื่อใกล้เคียง)`;
+  }
+  return head;
 }
 
 /**
@@ -673,6 +800,8 @@ export async function findCustomerCandidates(customerQuery: string, salesperson:
   // เก็บผลไว้ merge เข้า resultsMap ตอนท้าย; ถ้าเจอชื่อตรงเป๊ะบริษัทเดียว → เลือกเลยไม่ต้องเรียก AI
   let normRows: any[] = [];
   const normVariantSet = new Set<string>();
+  // id ของบริษัทที่เข้ามาเพราะ "ผู้ติดต่อตรง" (ไม่ใช่เพราะชื่อเด่น) — ต้องกันไม่ให้หลุด pool ตอนตัด 40
+  const contactSeededIds = new Set<any>();
   // แยก "บ.X คุณY" ที่พิมพ์มาบรรทัดเดียว: ใช้ส่วนบริษัทค้นหา และถ้าไม่มี contactQuery ให้ใช้ส่วน คุณY เป็นหลักฐาน
   let inferredContact = '';
   const customerLines = rawLines.map(l => {
@@ -691,7 +820,9 @@ export async function findCustomerCandidates(customerQuery: string, salesperson:
       initialVariants.push(line, noPhone, cleanCompanyName(noPhone));
       initialVariants.push(...buildDotInitialVariants(noPhone));
     }
-    normRows = await searchCustomersNormalized(initialVariants);
+    const seeded = await searchCompaniesWithContactSeed(initialVariants, effectiveContactQuery);
+    normRows = seeded.rows;
+    seeded.seededIds.forEach(id => contactSeededIds.add(id));
     initialVariants.forEach(v => { const n = normalizeCompanyNameTS(v); if (n) normVariantSet.add(n); });
 
     // Exact short-circuit: user พิมพ์ชื่อเต็มตรงเป๊ะกับ DB (เทียบแบบยุบช่องว่าง) และไม่มีบริษัทพี่น้อง
@@ -759,9 +890,10 @@ export async function findCustomerCandidates(customerQuery: string, salesperson:
     const aiNorm = normalizeCompanyNameTS(aiExtractedName);
     if (aiNorm && !normVariantSet.has(aiNorm)) {
       normVariantSet.add(aiNorm);
-      const extraRows = await searchCustomersNormalized([aiExtractedName]);
+      const extra = await searchCompaniesWithContactSeed([aiExtractedName], effectiveContactQuery);
+      extra.seededIds.forEach(id => contactSeededIds.add(id));
       const byId = new Map(normRows.map((r: any) => [r.id, r]));
-      for (const r of extraRows) {
+      for (const r of extra.rows) {
         const ex = byId.get(r.id);
         if (!ex || normRowScore(r) < normRowScore(ex)) byId.set(r.id, r);
       }
@@ -800,17 +932,25 @@ export async function findCustomerCandidates(customerQuery: string, salesperson:
 
   const dbCustomersMap = new Map<any, any>();
 
-  // 1. Query by cleaned lines (phrases match display_name — NO branch_code filter)
-  if (cleanedLines.length > 0) {
-    const phraseData = await searchCustomersByNamePatterns(cleanedLines, 30);
+  // 1+2. Query by cleaned lines (phrases) และ individual name terms (words) — NO branch_code filter
+  //      สอง query นี้อิสระกันสนิท อ่านอย่างเดียว ไม่แชร์สถานะ → ยิงพร้อมกันได้
+  //      ลำดับการรวมคงเดิมเป๊ะ: ผล phrase ทับได้ทุกตัว / ผล name ทับของ phrase ไม่ได้
+  const nameArray = nameTerms.size > 0 ? Array.from(nameTerms).filter(Boolean) : null;
+  const phrasePromise = cleanedLines.length > 0
+    ? searchCustomersByNamePatterns(cleanedLines, 30)
+    : null;
+  const namePromise = nameArray ? searchCustomersByNamePatterns(nameArray, 50) : null;
+  // ถ้า phrase โยน error ก่อนถึงคิว await ของ name จะกลายเป็น unhandled rejection — ปักไว้ก่อน
+  if (namePromise) namePromise.catch(() => {});
+
+  if (phrasePromise) {
+    const phraseData = await phrasePromise;
     console.log('[findCustomerCandidates] phraseData count:', phraseData.length);
     phraseData.forEach((c: any) => dbCustomersMap.set(c.id, c));
   }
 
-  // 2. Query by individual name terms (words match display_name — NO branch_code filter)
-  if (nameTerms.size > 0) {
-    const nameArray = Array.from(nameTerms).filter(Boolean);
-    const nameData = await searchCustomersByNamePatterns(nameArray, 50);
+  if (namePromise) {
+    const nameData = await namePromise;
     console.log('[findCustomerCandidates] nameData count:', nameData.length);
     nameData.forEach((c: any) => {
       if (!dbCustomersMap.has(c.id)) {
@@ -919,6 +1059,15 @@ export async function findCustomerCandidates(customerQuery: string, salesperson:
     .sort((a, b) => (a.score ?? 0) - (b.score ?? 0))
     .slice(0, 40);
 
+  // บริษัทที่ถูกเก็บตกมาเพราะ "มีคนที่เซลส์พิมพ์ชื่อมาอยู่จริง" ต้องอยู่ใน pool เสมอ —
+  // คะแนนจากชื่ออย่างเดียวของมันต่ำ (ชื่อยาว = coverage ต่ำ) จึงมีสิทธิ์โดน slice ตัดทิ้งซ้ำอีกรอบ
+  if (contactSeededIds.size > 0) {
+    const inPool = new Set(finalCandidates.map(c => c.item.id));
+    for (const [id, c] of resultsMap) {
+      if (contactSeededIds.has(id) && !inPool.has(id)) finalCandidates.push(c);
+    }
+  }
+
   // ═══ Evidence stage: คำนวณหลักฐานเชิงข้อเท็จจริงต่อ candidate (deterministic) ═══
   if (finalCandidates.length > 0) {
     const normRowById = new Map(normRows.map((r: any) => [r.id, r]));
@@ -976,42 +1125,66 @@ export async function findCustomerCandidates(customerQuery: string, salesperson:
 
     // ═══ Deterministic evidence boost: หลักฐานชี้ขาดได้เพียงตัวเดียว → ดันขึ้นอันดับ 1 ═══
     // ต้องทำก่อน slice 8 ไม่งั้นตัวถูกที่สัญญาณชื่ออ่อน (เช่น พีเคยู กับ query "เคยู") โดนตัดทิ้งก่อน
-    // ลำดับความแข็งของหลักฐาน: raw-exact (รวมสาขา/วงเล็บ) > norm-exact > contact ตรง
     // boost เป็น 0.0 โดยไม่ penalty ตัวอื่น → ยังไม่ auto-select (gap แคบ) แต่ขึ้นอันดับ 1 ของ picker/AI
+    //
+    // ลำดับความแข็งของหลักฐาน (บนสุดชนะ):
+    //  1. ชื่อตรงเป๊ะทั้งบรรทัดรวมสาขา/วงเล็บ — เซลส์พิมพ์ชื่อเต็มมาเองจึงเถียงไม่ได้
+    //  2. ชื่อตรง + ผู้ติดต่อตรง — หลักฐานสองชั้น
+    //  3. ผู้ติดต่อที่เซลส์พิมพ์มา อยู่ในบริษัทนี้บริษัทเดียวในลิสต์
+    //  4. ชื่อตรงเมื่อไม่นับคำนำหน้า/สาขา/วงเล็บ
+    //
+    // (3) ต้องมาก่อน (4): ชื่อย่อที่เซลส์พิมพ์ ("เค.พี.เอส") พอ normalize แล้วไป "ตรงเป๊ะ" กับ
+    // บริษัทชื่อสั้นที่ไม่เกี่ยวกันได้ง่ายมาก ("บริษัท เคพีเอส จำกัด") ส่วนชื่อคนที่เซลส์พิมพ์มา
+    // ด้วยนั้นชี้บริษัทได้ตรงกว่า (เคสจริง 2026-08-10: คุณประสิทธิ์ อยู่ที่ "หจก. เค.พี.เอส.
+    // ออโตเมชั่น แอนด์ เซอร์วิส" แต่ระบบเสนอ "บริษัท เคพีเอส จำกัด" ที่มีแต่คุณคำพอง)
+    const only = (list: any[]) => (list.length === 1 ? list[0] : null);
     const rawExacts = finalCandidates.filter(c => c.evidence.isExactRaw);
     const normExacts = finalCandidates.filter(c => c.evidence.isExactNorm);
     const exactContacts = finalCandidates.filter(c => c.evidence.matchedContacts.length > 0);
-    if (rawExacts.length === 1) {
-      rawExacts[0].score = 0.0;
-    } else if (rawExacts.length === 0 && normExacts.length === 1) {
-      normExacts[0].score = 0.0;
-    } else if (exactContacts.length === 1) {
-      // contact ชี้ขาดได้แม้มี record ชื่อซ้ำหลายตัว (เช่น ย่งฮง 2 แถว — ผู้ติดต่ออยู่แถวเดียว)
-      exactContacts[0].score = 0.0;
-    }
-
-    // ═══ "ชื่อตรง + ผู้ติดต่อตรง" ต้องชนะ "ชื่อตรงอย่างเดียว" ═══
-    // record ชื่อซ้ำ (บริษัทเดียวกันหลายสาขา เช่น TPCS 3 สาขา) ได้ 0.0 พร้อมกันจาก cleanName-exact
-    // การ boost ตัวที่ผู้ติดต่อตรงเป็น 0.0 จึงไม่มีผล — คะแนนเสมอกัน ไม่มีใครชนะ
-    // ต้องถ่างคู่แข่งที่ "ตรงแค่ชื่อ" ออกไปให้เกิน auto-select gap ด้วย หลักฐาน 2 ชั้นจึงจะชี้ขาดได้จริง
     const nameAndContact = finalCandidates.filter(c =>
       c.evidence.isExact && c.evidence.matchedContacts.length > 0);
-    if (nameAndContact.length === 1) {
-      const winner = nameAndContact[0];
-      winner.score = 0.0;
-      for (const c of finalCandidates) {
-        if (c === winner) continue;
-        // ไม่ถ่างตัวที่หลักฐานแข็งพอกัน: มีผู้ติดต่อตรงด้วย หรือชื่อตรงเป๊ะทั้งบรรทัด (แข็งกว่า norm-exact)
-        if (c.evidence.matchedContacts.length > 0 || c.evidence.isExactRaw) continue;
-        if ((c.score ?? 1) < NAME_ONLY_DEMOTED_SCORE) c.score = NAME_ONLY_DEMOTED_SCORE;
+
+    const decisive =
+      only(rawExacts) ||
+      only(nameAndContact) ||
+      only(exactContacts) ||
+      (rawExacts.length === 0 ? only(normExacts) : null);
+
+    // ═══ ไม่มีหลักฐานชี้ขาด แต่มี "ผู้ติดต่อใกล้เคียง" อยู่บริษัทเดียว → ดันขึ้นอันดับ 1 ═══
+    // เซลส์พิมพ์ผิดทั้งชื่อบริษัทและชื่อคน สัญญาณชื่อจึงอ่อนจนตัวจริงโดน slice(0,8) ตัดทิ้ง
+    // ทั้งที่ระบบ "ตรวจเจอ" ความใกล้เคียงของชื่อคนแล้ว แค่ไม่เคยเอามาใช้ถ่วงน้ำหนัก
+    // ให้ PARTIAL_CONTACT_ONLY_SCORE (> gate) = ขึ้นเป็นตัวเลือกแรกแต่ไม่ auto-select
+    const partialOnly = finalCandidates.filter(c =>
+      c.evidence.matchedContacts.length === 0 && c.evidence.partialContacts.length > 0);
+    const partialWinner = !decisive ? only(partialOnly) : null;
+    if (partialWinner && (partialWinner.score ?? 1) > PARTIAL_CONTACT_ONLY_SCORE) {
+      partialWinner.score = PARTIAL_CONTACT_ONLY_SCORE;
+      console.log(`[findCustomerCandidates] 🔎 ผู้ติดต่อใกล้เคียงตัวเดียว: "${partialWinner.item.display_name}" (${partialWinner.evidence.partialContacts.join(', ')}) → ดันขึ้นอันดับ 1 แต่ให้เซลส์ยืนยันเอง`);
+    }
+
+    if (decisive) {
+      decisive.score = 0.0;
+      // ═══ "ผู้ติดต่อตรง" ต้องชนะ "ชื่อตรงอย่างเดียว" ═══
+      // record ชื่อซ้ำ (บริษัทเดียวกันหลายสาขา เช่น TPCS 3 สาขา) ได้ 0.0 พร้อมกันจาก cleanName-exact
+      // การ boost ตัวที่ผู้ติดต่อตรงเป็น 0.0 จึงไม่มีผล — คะแนนเสมอกัน ไม่มีใครชนะ
+      // ต้องถ่างคู่แข่งที่ "ตรงแค่ชื่อ" ออกไปให้เกิน auto-select gap ตัวชี้ขาดจึงจะชี้ขาดได้จริง
+      if (decisive.evidence.matchedContacts.length > 0) {
+        for (const c of finalCandidates) {
+          if (c === decisive) continue;
+          // ไม่ถ่างตัวที่หลักฐานแข็งพอกัน: มีผู้ติดต่อตรงด้วย หรือชื่อตรงเป๊ะทั้งบรรทัด (แข็งกว่า norm-exact)
+          if (c.evidence.matchedContacts.length > 0 || c.evidence.isExactRaw) continue;
+          if ((c.score ?? 1) < NAME_ONLY_DEMOTED_SCORE) c.score = NAME_ONLY_DEMOTED_SCORE;
+        }
+        console.log(`[findCustomerCandidates] ✅ ผู้ติดต่อชี้ขาดตัวเดียว: "${decisive.item.display_name}" (${decisive.evidence.matchedContacts.join(', ')}) → ถ่างคู่แข่งที่ตรงแค่ชื่อ`);
       }
-      console.log(`[findCustomerCandidates] ✅ ชื่อ+ผู้ติดต่อตรงตัวเดียว: "${winner.item.display_name}" → ถ่างคู่แข่งที่ตรงแค่ชื่อ`);
     }
     finalCandidates.sort(compareCandidates);
 
     // ═══ คัดกรองรายชื่อ: ตัดตัวที่สัญญาณต่ำและไม่มี evidence อื่นเลย ═══
+    // "ผู้ติดต่อใกล้เคียง" นับเป็น evidence ด้วย — เคสพิมพ์ผิดหนักๆ ตัวจริงจะมีแค่หลักฐานชั้นนี้
     const curated = finalCandidates.filter(c =>
-      (c.score ?? 1) <= 0.32 || c.evidence.isExact || c.evidence.matchedContacts.length > 0);
+      (c.score ?? 1) <= 0.32 || c.evidence.isExact ||
+      c.evidence.matchedContacts.length > 0 || c.evidence.partialContacts.length > 0);
     if (curated.length > 0) finalCandidates = curated;
     finalCandidates = finalCandidates.slice(0, 8);
   }
@@ -1157,6 +1330,51 @@ export function cleanContactNameExtra(name: string | null | undefined): string {
   return cleaned.trim();
 }
 
+/**
+ * เลือกเฉพาะผู้ติดต่อของ "บริษัทที่เซลส์เลือกมา" เว้นแต่บริษัทพี่น้องจะตรงกว่าจริง ๆ
+ *
+ * ── ทำไมต้องมี ──
+ * getRelatedContactsByCustomerId ดึงผู้ติดต่อของทุก company_id ในนิติบุคคลเดียวกัน เพื่อกัน
+ * ทางตัน "ไม่พบผู้ติดต่อ" ตอนคนที่ต้องการถูกเก็บไว้ใต้รหัสสาขาอื่น แต่มันขยายทุกครั้ง
+ * แม้บริษัทที่เซลส์เลือกจะมีคนคนนั้นอยู่แล้ว → ได้ปุ่มชื่อซ้ำจากคนละบริษัทมาให้กดผิด
+ *
+ * วัดจากข้อมูลจริง 2026-08-21: บริษัทที่มีพี่น้อง 4,946 ราย มี 4,284 ราย (87%) ที่มีผู้ติดต่อ
+ * ของตัวเองอยู่แล้วแต่ยังถูกยัดผู้ติดต่อบริษัทอื่นมาปน · มีแค่ 222 รายที่ไม่มีผู้ติดต่อเลย
+ * = พึ่งการขยายจริง ๆ · และมี 1,082 เคสที่ชื่อผู้ติดต่อซ้ำกันข้ามบริษัทในกลุ่มเดียวกัน
+ *
+ * เคสจริง (QT-260805193): เซลส์ค้น "บริษัท โปรต้าวัน" ซึ่งมี "คุณเอกชัย" อยู่แล้ว แต่ระบบ
+ * ยังขึ้นปุ่ม "คุณเอกชัย" ของ "บริษัท เอ.เอ็น.เอ็น. เทรดดิ้ง" (เลขภาษีเดียวกัน) มาให้เลือกด้วย
+ *
+ * ── กติกา ──
+ * บริษัทที่เซลส์เลือกมี candidate → ใช้ของบริษัทนั้นล้วน
+ * เว้นแต่พี่น้องจะ "ตรงกว่าเด็ดขาด" (score น้อยกว่าทุกตัวของบริษัทที่เลือก) เช่นเซลส์พิมพ์ชื่อคน
+ * มาแล้วตรงเป๊ะกับคนของสาขา ส่วนบริษัทที่เลือกมีแค่ชื่อคล้าย ๆ → กรณีนั้นคงทั้งสองไว้ให้เลือกเอง
+ * บริษัทที่เลือกไม่มี candidate เลย → คงพฤติกรรมเดิม คืนของพี่น้องทั้งหมด (กันทางตัน)
+ *
+ * ⚠️ นี่เป็นการ "จัดลำดับภายในกลุ่มที่ match แล้ว" ไม่ใช่การแก้นิยามนิติบุคคลใน
+ *    db/companyIdentity.ts — ด่านห้ามเสนอราคายังกว้างเท่าเดิม (กว้างกว่าฝั่งค้น = ปลอดภัย)
+ */
+function preferAnchorCompany(candidates: any[], customerId: any): any[] {
+  if (!candidates || candidates.length === 0) return candidates;
+  const anchor = String(customerId ?? '');
+  if (!anchor) return candidates;
+
+  const isAnchor = (c: any) => String(c?.item?.company_id ?? '') === anchor;
+  const anchorScores = candidates.filter(isAnchor).map((c: any) => Number(c.score) || 0);
+  if (anchorScores.length === 0) return candidates;   // บริษัทที่เลือกไม่มีใครเลย → กันทางตัน
+
+  const anchorBest = Math.min(...anchorScores);
+  const siblingIsStrictlyBetter = candidates.some(
+    (c: any) => !isAnchor(c) && (Number(c.score) || 0) < anchorBest);
+  if (siblingIsStrictlyBetter) return candidates;
+
+  const kept = candidates.filter(isAnchor);
+  if (kept.length !== candidates.length) {
+    console.log(`[findContactCandidates] ตัดผู้ติดต่อของบริษัทพี่น้องออก ${candidates.length - kept.length} คน — บริษัท ${anchor} มีผู้ติดต่อที่ตรงพอแล้ว`);
+  }
+  return kept;
+}
+
 export async function findContactCandidates(customerId: any, contactQuery: string): Promise<any[]> {
   const phoneRegex = /0\d{1,2}[-.\s]?\d{3,4}[-.\s]?\d{4}/g;
   const phoneMatches = contactQuery.match(phoneRegex) || [];
@@ -1216,12 +1434,12 @@ export async function findContactCandidates(customerId: any, contactQuery: strin
   }
 
   if (phoneMatchedCandidates.length > 0) {
-    return phoneMatchedCandidates;
+    return preferAnchorCompany(phoneMatchedCandidates, customerId);
   }
 
   // 2. Name matching with Fuse.js
   if (!cleaned) {
-    return contactsWithAddr.map((c: any) => ({ item: c, score: 0 }));
+    return preferAnchorCompany(contactsWithAddr.map((c: any) => ({ item: c, score: 0 })), customerId);
   }
 
   // 2.5 Deterministic pre-pass: เทียบแบบ normalize (ช่องว่างหลังคำนำหน้า / ชื่อเล่นในวงเล็บ / ตำแหน่งต่อท้าย)
@@ -1238,7 +1456,7 @@ export async function findContactCandidates(customerId: any, contactQuery: strin
   if (prePass.length > 0) {
     prePass.sort((a, b) => a.score - b.score);
     console.log(`[findContactCandidates] deterministic pre-pass hit: ${prePass.map(p => `${p.item.name} (${p.score})`).join(', ')}`);
-    return prePass;
+    return preferAnchorCompany(prePass, customerId);
   }
 
   const fuse = new (Fuse as any)(candidates, {
@@ -1247,23 +1465,18 @@ export async function findContactCandidates(customerId: any, contactQuery: strin
     includeScore: true
   });
 
-  return fuse.search(cleaned).map((r: any) => ({
+  return preferAnchorCompany(fuse.search(cleaned).map((r: any) => ({
     item: r.item,
     score: r.score
-  }));
+  })), customerId);
 }
 
-export async function findCustomerByContactName(contactQuery: string, salesperson: any): Promise<any[]> {
+/** salesperson รับไว้เพื่อคง signature เดิม — จงใจไม่ใช้กรอง branch ให้ตรงกับ findCustomerCandidates ที่ค้นข้ามเขตได้ */
+export async function findCustomerByContactName(contactQuery: string, _salesperson?: any): Promise<any[]> {
   const cleaned = cleanContactName(contactQuery);
   if (!cleaned) return [];
 
-  let branchCodes: string[] | null = null;
-  if (salesperson && salesperson.branch_code) {
-    const codes = salesperson.branch_code.split(',').map((c: any) => c.trim()).filter(Boolean);
-    if (codes.length > 0) branchCodes = codes;
-  }
-
-  const dbContacts = await findContactsWithCustomerByName(cleaned, branchCodes, 50);
+  const dbContacts = await findContactsWithCustomerByName(cleaned);
   if (!dbContacts || dbContacts.length === 0) {
     return [];
   }

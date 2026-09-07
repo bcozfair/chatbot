@@ -173,6 +173,10 @@ export async function getContactsByCustomerId(customerId: number | string): Prom
  * ไม่ใช่บริษัทที่ค้นเจอตอนแรก (ไม่งั้นคู่ (customer_id, contact_id) จะชี้แถวที่ไม่มีอยู่)
  *
  * เรียงให้ผู้ติดต่อของบริษัทที่ค้นเจอตอนแรกมาก่อนเสมอ — เป็นตัวเลือกที่ตรงเจตนาที่สุด
+ *
+ * ⚠️ ตัวนี้ "ขยายกว้างไว้ก่อน" โดยตั้งใจ การตัดสินว่าจะเอาของพี่น้องมาแสดงจริงไหมอยู่ที่
+ *    preferAnchorCompany ใน services/customerService.ts — ห้ามย้ายเงื่อนไขนั้นลงมาที่ SQL นี้
+ *    เพราะมันต้องดูคะแนนความตรงของชื่อที่เซลส์พิมพ์ ซึ่งคำนวณฝั่ง Node หลัง Fuse.js
  */
 export async function getRelatedContactsByCustomerId(customerId: number | string): Promise<any[]> {
   try {
@@ -213,29 +217,38 @@ export async function getContactNamesByCustomerIds(customerIds: any[]): Promise<
   } catch (err) { logErr('getContactNamesByCustomerIds', err); return []; }
 }
 
+/** เพดานแถวของ reverse lookup — ILIKE สแกนทั้งตารางอยู่แล้ว การขยับเพดานจึงแทบไม่มีผลกับเวลา
+ *  (วัดจริง: limit 50 vs 500 vs ไม่จำกัด ต่างกันอยู่ในช่วง noise)
+ *  ที่ยังต้องมีเพดานเพราะกันฝั่ง Node — pattern กว้างตรงได้เป็นหมื่นแถวแล้วไปหนักที่ Fuse.js */
+export const CONTACT_LOOKUP_LIMIT = 300;
+
+/** pattern สั้นกว่านี้กว้างเกินจะมีความหมาย เช่น "ณ" ตรง ~70,000 ผู้ติดต่อ — ตัดตั้งแต่ต้นทาง ไม่ยิง DB */
+const CONTACT_LOOKUP_MIN_LEN = 2;
+
 /**
  * reverse lookup: หาบริษัทจากชื่อผู้ติดต่อ (JOIN ผู้ติดต่อ ↔ บริษัท จาก customers_data_view)
  * คืนรูป { name, customer_id, customers: { id, display_name, salesperson, branch_code } } ตาม shape เดิม
+ *
+ * ไม่กรอง branch โดยตั้งใจ — ให้สอดคล้องกับ findCustomerCandidates ที่ค้นข้ามเขตได้
+ * ORDER BY ต้องนิ่ง (deterministic) เพราะ LIMIT ตัดแถวทิ้ง ถ้าไม่เรียงจะได้คนละชุดในแต่ละครั้ง
  */
 export async function findContactsWithCustomerByName(
-  namePattern: string, branchCodes: string[] | null, limit = 50
+  namePattern: string, limit = CONTACT_LOOKUP_LIMIT
 ): Promise<any[]> {
   try {
-    const params: any[] = [`%${namePattern}%`];
-    let branchFilter = '';
-    if (branchCodes && branchCodes.length > 0) {
-      params.push(branchCodes);
-      branchFilter = `AND cust.branch = ANY($${params.length})`;
-    }
-    params.push(limit);
+    const bare = (namePattern || '').trim();
+    if (bare.length < CONTACT_LOOKUP_MIN_LEN) return [];
     const { rows } = await pool.query(
       `SELECT c.name, c.customer_id,
               cust.id AS cust_id, cust.display_name, cust.salesperson, cust.branch AS branch_code
        FROM (${CDV_CONTACT_SUBQ}) c
        INNER JOIN (${CDV_COMPANY_SUBQ}) cust ON c.customer_id = cust.id
-       WHERE c.name ILIKE $1 ${branchFilter}
-       LIMIT $${params.length}`,
-      params);
+       WHERE c.name ILIKE $1
+       ORDER BY length(c.name),                          -- ชื่อสั้น = ส่วนที่ตรงกินสัดส่วนมาก = ใกล้เคียงกว่า
+                strpos(lower(c.name), lower($2)),        -- ตรงตั้งแต่ต้นชื่อดีกว่าตรงกลาง
+                c.name, c.id, c.customer_id              -- tie-break ให้ผลนิ่ง 100% (id ซ้ำข้ามบริษัทได้)
+       LIMIT $3`,
+      [`%${bare}%`, bare, limit]);
     return rows.map(r => ({
       name: r.name,
       customer_id: r.customer_id,
@@ -443,12 +456,23 @@ export const ODOO_EXPORT_RAW_NAME_COLS =
 //    เพราะทุกตัวถูกเรียกใน withTransaction ของ endpoint export — ถ้ากลืน error ไว้เงียบ ๆ
 //    transaction จะ COMMIT ทั้งที่มาร์กใบไปแล้วแต่ log ไม่ครบ (หรือกลับกัน) แล้วตามแกะทีหลังไม่ได้
 
-export type ExportedFilter = 'no' | 'yes' | 'all';
+/**
+ * ตัวกรองสถานะ Odoo ของใบเสนอราคา — ค่าเรียงตามด่านที่ใบหนึ่งเดินผ่านจริง
+ *   no       = ยังไม่ส่งออก            (odoo_exported_at IS NULL)
+ *   pending  = ส่งออกแล้วแต่ยังไม่เข้า Odoo (รอนำเข้า)
+ *   imported = รอบ sync เห็นใบนี้ใน Odoo แล้ว
+ *   yes      = ส่งออกแล้ว (pending + imported รวมกัน) — ค่าเดิมก่อนมีด่าน "นำเข้าแล้ว"
+ *   all      = ไม่กรอง
+ * ⚠️ 'no' เป็นค่าเดียวที่ endpoint export ใช้ตัดสินว่าต้องใส่ guard กันส่งออกซ้ำ (claimQuotationsForExport)
+ */
+export type ExportedFilter = 'no' | 'yes' | 'all' | 'pending' | 'imported';
+
+const EXPORTED_FILTERS: readonly string[] = ['no', 'yes', 'all', 'pending', 'imported'];
 
 /** แปลง query param เป็นค่าที่ใช้ได้จริง — ค่าที่ไม่รู้จักตกเป็น fallback ที่ผู้เรียกกำหนด */
 export function parseExportedFilter(raw: any, fallback: ExportedFilter): ExportedFilter {
   const v = String(raw ?? '').trim().toLowerCase();
-  return v === 'no' || v === 'yes' || v === 'all' ? v : fallback;
+  return EXPORTED_FILTERS.includes(v) ? (v as ExportedFilter) : fallback;
 }
 
 /**
@@ -459,6 +483,10 @@ export function parseExportedFilter(raw: any, fallback: ExportedFilter): Exporte
 export function exportedFilterCondition(filter: ExportedFilter): string {
   if (filter === 'no') return 'q.odoo_exported_at IS NULL';
   if (filter === 'yes') return 'q.odoo_exported_at IS NOT NULL';
+  // อ่านจาก snapshot odoo_imported_at ให้ตรงกับป้ายสถานะบนหน้าจอ (ดู services/quotationOdooLink.ts)
+  // "รอนำเข้า" ต้องเช็ค exported ด้วย ไม่ใช่แค่ imported IS NULL — ไม่งั้นใบที่ยังไม่ส่งออกจะติดมาด้วย
+  if (filter === 'pending') return 'q.odoo_exported_at IS NOT NULL AND q.odoo_imported_at IS NULL';
+  if (filter === 'imported') return 'q.odoo_imported_at IS NOT NULL';
   return '';
 }
 
@@ -735,4 +763,332 @@ export async function getConfirmedQuotationCounts(customerIds: any[]): Promise<M
       [customerIds]);
     return new Map(rows.map((r: any) => [r.customer_id, r.n]));
   } catch (err) { logErr('getConfirmedQuotationCounts', err); return new Map(); }
+}
+
+// ═══════════════════════════ api_logs ═══════════════════════════
+//
+// ⚠️ กลุ่มนี้ "โยน error ออกไป" ต่างจากกติกาหัวไฟล์ที่ให้กลืน error แล้วคืน []/null
+//    เพราะผู้เรียกคือตัวเขียน batch ใน services/apiLogService.ts ซึ่งต้องรู้ว่า flush ล้มเหลว
+//    เพื่อจะนับจำนวนแถวที่ทิ้งและ log เตือน — ถ้ากลืนไว้เงียบ ๆ log จะหายโดยไม่มีใครรู้
+
+/** 1 แถวของ api_logs ที่พร้อม insert — ชื่อฟิลด์ตรงกับคอลัมน์ 1:1 */
+export interface ApiLogInsertRow {
+  createdAt: Date;
+  requestId: string;
+  method: string;
+  route: string | null;
+  path: string;
+  statusCode: number;
+  durationMs: number;
+  respBytes: number | null;
+  adminUserId: number | null;
+  lineUserId: string | null;
+  /** IP ต้นทางจาก getClientIp() — ตัดที่ 45 ตัวอักษรแล้วจาก config/apiLogger.ts */
+  ip: string | null;
+  inflight: number | null;
+  dbWaiting: number | null;
+  queueWaitedMs: number | null;
+  /** แผน G — เวลารอ LLM / จำนวนครั้งที่เรียก / เวลางานของเราเอง · null = แถวที่ไม่ใช่งาน webhook */
+  llmMs: number | null;
+  llmCalls: number | null;
+  ownMs: number | null;
+  /** G#2 — token ที่ส่งเข้า LLM รวมทุก call / ส่วนที่เข้าแคชของ DeepSeek · null = ไม่ใช่งาน webhook */
+  llmPromptTokens: number | null;
+  llmCachedTokens: number | null;
+}
+
+/**
+ * insert หลายแถวด้วย UNNEST ครั้งเดียว ไม่วนยิงทีละแถว (house style เดียวกับ insertExportLogRows)
+ *
+ * ส่ง created_at เป็นสตริง ISO ไม่ใช่ Date object — ตัดความกำกวมของการ serialize Date[] ของ pg ทิ้ง
+ * (คอลัมน์เป็น timestamptz และ ISO string มี offset ในตัวอยู่แล้ว จึงไม่ขึ้นกับ TZ ของ session)
+ */
+export async function insertApiLogRows(db: DbExecutor, rows: ApiLogInsertRow[]): Promise<void> {
+  if (!rows.length) return;
+  await db.query(
+    `INSERT INTO api_logs
+       (created_at, request_id, method, route, path, status_code, duration_ms,
+        resp_bytes, admin_user_id, line_user_id, ip, inflight, db_waiting, queue_waited_ms,
+        llm_ms, llm_calls, own_ms, llm_prompt_tokens, llm_cached_tokens)
+     SELECT * FROM UNNEST(
+       $1::timestamptz[], $2::varchar[], $3::varchar[], $4::varchar[], $5::varchar[],
+       $6::smallint[], $7::int[], $8::int[], $9::int[], $10::varchar[], $11::varchar[],
+       $12::smallint[], $13::smallint[], $14::int[],
+       $15::int[], $16::smallint[], $17::int[], $18::int[], $19::int[])`,
+    [
+      rows.map(r => r.createdAt.toISOString()),
+      rows.map(r => r.requestId),
+      rows.map(r => r.method),
+      rows.map(r => r.route),
+      rows.map(r => r.path),
+      rows.map(r => r.statusCode),
+      rows.map(r => r.durationMs),
+      rows.map(r => r.respBytes),
+      rows.map(r => r.adminUserId),
+      rows.map(r => r.lineUserId),
+      rows.map(r => r.ip),
+      rows.map(r => r.inflight),
+      rows.map(r => r.dbWaiting),
+      rows.map(r => r.queueWaitedMs),
+      rows.map(r => r.llmMs),
+      rows.map(r => r.llmCalls),
+      rows.map(r => r.ownMs),
+      rows.map(r => r.llmPromptTokens),
+      rows.map(r => r.llmCachedTokens),
+    ]);
+}
+
+/**
+ * ลบ log ที่เก่ากว่า N วัน ทีละก้อน — คืนจำนวนแถวที่ลบจริงในรอบนี้
+ *
+ * ทำไมต้อง ctid + LIMIT แทน DELETE ... WHERE created_at < X ตรง ๆ:
+ *   pool ใน config/db.ts ตั้ง statement_timeout 15 วิ ถ้าลบทีเดียวหลายแสนแถวจะชนเพดานแล้ว
+ *   rollback ทั้งก้อน = ลบไม่ได้เลยสักแถวและวนพังทุกชั่วโมง
+ *   subquery เดินจากปลายเก่าสุดผ่าน idx_api_logs_created_at (หลักสิบ ms) แล้ว DELETE เป็น TID scan ตรง
+ *   → 5,000 แถวต่อ statement ใช้เวลาระดับ 100-500 ms ห่างจากเพดานหลายสิบเท่า แม้ตารางมีเป็นล้านแถว
+ */
+export async function deleteApiLogsOlderThan(
+  db: DbExecutor, days: number, limit: number
+): Promise<number> {
+  const res = await db.query(
+    `DELETE FROM api_logs WHERE ctid IN (
+       SELECT ctid FROM api_logs
+        WHERE created_at < (CURRENT_TIMESTAMP - ($1::int * INTERVAL '1 day'))
+        ORDER BY created_at
+        LIMIT $2)`,
+    [days, limit]);
+  return res.rowCount ?? 0;
+}
+
+// ── อ่าน api_logs สำหรับหน้า Admin Portal ────────────────────────────────────
+//
+// กลุ่มนี้กลับมาใช้กติกาหัวไฟล์ (กลืน error คืน []/null) เพราะเป็น SELECT ที่เรียกจาก endpoint ตรง ๆ
+// ไม่ได้อยู่ใน transaction — หน้าจอที่ว่างเปล่าดีกว่าหน้าจอที่ระเบิด 500
+
+/**
+ * ขอบเขตวันแบบ "วันไทย" เขียนซ้ำจาก createdAtFrom/ToThaiDayCondition ที่ผูกกับ alias q. ไว้
+ * ตั้งใจไม่ไป generalize ตัวนั้นเพื่อไม่ให้กระทบโค้ดที่ diag:date-filter คุมอยู่
+ * ⚠️ ต้อง cast ::timestamp ก่อน AT TIME ZONE เสมอ ไม่งั้น PostgreSQL เลือก overload ผิดแล้ว
+ *    ขอบเขตจะเลื่อนตาม TimeZone ของ session (บน production ที่เป็น UTC จะเพี้ยนไป 7 ชั่วโมง)
+ */
+const apiLogFromThaiDay = (i: number) =>
+  `created_at >= (($${i}::date)::timestamp AT TIME ZONE 'Asia/Bangkok')`;
+const apiLogToThaiDay = (i: number) =>
+  `created_at < ((($${i}::date)::timestamp + INTERVAL '1 day') AT TIME ZONE 'Asia/Bangkok')`;
+
+/**
+ * จัดกลุ่ม endpoint สำหรับหน้าสถิติ — ทำ "ตอนอ่าน" ไม่ใช่ตอนเขียน
+ *
+ * ใช้ค่า route ที่ Express บอกมาถ้ามี ไม่มี (404 / route ที่ประกาศเป็น array) ก็ย่อ path เอง
+ * โดยแทน uuid และเลขล้วนด้วย :id — ไม่งั้นใบเสนอราคา 243 ใบจะกลายเป็น 243 กลุ่ม กลุ่มละ 1 request
+ * และตารางสถิติจะยาวเป็นหางว่าวจนบอกอะไรไม่ได้
+ *
+ * ที่ตั้งใจให้สูตรนี้อยู่ในคำสั่ง SQL ไม่ใช่เก็บเป็นคอลัมน์: ถ้าสูตรไม่ดีก็แก้ตรงนี้จบ
+ * ไม่ต้อง UPDATE ข้อมูลย้อนหลัง ไม่ต้อง deploy โค้ดใหม่ และไม่มีทางเก็บค่าที่เดาผิดค้างใน DB
+ */
+export const API_LOG_ROUTE_GROUP = `COALESCE(route, regexp_replace(
+  regexp_replace(path, '/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', '/:id', 'gi'),
+  '/[0-9]+(?=/|$)', '/:id', 'g'))`;
+
+/**
+ * uuid ของใบเสนอราคาที่ถูกดาวน์โหลด แกะจาก path ของแถว /download-pdf/... — NULL ถ้าไม่ใช่แถวนั้น
+ *
+ * ⚠️ regex ต้องเป็น "รูป uuid เต็ม" ไม่ใช่ [0-9a-fA-F-]{36} — ไม่งั้นสตริงอย่าง
+ *    /download-pdf/------------------------------------ จะผ่าน regex แล้วไประเบิดตอน ::uuid
+ *    ทำให้ทั้งหน้าพัง 500 · ยืนยันแล้วว่ารูปนี้คืน NULL ให้ทุกเคสเพี้ยน (ดู diag ข้อ 8)
+ */
+const API_LOG_DOC_ID = `substring(api_logs.path from
+  '^/download-pdf/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})')::uuid`;
+
+/**
+ * "เจ้าของเอกสาร" ของแถวลิงก์สาธารณะ — หาตอนอ่าน ไม่เก็บเป็นคอลัมน์
+ *
+ * /download-pdf/<uuid>/<เลขที่> เป็นลิงก์ที่บอทส่งเข้าแชทแล้วเซลล์ forward ต่อให้ลูกค้าได้
+ * ไม่มีล็อกอิน ไม่มี userId → "ใครกด" รู้ไม่ได้ แต่ quoteId อยู่ใน path อยู่แล้ว จึงบอกได้ว่า
+ * "เอกสารของใครถูกเปิด" ซึ่งเป็นคำถามที่คนถามจริงตอนตรวจย้อนหลัง
+ *
+ * ⚠️ หน้าจอต้องเรียกคอลัมน์นี้ว่า "เจ้าของเอกสาร" ห้ามเอาไปรวมกับคอลัมน์ "ผู้เรียก" เด็ดขาด
+ *    ไม่งั้นวันหนึ่งจะมีคนอ่านแล้วสรุปว่า "เซลล์คนนี้เปิดไฟล์ตอนตีสอง" ทั้งที่ลูกค้าเป็นคนเปิด
+ *
+ * ⚠️ ห้ามเขียนเป็น q.id::text = substring(...) เด็ดขาด — การ cast คอลัมน์ที่มี index เป็น text
+ *    ทำให้ planner ใช้ quotations_pkey ไม่ได้ ต้อง Seq Scan ทั้งตารางซ้ำทุกแถวผลลัพธ์
+ *    วัดจริงบนข้อมูล production: 317 ms เทียบกับ 1.8 ms = ช้ากว่า 170 เท่า และแย่ลงเรื่อย ๆ
+ *    ตามจำนวนใบเสนอราคาที่โตขึ้น · ต้อง cast ฝั่ง path เป็น uuid แล้วเทียบกับคอลัมน์ตรง ๆ เท่านั้น
+ *    (diag ข้อ 8 assert ไว้แล้วว่าต้องเห็น quotations_pkey และห้ามเห็น Seq Scan on quotations)
+ *
+ * ⚠️ ใช้ได้เฉพาะ query ที่มี LIMIT บังคับ (listApiLogs / getApiLogById) เท่านั้น
+ *    ห้ามเอาไปใส่ใน getApiLogStats ซึ่ง aggregate ทั้งหน้าต่างเวลา (หลายพันแถว ไม่มี LIMIT)
+ */
+export const API_LOG_DOC_OWNER = `
+              (SELECT q.user_id FROM quotations q
+                WHERE q.id = ${API_LOG_DOC_ID}) AS doc_owner_user_id,
+              (SELECT s.name FROM quotations q JOIN salesperson s ON s.user_id = q.user_id
+                WHERE q.id = ${API_LOG_DOC_ID}) AS doc_owner_name`;
+
+export interface ApiLogFilters {
+  dateFrom?: string; dateTo?: string; method?: string; status?: string;
+  path?: string; route?: string; adminUserId?: number; lineUserId?: string;
+  ip?: string; minDuration?: number; requestId?: string;
+}
+
+/** แปลงตัวกรองเป็น WHERE + params — ใช้ร่วมกันระหว่าง list กับ count ให้ผลตรงกันเสมอ */
+function buildApiLogWhere(f: ApiLogFilters): { where: string; params: any[] } {
+  const conds: string[] = [];
+  const params: any[] = [];
+  const add = (sql: (i: number) => string, value: any) => {
+    params.push(value);
+    conds.push(sql(params.length));
+  };
+
+  // ค้นด้วย request_id = ตามรอยจาก id ที่ผู้ใช้แคปหน้าจอมาโดยไม่รู้วันที่ → ข้ามเงื่อนไขวันทั้งหมด
+  if (f.requestId) {
+    add(i => `request_id = $${i}`, f.requestId);
+    return { where: `WHERE ${conds.join(' AND ')}`, params };
+  }
+
+  if (f.dateFrom) add(apiLogFromThaiDay, f.dateFrom);
+  if (f.dateTo) add(apiLogToThaiDay, f.dateTo);
+  if (f.method) add(i => `method = $${i}`, f.method);
+  if (f.path) add(i => `path ILIKE '%' || $${i} || '%'`, f.path);
+  if (f.route) add(i => `${API_LOG_ROUTE_GROUP} = $${i}`, f.route);
+  if (typeof f.adminUserId === 'number') add(i => `admin_user_id = $${i}`, f.adminUserId);
+  if (f.lineUserId) add(i => `line_user_id = $${i}`, f.lineUserId);
+  // ไม่มี index ให้ ip โดยตั้งใจ — ทุกหน้าจอคัดด้วยช่วงเวลาก่อนเสมอ จึงสแกนแค่หน้าต่างนั้น
+  // เหมือนตัวกรอง path ที่ใช้ ILIKE อยู่แล้ว · ถ้าวันหน้าช้าค่อยเพิ่ม CREATE INDEX CONCURRENTLY
+  if (f.ip) add(i => `ip = $${i}`, f.ip);
+  if (typeof f.minDuration === 'number') add(i => `duration_ms >= $${i}`, f.minDuration);
+
+  if (f.status && f.status !== 'all') {
+    if (/^[1-5]xx$/.test(f.status)) {
+      const base = Number(f.status[0]) * 100;
+      params.push(base, base + 100);
+      conds.push(`status_code >= $${params.length - 1} AND status_code < $${params.length}`);
+    } else if (/^\d{3}$/.test(f.status)) {
+      add(i => `status_code = $${i}`, Number(f.status));
+    }
+  }
+
+  return { where: conds.length ? `WHERE ${conds.join(' AND ')}` : '', params };
+}
+
+/** รายการ log สำหรับตาราง — ไม่คืนคอลัมน์ที่หน้ารายการไม่ใช้ เพื่อลดขนาด payload */
+export async function listApiLogs(
+  f: ApiLogFilters, limit: number, offset: number
+): Promise<any[]> {
+  try {
+    const { where, params } = buildApiLogWhere(f);
+    // ไม่ JOIN admin_users แต่ใช้ scalar subquery — admin_users มีคอลัมน์ id/created_at ชื่อซ้ำกัน
+    // การ JOIN จะทำให้ชื่อคอลัมน์กำกวมและต้องเติม alias ให้ทุกที่รวมถึงใน where ที่ประกอบมาจาก
+    // buildApiLogWhere ด้วย · admin_users มีแค่ไม่กี่แถว subquery จึงถูกกว่าความเสี่ยงนั้นมาก
+    const { rows } = await pool.query(
+      `SELECT id::text AS id, created_at, request_id, method,
+              ${API_LOG_ROUTE_GROUP} AS route_group,
+              route, path, status_code, duration_ms, resp_bytes, admin_user_id,
+              (SELECT username FROM admin_users u WHERE u.id = api_logs.admin_user_id) AS admin_username,
+              line_user_id, ip, inflight, db_waiting, queue_waited_ms,${API_LOG_DOC_OWNER}
+         FROM api_logs
+         ${where}
+        ORDER BY created_at DESC, id DESC
+        LIMIT ${limit} OFFSET ${offset}`,
+      params);
+    return rows;
+  } catch (err) { logErr('listApiLogs', err); return []; }
+}
+
+/** จำนวนทั้งหมดตามตัวกรองเดียวกัน — ใช้ทำเลขหน้า */
+export async function countApiLogs(f: ApiLogFilters): Promise<number> {
+  try {
+    const { where, params } = buildApiLogWhere(f);
+    const { rows } = await pool.query(
+      `SELECT count(*)::int AS n FROM api_logs ${where}`, params);
+    return rows[0]?.n ?? 0;
+  } catch (err) { logErr('countApiLogs', err); return 0; }
+}
+
+/** รายละเอียด 1 แถว + แถวอื่นที่ใช้ request_id เดียวกัน (ทำให้ /callback ack + TASK โผล่คู่กัน) */
+export async function getApiLogById(id: string): Promise<any | null> {
+  try {
+    const { rows } = await pool.query(
+      `SELECT api_logs.*, id::text AS id,
+              (SELECT username FROM admin_users u WHERE u.id = api_logs.admin_user_id) AS admin_username,${API_LOG_DOC_OWNER}
+         FROM api_logs WHERE id = $1::bigint`, [id]);
+    if (!rows.length) return null;
+
+    const related = await pool.query(
+      `SELECT id::text AS id, created_at, method, path, status_code, duration_ms, queue_waited_ms
+         FROM api_logs WHERE request_id = $1 AND id <> $2::bigint ORDER BY id`,
+      [rows[0].request_id, id]);
+    return { ...rows[0], related: related.rows };
+  } catch (err) { logErr('getApiLogById', err); return null; }
+}
+
+/**
+ * สถิติสำหรับหน้า "ภาพรวม" — 4 ก้อนที่ตอบคำถาม "ช้าตรงไหน / ทรัพยากรพอไหม"
+ *
+ * ทุก query บังคับมีขอบเขตเวลาเสมอ (endpoint ใส่ค่าตั้งต้น 7 วันให้) จึงไม่มี query ไหนสแกนทั้งตาราง
+ */
+export async function getApiLogStats(dateFrom: string, dateTo: string): Promise<any> {
+  try {
+    const range = `${apiLogFromThaiDay(1)} AND ${apiLogToThaiDay(2)}`;
+    const p = [dateFrom, dateTo];
+
+    // ยิงทั้ง 4 พร้อมกัน — ไม่มีตัวไหนใช้ผลของอีกตัว การ await เรียงกันคือการบวกเวลาเปล่า ๆ
+    // (หน้านี้ถูกเปิดถี่ที่สุดในกลุ่ม admin) · ใช้ connection พร้อมกัน 4 เส้นจาก pool ที่มี 40
+    // ถ้า query ไหนพัง Promise.all จะโยนออกไปให้ catch ข้างล่างจัดการเหมือนเดิมทุกประการ
+    const [byRoute, byHour, slowest, sat] = await Promise.all([
+    // เรียงด้วย total_ms ไม่ใช่ p95 — endpoint ที่กิน CPU ของเครื่องรวมมากที่สุดคือตัวที่ควร
+    // optimize ก่อน ไม่ใช่ตัวที่ช้าที่สุดแต่ถูกเรียกวันละครั้ง
+    pool.query(
+      `SELECT ${API_LOG_ROUTE_GROUP} AS route, count(*)::int AS count,
+              percentile_disc(0.5)  WITHIN GROUP (ORDER BY duration_ms)::int AS p50,
+              percentile_disc(0.95) WITHIN GROUP (ORDER BY duration_ms)::int AS p95,
+              percentile_disc(0.99) WITHIN GROUP (ORDER BY duration_ms)::int AS p99,
+              max(duration_ms)::int AS max_ms, sum(duration_ms)::bigint::text AS total_ms,
+              count(*) FILTER (WHERE status_code >= 400)::int AS errors
+         FROM api_logs WHERE ${range}
+        GROUP BY 1 ORDER BY sum(duration_ms) DESC LIMIT 100`, p),
+
+    // กราฟรายชั่วโมง: จำนวน + p95 + จุดสูงสุดของ inflight/db_waiting ในชั่วโมงนั้น
+    // คืน hour เป็นสตริงที่จัดรูปแล้ว ไม่ใช่ timestamp — date_trunc(... AT TIME ZONE) ให้
+    // timestamp without time zone ซึ่ง node-postgres จะแปลงเป็น Date ตาม TZ ของโปรเซส
+    // แล้ว JSON.stringify ทับด้วย offset อีกชั้น กลายเป็นเวลาเพี้ยนโดยไม่มีใครรู้ตัว
+    pool.query(
+      `SELECT to_char(date_trunc('hour', created_at AT TIME ZONE 'Asia/Bangkok'),
+                      'YYYY-MM-DD HH24:MI') AS hour,
+              count(*)::int AS count,
+              percentile_disc(0.95) WITHIN GROUP (ORDER BY duration_ms)::int AS p95,
+              max(inflight)::int AS max_inflight, max(db_waiting)::int AS max_db_waiting,
+              count(*) FILTER (WHERE status_code >= 400)::int AS errors
+         FROM api_logs WHERE ${range}
+        GROUP BY 1 ORDER BY 1`, p),
+
+    pool.query(
+      `SELECT id::text AS id, created_at, request_id, method, path,
+              status_code, duration_ms, queue_waited_ms, line_user_id,
+              (SELECT username FROM admin_users u WHERE u.id = api_logs.admin_user_id) AS admin_username
+         FROM api_logs WHERE ${range}
+        ORDER BY duration_ms DESC LIMIT 20`, p),
+
+    // 4 ตัวเลขที่ตอบ "ทรัพยากร server พอไหม" ได้ตรงที่สุด
+    pool.query(
+      `SELECT count(*)::int AS total,
+              COALESCE(max(inflight), 0)::int AS max_inflight,
+              COALESCE(max(db_waiting), 0)::int AS max_db_waiting,
+              count(*) FILTER (WHERE db_waiting > 0)::int AS db_wait_hits,
+              count(*) FILTER (WHERE status_code >= 400)::int AS errors,
+              count(*) FILTER (WHERE method = 'TASK' AND status_code = 499)::int AS webhook_dropped,
+              count(*) FILTER (WHERE method = 'TASK' AND status_code = 504)::int AS webhook_timeout,
+              COALESCE(percentile_disc(0.95) WITHIN GROUP (ORDER BY duration_ms), 0)::int AS p95,
+              COALESCE(max(queue_waited_ms), 0)::int AS max_queue_waited
+         FROM api_logs WHERE ${range}`, p),
+    ]);
+
+    return {
+      byRoute: byRoute.rows, byHour: byHour.rows,
+      slowest: slowest.rows, saturation: sat.rows[0],
+    };
+  } catch (err) {
+    logErr('getApiLogStats', err);
+    return { byRoute: [], byHour: [], slowest: [], saturation: null };
+  }
 }

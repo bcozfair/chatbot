@@ -1,0 +1,19 @@
+-- ─────────────────────────────────────────────────────────────────────────────
+--  แผน G ฝั่ง DB — เปิด pg_stat_statements
+--
+--  ทำไม: api_logs ตอบได้แค่ "request ไหนช้า" แต่ตอบไม่ได้ว่า "ในนั้นยิง query อะไรไปบ้าง
+--  และ query ไหนกินเวลารวมทั้งระบบมากที่สุด" ซึ่งเป็นคำถามที่ต้องตอบก่อนตัดสินใจเรื่อง
+--  staged CDV rebuild และก่อนจูน work_mem จาก temp_files (วัดได้ 6,879 ครั้ง / 24 GB)
+--
+--  ⚠️ ต้องแก้ docker-compose.yml ให้ db start ด้วย -c shared_preload_libraries=pg_stat_statements
+--     แล้ว recreate กล่อง db ก่อน ไม่งั้นบรรทัดล่างจะ error ว่าโหลด library ไม่ได้
+--     (ทำแล้วใน commit เดียวกับไฟล์นี้)
+--
+--  ต้นทุน: shared memory ~1-2 MB · overhead ต่อ query ระดับไมโครวินาที
+--  ตัวเลขที่เก็บอยู่ในหน่วยความจำ ไม่ใช่ตาราง ⇒ restart Postgres แล้วนับหนึ่งใหม่ (เจตนาของ extension)
+--
+--  รัน: docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" -v ON_ERROR_STOP=1 \
+--         -f - < migrations/changes/2026-09-03_02_pg_stat_statements.sql
+--  ไฟล์นี้ idempotent — รันซ้ำได้ผลเท่าเดิม
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;

@@ -4,16 +4,23 @@ import { AuthProvider, useAuth, type Role } from '../context/AuthContext';
 import { Login } from './Login';
 import { Users } from './Users';
 import { Blacklist } from './Blacklist';
+import { CreditPolicy } from './CreditPolicy';
 import { ChangePasswordModal } from './ChangePasswordModal';
 import { Promotions } from './Promotions';
 import { Salespersons } from './Salespersons';
 import { Quotations } from './Quotations';
+import { PageHeaderProvider, PageHeaderOutlet } from './PageHeader';
+import { ThemeToggle } from './ThemeToggle';
 import { QuotationRules } from './QuotationRules';
 import { OptionalLinks } from './OptionalLinks';
 import { StockRules } from './StockRules';
 import { ProductMoqRules } from './ProductMoqRules';
 import { ShippingFee } from './ShippingFee';
 import { SyncPanel } from './SyncPanel';
+import { ApiLogs } from './ApiLogs';
+import { Traffic } from './logs/Traffic';
+import { AuditLogs } from './logs/AuditLogs';
+import { SystemLogs } from './logs/SystemLogs';
 import {
   LogOut,
   User as UserIcon,
@@ -33,9 +40,14 @@ import {
   Users as UsersIcon,
   KeyRound,
   Ban,
+  ClipboardList,
 } from 'lucide-react';
 
-type MainTab = 'dashboard' | 'quotations' | 'salespersons' | 'promotions' | 'users' | 'blacklist' | 'settings';
+type MainTab =
+  | 'dashboard' | 'quotations' | 'salespersons' | 'promotions' | 'users' | 'blacklist'
+  // กลุ่ม "บันทึกและรายงาน" — 4 หน้าที่อยู่ใต้หัวข้อพับได้อันเดียวกัน
+  | 'traffic' | 'apilogs' | 'auditlogs' | 'systemlogs'
+  | 'settings';
 type SubTab = 'quotation' | 'optional' | 'stock' | 'moq' | 'shipping';
 
 interface AdminStats {
@@ -48,10 +60,10 @@ interface AdminStats {
   moq_rules: number;
 }
 
-const BRAND = '#009032';
-const BRAND_SOFT = 'rgba(0, 144, 50, 0.10)';
-const BRAND_SOFT_STRONG = 'rgba(0, 144, 50, 0.16)';
-const BRAND_BORDER = 'rgba(0, 144, 50, 0.24)';
+const BRAND = 'var(--brand-fg)';
+const BRAND_SOFT = 'var(--brand-soft)';
+const BRAND_SOFT_STRONG = 'var(--brand-soft-strong)';
+const BRAND_BORDER = 'var(--brand-border)';
 
 // roles = สิทธิ์ที่เห็นเมนูนี้ — เป็นแค่การซ่อน UI เท่านั้น ตัวบังคับจริงคือ requireRole ฝั่ง backend
 const NAV_ITEMS: { key: MainTab; label: string; icon: typeof LayoutDashboard; roles: Role[] }[] = [
@@ -63,12 +75,28 @@ const NAV_ITEMS: { key: MainTab; label: string; icon: typeof LayoutDashboard; ro
   { key: 'blacklist', label: 'บัญชีห้ามเสนอราคา', icon: Ban, roles: ['admin', 'user'] },
 ];
 
+/**
+ * กลุ่ม "บันทึกและรายงาน" — 4 หน้าที่ตอบคนละคำถามแต่ใช้ request_id ตัวเดียวกันโยงถึงกันได้
+ *
+ * "บันทึกการเรียก API" คือหน้าเดิมที่ย้ายเข้ามาอยู่ในกลุ่ม ไม่ได้ถูกแก้แม้แต่บรรทัดเดียว
+ * (ApiLogs.tsx ใช้งานได้ดีอยู่แล้ว — การขยับเพื่อความสวยของโค้ดคือความเสี่ยงเปล่า)
+ */
+const LOGS_SUBITEMS: { key: MainTab; label: string }[] = [
+  { key: 'traffic', label: 'รายงานการใช้งาน' },
+  { key: 'apilogs', label: 'บันทึกการเรียก API' },
+  { key: 'auditlogs', label: 'บันทึกการแก้ไข' },
+  { key: 'systemlogs', label: 'บันทึกระบบ' },
+];
+
+/** แท็บที่อยู่ใต้กลุ่ม "บันทึกและรายงาน" — ใช้ตัดสินว่าหัวข้อกลุ่มควรขึ้นสถานะ active ไหม */
+const LOG_TABS = new Set<MainTab>(LOGS_SUBITEMS.map((i) => i.key));
+
 const SETTINGS_SUBITEMS: { key: SubTab; label: string }[] = [
   { key: 'quotation', label: 'เงื่อนไขหลัก' },
   { key: 'optional', label: 'สินค้าพ่วงเสริม' },
   { key: 'stock', label: 'ระงับเมื่อหมดสต็อก' },
   { key: 'moq', label: 'ขั้นต่ำสั่งซื้อ' },
-  { key: 'shipping', label: 'ค่าขนส่ง' },
+  { key: 'shipping', label: 'ค่าขนส่ง & เครดิต' },
 ];
 
 const PAGE_TITLES: Record<MainTab, string> = {
@@ -78,6 +106,10 @@ const PAGE_TITLES: Record<MainTab, string> = {
   salespersons: 'จัดการข้อมูลพนักงาน',
   users: 'จัดการผู้ใช้งานระบบ',
   blacklist: 'บัญชีห้ามเสนอราคา',
+  traffic: 'รายงานการใช้งาน',
+  apilogs: 'บันทึกการเรียก API',
+  auditlogs: 'บันทึกการแก้ไข',
+  systemlogs: 'บันทึกระบบ',
   settings: 'ตั้งค่าเงื่อนไข & กฎ',
 };
 
@@ -88,6 +120,8 @@ function AdminContent() {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [settingsExpanded, setSettingsExpanded] = useState(true);
+  // ตั้งต้นปิด — คนส่วนใหญ่เข้ามาทำงานประจำวัน ไม่ได้มาดู log ทุกครั้ง
+  const [logsExpanded, setLogsExpanded] = useState(false);
   // ตอน sidebar ย่อ: กดไอคอนตั้งค่า → เปิด flyout เลือก sub-tab (nav มี overflow-y-auto จึงต้องลอยแบบ fixed)
   const [settingsFlyoutTop, setSettingsFlyoutTop] = useState<number | null>(null);
   const settingsBtnRef = useRef<HTMLButtonElement>(null);
@@ -104,7 +138,8 @@ function AdminContent() {
   // คำนวณตอน render แทนการ setState ใน effect: ไม่มี re-render รอบพิเศษ และครอบเคสถูกลดสิทธิ์
   // ระหว่างเปิดหน้าค้างไว้ด้วย (adminAuthMiddleware อ่าน role สดจาก DB ทุก request)
   const effectiveTab: MainTab =
-    visibleNavItems.some((item) => item.key === activeTab) || (activeTab === 'settings' && isAdmin)
+    visibleNavItems.some((item) => item.key === activeTab) ||
+    ((activeTab === 'settings' || LOG_TABS.has(activeTab)) && isAdmin)
       ? activeTab
       : (visibleNavItems[0]?.key ?? 'blacklist');
 
@@ -174,6 +209,7 @@ function AdminContent() {
     setMobileOpen(false);
     closeSettingsFlyout();
     if (tab === 'settings') setSettingsExpanded(true);
+    if (LOG_TABS.has(tab)) setLogsExpanded(true);
   };
 
   const goToSubTab = (tab: SubTab) => {
@@ -220,13 +256,13 @@ function AdminContent() {
   const sidebarWidth = collapsed ? 76 : 264;
 
   const SidebarContent = (
-    <div className="h-full flex flex-col bg-white">
+    <div className="h-full flex flex-col bg-card">
       {/* Brand / collapse control */}
       <div className="h-16 flex items-center gap-3 px-4 border-b border-slate-200 shrink-0">
         <img
           src="/logo.png"
           alt="Logo"
-          className="w-9 h-9 object-contain bg-white p-1 rounded-lg border border-slate-200 shrink-0"
+          className="w-9 h-9 object-contain bg-card p-1 rounded-lg border border-slate-200 shrink-0"
         />
         {!collapsed && (
           <div className="overflow-hidden">
@@ -235,6 +271,10 @@ function AdminContent() {
             </h1>
             <p className="text-[10px] text-slate-400 font-medium whitespace-nowrap">Quotation Portal</p>
           </div>
+        )}
+        {/* mr-2 กันชนกับปุ่มย่อ sidebar ที่ลอยคร่อมขอบขวาอยู่ระดับเดียวกัน */}
+        {!collapsed && (
+          <ThemeToggle className="ml-auto mr-2" />
         )}
         <button
           onClick={() => setMobileOpen(false)}
@@ -267,6 +307,51 @@ function AdminContent() {
 
         {isAdmin && (
           <>
+        <div className="h-px bg-slate-100 my-2.5 mx-1.5" />
+
+        {/* บันทึกและรายงาน — กลุ่มพับได้ แบบเดียวกับกลุ่มตั้งค่า */}
+        <button
+          onClick={() => (collapsed ? goTo('traffic') : setLogsExpanded((v) => !v))}
+          title={collapsed ? 'บันทึกและรายงาน' : undefined}
+          aria-expanded={collapsed ? undefined : logsExpanded}
+          className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${
+            collapsed ? 'justify-center' : ''
+          } ${LOG_TABS.has(effectiveTab) ? '' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'}`}
+          style={LOG_TABS.has(effectiveTab) ? { backgroundColor: BRAND_SOFT_STRONG, color: BRAND } : undefined}
+        >
+          <ClipboardList className="w-[18px] h-[18px] shrink-0" />
+          {!collapsed && (
+            <>
+              <span className="whitespace-nowrap flex-1 text-left">บันทึกและรายงาน</span>
+              <ChevronDown
+                className={`w-3.5 h-3.5 shrink-0 transition-transform ${logsExpanded ? '' : '-rotate-90'}`}
+              />
+            </>
+          )}
+        </button>
+
+        {!collapsed && logsExpanded && (
+          <div className="pl-4 mt-0.5 space-y-0.5">
+            {LOGS_SUBITEMS.map(({ key, label }) => {
+              const active = effectiveTab === key;
+              return (
+                <button
+                  key={key}
+                  onClick={() => goTo(key)}
+                  className={`w-full text-left pl-6 pr-3 py-2 rounded-lg text-xs font-medium transition-all border-l-2 ${
+                    active
+                      ? 'border-current'
+                      : 'border-transparent text-slate-400 hover:text-slate-700 hover:bg-slate-50'
+                  }`}
+                  style={active ? { color: BRAND, borderColor: BRAND, backgroundColor: BRAND_SOFT } : undefined}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         <div className="h-px bg-slate-100 my-2.5 mx-1.5" />
 
         {/* Settings group */}
@@ -344,10 +429,11 @@ function AdminContent() {
             onClick={() => setChangePasswordOpen(true)}
             title="เปลี่ยนรหัสผ่าน"
             aria-label="เปลี่ยนรหัสผ่าน"
-            className="flex items-center justify-center w-8 h-8 rounded-lg text-slate-400 hover:text-[#009032] hover:bg-[#009032]/10 transition-all active:scale-[0.95] shrink-0"
+            className="flex items-center justify-center w-8 h-8 rounded-lg text-slate-400 hover:text-[var(--brand-fg)] hover:bg-[var(--brand)]/10 transition-all active:scale-[0.95] shrink-0"
           >
             <KeyRound className="w-4 h-4" />
           </button>
+          {collapsed && <ThemeToggle />}
           <button
             id="admin-logout-btn"
             onClick={() => logout()}
@@ -372,8 +458,8 @@ function AdminContent() {
         {SidebarContent}
         <button
           onClick={toggleCollapsed}
-          className="absolute z-10 flex items-center justify-center w-8 h-8 rounded-full bg-white shadow-md hover:shadow-lg transition-all active:scale-90"
-          style={{ top: 18, right: -12, border: `1.5px solid rgba(0, 144, 50, 0.45)`, color: BRAND }}
+          className="absolute z-10 flex items-center justify-center w-8 h-8 rounded-full bg-card shadow-md hover:shadow-lg transition-all active:scale-90"
+          style={{ top: 18, right: -12, border: `1.5px solid var(--brand-border-strong)`, color: BRAND }}
           aria-label={collapsed ? 'ขยาย sidebar' : 'ย่อ sidebar'}
         >
           {collapsed ? <ChevronsRight className="w-3.5 h-3.5" /> : <ChevronsLeft className="w-3.5 h-3.5" />}
@@ -385,7 +471,7 @@ function AdminContent() {
           <div
             ref={settingsFlyoutRef}
             role="menu"
-            className="fixed z-[60] w-56 py-1.5 bg-white border border-slate-200 rounded-xl shadow-xl animate-fade-in"
+            className="fixed z-[60] w-56 py-1.5 bg-card border border-slate-200 rounded-xl shadow-xl animate-fade-in"
             style={{ top: settingsFlyoutTop, left: sidebarWidth + 6 }}
           >
             <p className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
@@ -415,7 +501,7 @@ function AdminContent() {
       {/* Mobile drawer */}
       {mobileOpen && (
         <div className="lg:hidden fixed inset-0 z-40">
-          <div className="absolute inset-0 bg-slate-900/40" onClick={() => setMobileOpen(false)} />
+          <div className="absolute inset-0 bg-black/60" onClick={() => setMobileOpen(false)} />
           <aside className="absolute inset-y-0 left-0 w-72 shadow-xl">{SidebarContent}</aside>
         </div>
       )}
@@ -423,23 +509,20 @@ function AdminContent() {
       {/* Main column */}
       <div className="flex-1 min-w-0 flex flex-col">
         {/* Top bar */}
-        <header className="bg-white border-b border-slate-200 sticky top-0 z-30 h-16 flex items-center gap-3 px-4 sm:px-6 shrink-0">
+        {/* แถบบน = หัวเรื่องของหน้า + ปุ่ม action ของหน้านั้น (มาจาก <PageHeader /> ผ่าน portal)
+            ตัดบรรทัด "PRIMUS ADMIN" ทิ้งเพราะซ้ำกับโลโก้บน sidebar และกินความสูงฟรี ๆ */}
+        <header className="bg-card border-b border-slate-200 sticky top-0 z-30 min-h-14 flex items-center gap-3 px-4 sm:px-6 py-2 shrink-0">
           <button
             onClick={() => setMobileOpen(true)}
-            className="lg:hidden flex items-center justify-center w-9 h-9 rounded-lg text-slate-500 hover:bg-slate-50 border border-slate-200"
+            className="lg:hidden flex items-center justify-center w-9 h-9 rounded-lg text-slate-500 hover:bg-slate-50 border border-slate-200 shrink-0"
             aria-label="เปิดเมนู"
           >
             <Menu className="w-4 h-4" />
           </button>
-          <div>
-            <p className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">Primus Admin</p>
-            <h2 className="text-base font-bold text-slate-900 leading-tight">
-              {PAGE_TITLES[effectiveTab]}
-            </h2>
-          </div>
+          <PageHeaderOutlet fallbackTitle={PAGE_TITLES[effectiveTab]} />
         </header>
 
-        <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+        <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5 space-y-6">
           {effectiveTab === 'blacklist' ? (
             /* เมนูเดียวที่ role 'user' เข้าถึงได้ — admin ก็เข้าได้เหมือนกัน */
             <div className="animate-fade-in">
@@ -449,11 +532,27 @@ function AdminContent() {
             <div className="animate-fade-in">
               <Quotations />
             </div>
+          ) : effectiveTab === 'apilogs' ? (
+            <div className="animate-fade-in">
+              <ApiLogs />
+            </div>
+          ) : effectiveTab === 'traffic' ? (
+            <div className="animate-fade-in">
+              <Traffic />
+            </div>
+          ) : effectiveTab === 'auditlogs' ? (
+            <div className="animate-fade-in">
+              <AuditLogs />
+            </div>
+          ) : effectiveTab === 'systemlogs' ? (
+            <div className="animate-fade-in">
+              <SystemLogs />
+            </div>
           ) : effectiveTab === 'dashboard' ? (
             <div className="grid grid-cols-1 gap-6">
               {/* Welcome Card */}
-              <div className="relative bg-gradient-to-br from-[#009032]/5 via-white to-white border border-slate-200 rounded-2xl p-4 sm:p-5 overflow-hidden shadow-sm">
-                <div className="absolute top-0 right-0 w-56 h-56 bg-[#009032]/5 rounded-full blur-[70px] pointer-events-none"></div>
+              <div className="relative bg-gradient-to-br from-[var(--brand-fg)]/5 via-card to-card border border-slate-200 rounded-2xl p-4 sm:p-5 overflow-hidden shadow-sm">
+                <div className="absolute top-0 right-0 w-56 h-56 bg-[var(--brand)]/5 rounded-full blur-[70px] pointer-events-none"></div>
 
                 <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 relative z-10">
                   <div className="flex items-center gap-3 min-w-0">
@@ -503,7 +602,7 @@ function AdminContent() {
                       <button
                         key={key}
                         onClick={onClick}
-                        className="text-left bg-white border border-slate-200 hover:border-[#009032]/40 rounded-2xl p-4 transition-all group cursor-pointer active:scale-[0.99] shadow-sm flex flex-col gap-2"
+                        className="text-left bg-card border border-slate-200 hover:border-[var(--brand-fg)]/40 rounded-2xl p-4 transition-all group cursor-pointer active:scale-[0.99] shadow-sm flex flex-col gap-2"
                       >
                         <div className="flex items-center justify-between gap-2">
                           <div
@@ -555,7 +654,16 @@ function AdminContent() {
               {subTab === 'optional' && <OptionalLinks />}
               {subTab === 'stock' && <StockRules />}
               {subTab === 'moq' && <ProductMoqRules />}
-              {subTab === 'shipping' && <ShippingFee />}
+              {/* สองกฎคนละตาราง/คนละ endpoint แต่รวมหน้าเดียวกันเพราะแอดมินตั้งค่าทีเดียวจบ
+                  อยากแยกหน้าเมื่อไหร่ก็ย้าย <CreditPolicy /> ไป subTab ใหม่ได้เลย
+                  วางซ้าย-ขวาบนจอกว้าง (ทั้งคู่เป็นบล็อกแคบ max-w-3xl อยู่แล้ว) และเรียงบนลงล่างเมื่อจอแคบกว่า xl
+                  ไม่ใส่ items-start เพื่อให้ grid ยืดสองคอลัมน์สูงเท่ากัน (ตัวหน้าเองจัดการ่วนที่ยืดด้วย flex-1) */}
+              {subTab === 'shipping' && (
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                  <ShippingFee />
+                  <CreditPolicy />
+                </div>
+              )}
             </div>
           )}
 
@@ -570,7 +678,10 @@ function AdminContent() {
 export default function AdminApp() {
   return (
     <AuthProvider>
-      <AdminContent />
+      {/* ช่องหัวเรื่องบนแถบบนเป็น state ร่วมของทั้งแอป — วางไว้เหนือ AdminContent ที่เดียว */}
+      <PageHeaderProvider>
+        <AdminContent />
+      </PageHeaderProvider>
     </AuthProvider>
   );
 }
