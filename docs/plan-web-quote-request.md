@@ -1,17 +1,20 @@
 # แผนงาน: หน้าเว็บขอใบเสนอราคาสำหรับ admin/subadmin (วางข้อความเหมือนคุยใน LINE)
 
-> **สถานะ: v3 — ขอบเขตครบ ปิดคำถามค้างหมดแล้ว · ⏸ รอคิว ยังไม่เริ่มลงมือ**
+> **สถานะ: v4 — แบ่งเป็น 10 เฟสแล้ว · ✅ ตัวบล็อกหมดแล้ว รออนุมัติเริ่มเฟส A**
 > v1 สำรวจจากโค้ดจริง + วัดกับ DB จริง 2026-09-04 · v2–v3 สำรวจ/วัดเพิ่ม + ตัดสินใจ 2026-09-07
+> · v4 แบ่งเฟสเพื่อสลับเครื่อง dev ↔ server 2026-09-07
 >
-> **⏸ รอ session อื่น (main บนเครื่อง server) ทำ `plan-product-block-rules.md` ให้จบก่อน**
-> เครื่อง dev ห้ามเริ่มแตะโค้ดของแผนนี้จนกว่างานนั้นจะ merge เข้า `main` แล้ว
-> (ถ้าจะทำงานอื่นคู่ขนานระหว่างรอ ให้แยก `git worktree` ต่างหาก — branch เดียวกันได้)
+> **✅ เงื่อนไข "รอ `plan-product-block-rules.md`" ผ่านแล้ว** — แผนนั้นจบครบ 5 เฟสและขึ้น production
+> 2026-09-07 (commit `413a721` บน `main`) ⇒ แผนนี้เริ่มได้
+>
+> 📘 **งานจริงทำเป็นเฟส ไม่ใช่ทำรวด — อ่าน §6.0 ก่อนลงมือทุกครั้ง**
+> ที่นั่นมีตารางสถานะเฟส · คำสั่งตรวจว่า "เครื่องที่กำลังนั่งอยู่นี้ตามถึงไหนแล้ว" · และรายการส่งมอบ
 
-> ## ⛔ ลำดับงาน — แผนนี้ทำ *หลัง* `plan-product-block-rules.md`
+> ## ✅ ลำดับงาน — แผนนี้ทำ *หลัง* `plan-product-block-rules.md` — **เงื่อนไขผ่านแล้ว**
 >
 > ตัดสินใจ 2026-09-07: ทำ [plan-product-block-rules.md](plan-product-block-rules.md) ให้จบทั้ง 5 เฟสก่อน
->
-> เหตุผล:
+> — **จบแล้วและขึ้น production เมื่อ 2026-09-07** (`413a721`) ⇒ ข้อจำกัดนี้ไม่มีผลอีกต่อไป
+> เก็บเหตุผลไว้เป็นบันทึกว่าทำไมลำดับต้องเป็นแบบนี้:
 > * แผนนั้นเล็กกว่า ~3 เท่า และแต่ละเฟสขึ้นเดี่ยว/ย้อนกลับได้ (เฟส 1 ไม่เปลี่ยนพฤติกรรมเลย)
 > * แผนนั้นยุบ **นิยาม "ถูกบล็อก" ที่ตอนนี้มี 2 แบบ** (`findBlockingRule` filter-ก่อน-match
 >   vs `resolveQuotationRule` resolve-แล้วดูตัวชนะ — ดู plan-product-block-rules §1.3)
@@ -32,6 +35,9 @@
   — ตัวที่ต้องแยกคือ *working directory* ไม่ใช่ branch · ห้ามให้ 2 สายแชร์ checkout เดียวกัน
   (เคสจริง: agent 2 สายใน checkout เดียว amend/rebase ทับกันแล้วงานที่ยังไม่ commit หายเงียบ)
 * ด่านตรวจในกล่อง (docker/compose) เป็นเงื่อนไข**ตอน deploy** — ระหว่างพัฒนา verify บน dev local พอ
+* 📘 **งานถูกแบ่งเป็น 10 เฟส (A–J) เพื่อให้หยิบ/วางสลับเครื่องได้ — ดู [§6.0](#60-แผนที่เฟส--หน่วยส่งมอบเวลาสลับเครื่อง-dev--server)**
+  ที่นั่นมีตารางเฟส · ลำดับที่บังคับ · **probe SQL ตรวจว่า DB ของเครื่องที่นั่งอยู่ตามถึงไหน** ·
+  รายการก่อนเริ่ม/ก่อนวางมือ · และกับดักที่เกิดเฉพาะตอนสลับเครื่อง
 
 ---
 
@@ -851,7 +857,145 @@ COALESCE(q.customer_sales_team, st.sales_team)   -- ← ที่จุดปร
 
 ## 6. งานทีละขั้น
 
-### ขั้น 1 — เปิดช่องฉีด reply client · `handlers/lineHandler.ts` (แก้ 3 บรรทัด)
+### 6.0 แผนที่เฟส — หน่วยส่งมอบเวลาสลับเครื่อง dev ↔ server
+
+> งานนี้จะถูกหยิบทำสลับกันระหว่าง **เครื่อง dev (`C:\Users\bcozf\Downloads\chatbot`)**
+> กับ **server (`/home/app_sales/salechatbot/chatbot`)** ⇒ "ขั้น 1–11" ด้านล่างเป็น *เนื้องาน*
+> แต่ **หน่วยที่หยิบ/วางได้จริงคือเฟส** ในหัวข้อนี้
+
+#### กติกา 4 ข้อของการสลับเครื่อง
+
+1. **หน่วยส่งมอบ = commit ที่ `push` ขึ้น `origin/dev` แล้ว** — ของที่ค้างใน working directory
+   ไม่มีอยู่จริงสำหรับเครื่องอีกฝั่ง · วางมือกลางทางให้ commit เป็น WIP แล้ว push เสมอ
+2. **หนึ่งเฟส = จบในตัว** — merge เข้า `main` แล้ว deploy ได้ทันทีโดยไม่ต้องรอเฟสถัดไป
+   ⇒ ไม่มีสถานะครึ่ง ๆ ที่ค้างข้ามเครื่อง
+3. **migration ของเฟสไหนอยู่ในเฟสนั้น** และต้องตรวจได้ด้วย probe ข้างล่าง
+   ห้ามมี migration ที่ต้องรอโค้ดของเฟสหลังถึงจะใช้ได้
+4. **commit message ขึ้นต้นด้วย `feat(web): เฟส X — ...`** — `git log --grep` จะกลายเป็น
+   บัญชีสถานะที่ไม่มีวันไม่ตรงกับของจริง โดยไม่ต้องไปจดที่อื่น
+
+#### ตารางเฟส
+
+| เฟส | เนื้องาน (ขั้นเดิม) | migration | ต้องมีเฟสไหนก่อน | ขึ้น prod เดี่ยวได้ | เครื่องที่เหมาะ | สถานะ |
+| --- | --- | --- | --- | --- | --- | --- |
+| **A** | เปิดช่องฉีด reply client (ขั้น 1) | — | — | ✅ ไม่เปลี่ยนพฤติกรรมเลย | dev เขียน · **ด่าน LINE จริงที่ server** | ⬜ |
+| **B** | ตัวตนพร็อกซี + route ตั้งชื่อผู้จัดทำ (ขั้น 2 · ขั้น 8 เฉพาะ `makers`/`me`) | 1 | A | ✅ | dev | ⬜ |
+| **C** | แชทผ่านเว็บฝั่งหลังบ้าน (ขั้น 3 · ขั้น 8 ที่เหลือของทางเดินหลัก · `/web/quote-edit`) | — | B | ✅ ยังไม่มี UI เรียก | dev | ⬜ |
+| **D** | หน้าเว็บ + `FlexRenderer` (ขั้น 9 เฉพาะแกน) | — | C | ✅ **← ฟีเจอร์ใช้งานได้จริงครั้งแรก** | dev | ⬜ |
+| **E** | โหมด advise + บันทึกคำเตือน + ป้าย "ข้ามกฎ" (ขั้น 4 · 4b) | 1 | D | ✅ | dev | ⬜ |
+| **F** | override เครดิต + ค่าขนส่ง (ขั้น 5 · ขั้น 7 เฉพาะ 2 ตารางนี้) | 2 | D | ✅ | dev | ⬜ |
+| **G** | **ตรึงทีมขาย (ขั้น 6c)** | 1 | — (อิสระ) | ✅ | **server** — กระทบใบ LINE ด้วย | ⬜ |
+| **H** | ผู้ติดต่อใหม่ + รายการงานค้างคีย์ Odoo (ขั้น 6 · 6b · ขั้น 7 ที่เหลือ) | 1 ก้อน (แก้ view) | D **และ G** | ✅ | dev เขียน · **rebuild view ทั้งสองเครื่อง** | ⬜ |
+| **I** | ตัวกรอง "ออกจากเว็บ / ออกจาก LINE" (ขั้น 10) | — | — (อิสระ) | ✅ | **เครื่องไหนก็ได้** — เฟสสั้นสุด | ⬜ |
+| **J** | เอกสาร (ขั้น 11) + ปิดแผน | — | ทุกเฟส | — | เครื่องไหนก็ได้ | ⬜ |
+
+**ลำดับที่บังคับจริง ๆ มีแค่นี้ — นอกนั้นสลับได้ตามใจ:**
+
+```
+A → B → C → D ─┬─→ E
+               ├─→ F
+               └─→ H          (H ต้องมี G ด้วย ไม่งั้นคอลัมน์ I ว่างทันทีที่ผู้ติดต่อเข้า Odoo)
+G ─────────────────┘          G อิสระจาก A–D ทำเมื่อไหร่ก็ได้ ขอแค่ก่อน H
+I                             อิสระทั้งหมด · J ปิดท้าย
+```
+
+> **ทำไม G ต้องมาก่อน H** — ผู้ติดต่อที่แอดมินเพิ่มเองจะ "หลบ" ให้แถวจริงทันทีที่ Odoo sync กลับมา
+> ⇒ `contact_id` หายจาก view ⇒ คอลัมน์ I ว่าง (§5.7) · ถ้าปล่อย H ขึ้นก่อน G จะเกิดกับ**ทุกใบ**
+> ที่ออกให้ผู้ติดต่อใหม่ ไม่ใช่เคสหายาก
+
+#### ตรวจว่า "เครื่องที่นั่งอยู่ตอนนี้" ตามถึงไหนแล้ว
+
+**ระบบนี้ไม่มีตารางบัญชี migration** — [`scripts/runMigration.ts`](../scripts/runMigration.ts) แค่รันไฟล์ SQL
+ที่ป้อนให้เท่านั้น ไม่จดว่ารันอะไรไปแล้ว ⇒ **ต้องถาม schema เอาเอง** และ probe ข้างล่างคือบัญชีเดียวที่มี
+
+```sql
+-- ตรวจ migration ของทุกเฟสในคำสั่งเดียว (อ่านอย่างเดียว รันบน production ได้)
+SET statement_timeout = '10s';
+SELECT phase AS "เฟส", item AS "ของที่ต้องมีใน DB",
+       CASE WHEN ok THEN 'ลงแล้ว' ELSE '- ยัง -' END AS "สถานะ"
+FROM (
+  SELECT 'B' AS phase, 'admin_users.employee_quotation_id' AS item,
+         EXISTS (SELECT 1 FROM information_schema.columns
+                  WHERE table_schema='public' AND table_name='admin_users'
+                    AND column_name='employee_quotation_id') AS ok
+  UNION ALL SELECT 'E', 'ตาราง quotation_issue_warnings',
+         to_regclass('public.quotation_issue_warnings') IS NOT NULL
+  UNION ALL SELECT 'F', 'ตาราง quotation_overrides',
+         to_regclass('public.quotation_overrides') IS NOT NULL
+  UNION ALL SELECT 'F', 'ตาราง shipping_fee_name_presets',
+         to_regclass('public.shipping_fee_name_presets') IS NOT NULL
+  UNION ALL SELECT 'G', 'quotations.customer_sales_team',
+         EXISTS (SELECT 1 FROM information_schema.columns
+                  WHERE table_schema='public' AND table_name='quotations'
+                    AND column_name='customer_sales_team')
+  UNION ALL SELECT 'H', 'ตาราง local_contacts',
+         to_regclass('public.local_contacts') IS NOT NULL
+  UNION ALL SELECT 'H', 'local_contacts.odoo_added_at',
+         EXISTS (SELECT 1 FROM information_schema.columns
+                  WHERE table_schema='public' AND table_name='local_contacts'
+                    AND column_name='odoo_added_at')
+  UNION ALL SELECT 'H', 'Arm 3 ใน view customers_data_build',
+         COALESCE((SELECT pg_get_viewdef(oid) LIKE '%local_contacts%'
+                     FROM pg_class WHERE relname='customers_data_build' AND relkind='v'), false)
+) t ORDER BY phase, item;
+```
+
+รันที่ไหนอย่างไร:
+
+```bash
+# server (DB อยู่ในคอนเทนเนอร์)
+docker compose exec -T db psql -U postgres -d chatbot_primus -f - < probe.sql
+```
+```powershell
+# dev (PostgreSQL ลงบนเครื่อง)
+psql -U postgres -d chatbot_primus -f probe.sql
+```
+
+> ✅ ทดสอบ probe นี้กับ DB จริงแล้ว 2026-09-07 — คืน 8 แถว ทุกแถวเป็น `- ยัง -` ตามที่ควรเป็นก่อนเริ่มงาน
+
+#### รายการก่อนเริ่ม (ทุกครั้งที่นั่งลงทำ ไม่ว่าเครื่องไหน)
+
+```bash
+git fetch origin && git status --short              # ต้องสะอาด — ของค้างจากรอบก่อนคือสัญญาณว่ามีอะไรยังไม่ push
+git log --oneline --grep='^feat(web): เฟส' -20      # เฟสไหนเสร็จไปแล้วบ้าง (บัญชีฝั่งโค้ด)
+<probe SQL ข้างบน>                                  # DB ของเครื่องนี้ตามโค้ดทันหรือยัง (บัญชีฝั่ง DB)
+npx tsc --noEmit                                    # ฐานสะอาดก่อนเริ่ม ไม่ใช่ไปเจอตอนจบว่าพังมาแต่แรก
+```
+
+**ถ้าสองบัญชีไม่ตรงกัน** (โค้ดมีเฟส F แล้วแต่ probe บอกว่าตาราง `quotation_overrides` ยังไม่มี)
+⇒ **รัน migration ที่ขาดบนเครื่องนี้ก่อน** อย่าเพิ่งเขียนโค้ด — อาการจะออกมาหน้าตาเหมือนบั๊กในโค้ด
+
+#### รายการก่อนวางมือ (ห้ามข้าม)
+
+1. `git push origin dev` — **ของที่ไม่ push = ไม่มีอยู่จริง** สำหรับเครื่องอีกฝั่ง
+2. ถ้าเฟสนี้มี migration → เขียนชื่อไฟล์ไว้บรรทัดสุดท้ายของ commit message
+   เช่น `migration: migrations/changes/2026-09-XX_02_quotation_overrides.sql`
+3. อัปเดตช่อง "สถานะ" ในตารางเฟสข้างบน (⬜ → ✅) แล้ว commit ไปด้วยในเฟสนั้น
+4. วางมือกลางเฟส → commit เป็น WIP **พร้อมบรรทัดเดียวว่าค้างตรงไหนและเหลืออะไร**
+
+#### กับดักที่เกิดเฉพาะตอนสลับเครื่อง
+
+| กับดัก | ทำไมอันตราย | กัน |
+| --- | --- | --- |
+| **DB สองเครื่องไม่ migrate ตามกันเอง** | `git pull` ได้โค้ดใหม่ แต่ DB ยังเป็นของเก่า ⇒ error หน้าตาเหมือนบั๊กในโค้ด และเสียเวลาไล่ผิดทาง | probe ทุกครั้งที่นั่งลง (บังคับ) |
+| **restore dump ทับ = ถอย migration เงียบ ๆ** | เครื่อง dev ที่ restore dump จาก server ซึ่งยังไม่มี migration ของเฟสที่ทำไปแล้ว จะ**ถอยหลัง**โดยไม่มี error ใด ๆ | หลัง `db:restore` ทุกครั้ง → รัน probe → รัน migration ที่ขาดซ้ำ |
+| **เฟส H rebuild view ไม่ข้ามเครื่อง** | `customers_data_view` ต้อง rebuild ด้วย `force: true` **แยกทีละเครื่อง** — merge โค้ดมาแล้ว view ไม่ขยับเอง | ในเฟส H เขียนขั้นตอน rebuild ไว้ใน commit message ด้วย |
+| **สองสายทำในเครื่องเดียวกันแต่ checkout เดียว** | เคสจริงที่เคยเกิด: amend/rebase ทับกันแล้วงานที่ยังไม่ commit หายเงียบ | แยก `git worktree` — branch `dev` เดียวกันได้ แต่ *working directory* ต้องคนละอัน |
+| **`.env` / `docker-compose.override.yml` คนละค่า** | dev ใช้ `PG_HOST=localhost` + `APP_URL=http://localhost:3011` · server ใช้ `db` + โดเมนจริง | ทั้งสองไฟล์ถูก `.gitignore` อยู่แล้ว — อย่าไปปลดออก |
+| **migration ขึ้น prod ล่วงหน้าก่อนโค้ด** | ทุกไฟล์เป็น additive จึงปลอดภัย **ยกเว้นเฟส H ที่แก้นิยาม view** | เฟส H ต้องนับแถวก่อน–หลังทันที (82,512 / odoo 78,206 / saleorder 4,306) |
+
+#### ด่าน LINE จริงของเฟส A — ต้องนัดเวลา
+
+ด่านของเฟส A คือ *"ยิงข้อความจริงใน LINE 1 รอบก่อนแก้และหลังแก้ ต้องได้ผลเหมือนกันเป๊ะ"* (§9)
+ซึ่ง **ทำบนเครื่อง dev ไม่ได้ฟรี ๆ** เพราะต้องสลับ webhook ของ LINE channel มาที่ ngrok
+= บอท production หยุดรับข้อความระหว่างนั้น
+
+⇒ **ทำที่ server หลัง deploy เฟส A** (diff แค่ 3 บรรทัดและไม่เปลี่ยนพฤติกรรม จึงถอยง่ายที่สุดในบรรดาทุกเฟส)
+· ถ้าจะทดสอบที่ dev ต้องนัดช่วงเวลาที่ยอมให้บอทเงียบได้ และคืน webhook กลับทุกครั้ง
+
+---
+
+### ขั้น 1 — เปิดช่องฉีด reply client · `handlers/lineHandler.ts` (แก้ 3 บรรทัด)  **[เฟส A]**
 
 1. บรรทัด 1: `import { lineClient as defaultLineClient, createChatCompletion } from '../config/clients.js';`
 2. [lineHandler.ts:281](../handlers/lineHandler.ts#L281) ใน `handleImage` → `defaultLineClient`
@@ -880,7 +1024,7 @@ export function createCaptureClient() {
 > ⚠️ **TDZ** — ต้องเป็นบรรทัดแรกจริง ๆ ถ้ามีการอ้าง `lineClient` ก่อนบรรทัดประกาศจะพังตอนรัน
 > ไม่ใช่ตอน compile ⇒ ด่านตรวจคือ `npx tsc --noEmit` **บวก** ยิงข้อความจริงใน LINE 1 รอบ
 
-### ขั้น 2 — migration + ตัวตนพร็อกซี · `services/webIdentity.ts` (ใหม่)
+### ขั้น 2 — migration + ตัวตนพร็อกซี · `services/webIdentity.ts` (ใหม่)  **[เฟส B]**
 
 migration: `admin_users.employee_quotation_id` (ดู 2.5) แล้วยุบเข้า `migrations/schema.sql`
 
@@ -899,7 +1043,7 @@ listOdooQuotationMakers()          → 70 ชื่อผู้จัดทำ�
 > ⇒ **cache TTL** แบบเดียวกับ `services/rules/cache.ts` + ตั้ง `statement_timeout`
 > **`sale_orders` ไม่ถูกแตะเลยทั้งตอนออกใบและตอน export**
 
-### ขั้น 3 — ตัวกลาง · `services/webChatService.ts` (ใหม่)
+### ขั้น 3 — ตัวกลาง · `services/webChatService.ts` (ใหม่)  **[เฟส C]**
 
 `runWebChat({ adminId, spUserId, kind: 'text'|'postback', text?, data? })`
 
@@ -911,34 +1055,34 @@ listOdooQuotationMakers()          → 70 ชื่อผู้จัดทำ�
 * ใช้ `runWithDeadline` ตัวเดิม แต่ส่งงบ `WEB_BUDGET_MS = 60_000`
 * แปลง action ที่เป็น `uri` ชี้ `liff.line.me/...` → `/web/quote-edit?...` **ที่จุดเดียว**
 
-### ขั้น 4 — โหมด advise · `services/quotePolicy.ts` (ใหม่) + จุดต่อ 3 จุด
+### ขั้น 4 — โหมด advise · `services/quotePolicy.ts` (ใหม่) + จุดต่อ 3 จุด  **[เฟส E]**
 
 ดูรายละเอียดใน §3.2 — `validateQuotationItems` (+~8 บรรทัด) · call site 8 จุด (property เดียวต่อจุด) ·
 `getQuotationSummaryMessage` (+~6 บรรทัด)
 
-### ขั้น 4b — บันทึกคำเตือนถาวรตอนยืนยัน
+### ขั้น 4b — บันทึกคำเตือนถาวรตอนยืนยัน  **[เฟส E]**
 
 ดู §3.5 — ตาราง `quotation_issue_warnings` + `confirmQuotationAtomic(quoteId, quote, { warnings })`
 (ไม่ส่ง `warnings` = ไม่เขียนอะไร ⇒ LINE ไม่เปลี่ยน) · ป้าย + ตัวกรองในหน้าประวัติทำรวมกับขั้น 10
 
-### ขั้น 5 — override · `services/quoteOverrides.ts` (ใหม่) + 2 migration
+### ขั้น 5 — override · `services/quoteOverrides.ts` (ใหม่) + 2 migration  **[เฟส F]**
 
 ดู §4 — ตาราง `quotation_overrides` + `shipping_fee_name_presets` ·
 เปลี่ยน `applyShippingFeeToQuoteGroup` → `applyQuoteGroupRules` 4 จุด ·
 แทนที่การกำหนด `shouldHave` ใน `shippingFee.ts` (~5 บรรทัด)
 
-### ขั้น 6 — ผู้ติดต่อ · `services/localContacts.ts` (ใหม่) + Arm 3
+### ขั้น 6 — ผู้ติดต่อ · `services/localContacts.ts` (ใหม่) + Arm 3  **[เฟส H]**
 
 ดู §5 — ตาราง `local_contacts` + sequence + Arm 3 ใน `customers_data_build` +
 watermark 1 บรรทัดใน `refreshCustomerDirectory.ts` + rebuild `customers_data_view` (`force: true`)
 
-### ขั้น 6b — รายการงานค้าง "คีย์ผู้ติดต่อเข้า Odoo" (อยู่ใน `services/localContacts.ts`)
+### ขั้น 6b — รายการงานค้าง "คีย์ผู้ติดต่อเข้า Odoo" (อยู่ใน `services/localContacts.ts`)  **[เฟส H]**
 
 ดู §5.6 — คอลัมน์ `local_contacts.odoo_added_at` + รายการงานค้างพร้อมปุ่มคัดลอกรายช่อง +
 ปุ่มดาวน์โหลด xlsx/csv (หัวคอลัมน์ไทย ไม่ใช่ฟิลด์ Odoo) + pre-flight เตือนตอน export ใบเสนอราคา
 **ไม่มีไฟล์ service ใหม่** — งานเล็กพอที่จะอยู่ใน `localContacts.ts` ได้
 
-### ขั้น 6c — ตรึงทีมขายตอนยืนยันใบ
+### ขั้น 6c — ตรึงทีมขายตอนยืนยันใบ  **[เฟส G]**
 
 ดู §5.7 — คอลัมน์ `quotations.customer_sales_team` + resolve ใน `confirmQuotationAtomic()`
 + `COALESCE(snapshot, join สด)` ที่จุดประกอบแถว export
@@ -946,7 +1090,7 @@ watermark 1 บรรทัดใน `refreshCustomerDirectory.ts` + rebuild `cu
 > **ขั้นนี้เป็นขั้นเดียวของแผนที่เปลี่ยนพฤติกรรมของใบที่ออกจาก LINE** — แยก commit ออกมาต่างหาก
 > เพื่อให้ย้อนกลับได้เดี่ยว ๆ โดยไม่ต้องถอยทั้งแผน
 
-### ขั้น 7 — audit ของตารางใหม่
+### ขั้น 7 — audit ของตารางใหม่  **[เฟส F + H]**
 
 เติม 3 ตารางใหม่เข้า loop ของ [2026-09-03_04_audit_logs.sql](../migrations/changes/2026-09-03_04_audit_logs.sql#L330)
 (migration ใหม่ที่ใช้ฟังก์ชัน `audit_stmt()` ตัวเดิม — ไม่แก้ไฟล์เก่า):
@@ -958,7 +1102,7 @@ watermark 1 บรรทัดใน `refreshCustomerDirectory.ts` + rebuild `cu
 ```
 ทั้งสามเขียนเฉพาะตอนแอดมินกดปุ่ม ⇒ ไม่เข้าข่ายกฎห้ามติด trigger (ตารางที่ sync/แชทเขียนรัว)
 
-### ขั้น 8 — route · `index.ts` (ต่อท้ายกลุ่ม `/api/admin/*`)
+### ขั้น 8 — route · `index.ts` (ต่อท้ายกลุ่ม `/api/admin/*`)  **[เฟส B + C + F + H]**
 
 | route | สิทธิ์ | หน้าที่ |
 | --- | --- | --- |
@@ -988,7 +1132,7 @@ watermark 1 บรรทัดใน `refreshCustomerDirectory.ts` + rebuild `cu
 > — โหมด advise ทำให้ "ใครยิง `POST /api/admin/webchat/message` ได้ = ออกใบข้ามกฎได้ทุกข้อ"
 > จึงเป็นเส้นที่ต้องรัดกว่าเส้น LIFF เดิม ไม่ใช่เท่ากัน
 
-### ขั้น 9 — Frontend · `frontend/src/admin/QuoteChat.tsx` (ใหม่) + `AdminApp.tsx`
+### ขั้น 9 — Frontend · `frontend/src/admin/QuoteChat.tsx` (ใหม่) + `AdminApp.tsx`  **[เฟส D + E + F + H]**
 
 * แท็บใหม่ `{ key: 'quotechat', label: 'ขอใบเสนอราคา', roles: ['admin','subadmin'] }`
 * ยังไม่ตั้ง `employee_quotation_id` → บล็อกหน้าไว้ ให้เลือกชื่อจาก dropdown ก่อน (ครั้งเดียว)
@@ -1007,7 +1151,7 @@ watermark 1 บรรทัดใน `refreshCustomerDirectory.ts` + rebuild `cu
   * 👤 **เพิ่มผู้ติดต่อ** — ปุ่มในการ์ดเลือกผู้ติดต่อ → ฟอร์ม (ชื่อ*/ตำแหน่ง/โทร/อีเมล) → เลือกให้อัตโนมัติ
 * ปุ่ม `uri` ที่ชี้ `/web/quote-edit` → เปิดแท็บใหม่ + ปุ่ม "โหลดสถานะล่าสุด" กลับมาที่แชท
 
-### ขั้น 10 — ตัวกรอง "ออกจากเว็บ / ออกจาก LINE" · หน้าประวัติใบเสนอราคา
+### ขั้น 10 — ตัวกรอง "ออกจากเว็บ / ออกจาก LINE" · หน้าประวัติใบเสนอราคา  **[เฟส I]**
 
 **ที่มาของค่า:** `quotations.user_id` ขึ้นต้นด้วย `web:` = ออกจากเว็บ · นอกนั้น = ออกจาก LINE
 ⇒ **ไม่ต้องเพิ่มคอลัมน์และไม่ต้อง backfill**
@@ -1039,7 +1183,7 @@ export function sourceFilterCondition(filter: SourceFilter): string {
 
 **ไม่ต้องเพิ่ม index** — ตาราง 1,458 แถว มี `idx_quotations_user_id` อยู่แล้ว
 
-### ขั้น 11 — เอกสาร
+### ขั้น 11 — เอกสาร  **[เฟส J]**
 
 เติมหัวข้อสั้นใน `AGENTS.md` (แผนที่งาน + โครงสร้าง + กติกา "โหมด advise ห้อยกับ `web:%` เท่านั้น")
 — ไม่มี env ใหม่ จึงไม่ต้องแตะ `DEPLOY.md`
@@ -1092,6 +1236,29 @@ export function sourceFilterCondition(filter: SourceFilter): string {
 ---
 
 ## 9. วิธีทดสอบ
+
+### 9.0 ด่านของแต่ละเฟส — ไม่ต้องรันครบทุกตัวทุกเฟส
+
+รันทุก diag ทุกเฟสคือการเผาเวลา · ตารางนี้บอกว่า**เฟสไหนต้องผ่านอะไรจริง ๆ**
+(ทุกเฟสต้องผ่าน `npx tsc --noEmit` เสมอ · เฟสที่แตะ frontend เพิ่ม `npm --prefix frontend run lint && build`)
+
+| เฟส | ด่านบังคับ |
+| --- | --- |
+| **A** | `diag:queue-sim` · **ยิงข้อความจริงใน LINE ก่อน/หลัง** (ดู §6.0 ท้ายหัวข้อ) |
+| **B** | ไม่มี diag เดิมครอบ — เคสใหม่ข้อ 9 ของ Manual (`PUT /me` ชื่อมั่ว → 400) |
+| **C** | `diag:queue-sim` (คิวแยกไม่แย่ง slot) · Manual 1 (curl ล้วน ยังไม่มี UI) |
+| **D** | `frontend lint + build` · Manual 1–6 |
+| **E** | `diag:quote-validation` (+เคสใหม่ enforce/advise) · `diag:confirm-race` · Manual 7 · 7b |
+| **F** | `diag:shipping-fee` (+เคส force_on/force_off) · `diag:odoo-export` (คอลัมน์ G · M) · `diag:pdf-render` · Manual 10 · 11 |
+| **G** | **`diag:confirm-race` + `diag:odoo-export` ทั้งก่อนและหลัง** (เฟสเดียวที่กระทบใบ LINE) · Manual 6 ของ webModeSmoke |
+| **H** | `diag:customer-search` **ก่อน–หลัง** · `diag:contact-scope` · `diag:orphan-contacts` · นับแถว view ก่อน–หลัง · Manual 12 · 12b–12d · 13 · 14 |
+| **I** | Manual 15 (เว็บ + LINE = ทั้งหมด พอดี) |
+| **J** | — |
+
+`scripts/diag/webModeSmoke.ts` เขียนเพิ่มทีละส่วนตามเฟส (ข้อ 1–2 ที่เฟส E · 3–4 ที่ F ·
+6 ที่ G · 5 · 7–9 ที่ H) — ไม่ต้องเขียนครบตั้งแต่เฟสแรก
+
+### 9.1 คำสั่งทั้งหมด (อ้างอิงรวม)
 
 ```bash
 npx tsc --noEmit
@@ -1230,6 +1397,8 @@ npm run diag:confirm-race
 | เก็บคำเตือนย้อนหลังไหม | เก็บ + ติดป้ายในหน้าประวัติ (§3.5) |
 | ลำดับกับ `plan-product-block-rules.md` | แผนนั้นก่อน (กล่องบนสุด) |
 
-**⏸ สถานะปัจจุบัน: รอ session อื่น (main บนเครื่อง server) ทำ `plan-product-block-rules.md` ให้จบก่อน**
-ระหว่างนี้ห้ามเริ่มแตะโค้ดของแผนนี้ — ทั้งสองแผนแตะ `services/quotationService.ts`,
-กลุ่ม route `/api/admin/*` ใน `index.ts` และ `AdminApp.tsx` ร่วมกัน
+**✅ สถานะปัจจุบัน: ตัวบล็อกหมดแล้ว — `plan-product-block-rules.md` จบครบ 5 เฟสและขึ้น production
+เมื่อ 2026-09-07 (`413a721`)** ⇒ เริ่มเฟส A ได้ทันทีที่ได้รับอนุมัติ
+
+**เริ่มที่ไหน:** [§6.0](#60-แผนที่เฟส--หน่วยส่งมอบเวลาสลับเครื่อง-dev--server) → รายการก่อนเริ่ม → เฟส A
+(diff 3 บรรทัด ไม่มี migration ไม่เปลี่ยนพฤติกรรม — เป็นเฟสที่ถอยง่ายที่สุดของทั้งแผน)
