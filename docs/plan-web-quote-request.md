@@ -1,8 +1,9 @@
 # แผนงาน: หน้าเว็บขอใบเสนอราคาสำหรับ admin/subadmin (วางข้อความเหมือนคุยใน LINE)
 
-> **สถานะ: v4 — แบ่งเป็น 10 เฟสแล้ว · 🟨 เฟส A (ค้างด่าน LINE จริงที่ server) · ✅ เฟส B เสร็จแล้ว · ถัดไปคือเฟส C**
+> **สถานะ: v5 — เปลี่ยนสถาปัตยกรรมเป็น form-first · ✅ เฟส B เสร็จแล้ว · เฟส A กลายเป็นโค้ดที่ไม่มีใครเรียก · ถัดไปคือเฟส C′**
 > v1 สำรวจจากโค้ดจริง + วัดกับ DB จริง 2026-09-04 · v2–v3 สำรวจ/วัดเพิ่ม + ตัดสินใจ 2026-09-07
 > · v4 แบ่งเฟสเพื่อสลับเครื่อง dev ↔ server 2026-09-07
+> · **v5 เจ้าของสั่งเปลี่ยนเป็นหน้าเดียวแบบฟอร์ม ไม่จำลองแชท LINE 2026-09-08 — อ่าน §0 ก่อนทุกอย่าง**
 >
 > **✅ เงื่อนไข "รอ `plan-product-block-rules.md`" ผ่านแล้ว** — แผนนั้นจบครบ 5 เฟสและขึ้น production
 > 2026-09-07 (commit `413a721` บน `main`) ⇒ แผนนี้เริ่มได้
@@ -25,6 +26,110 @@
 >   ตัวเดียวจะทำให้ใบที่มีค่าขนส่งออกไม่ได้ทั้งใบ
 > * ลดแรงเสียดทานตอน merge ใน 3 ไฟล์ที่ทั้งสองแผนแตะ:
 >   `services/quotationService.ts` (คนละบริเวณ) · กลุ่ม route `/api/admin/*` ใน `index.ts` · `AdminApp.tsx`
+
+## 0. v5 — เปลี่ยนเป็น form-first (ตัดสินใจ 2026-09-08)
+
+> **อ่านหัวข้อนี้ก่อนหัวข้ออื่นทั้งหมด** — §1–§5 (ตัวตนพร็อกซี · โหมด advise · override · ผู้ติดต่อใหม่)
+> ยังใช้ได้ทั้งหมดไม่มีอะไรเปลี่ยน · สิ่งที่เปลี่ยนคือ **รูปหน้าเว็บ** และ **วิธีต่อกับของเดิม**
+
+### 0.1 โจทย์ที่เจ้าของสั่ง
+
+หน้าออกใบเสนอราคาของแอดมินคือ **หน้าเดียว** ที่มี
+
+1. ช่องพิมพ์ข้อความขอใบเสนอราคา (วางข้อความยาว ๆ แบบที่เซลส์พิมพ์ใน LINE)
+2. ฟอร์มร่างใบที่ระบบสกัดมาให้ — แก้ข้อมูลลูกค้า/ผู้ติดต่อ/เงื่อนไข และ **เพิ่ม-ลบ-แก้สินค้า** ได้
+   คล้าย [`liff_pages/quote-edit.html`](../liff_pages/quote-edit.html)
+3. สั่ง **revise** ใบที่ยืนยันไปแล้วได้ในหน้าเดียวกัน
+
+และ **ไม่ต้องการให้เกี่ยวข้องกับ LINE เลย** — วิ่งผ่าน frontend → backend → AI เท่านั้น
+
+### 0.2 ทำไม v4 ถึงไม่ตอบโจทย์นี้
+
+v4 ออกแบบให้หน้าเว็บ **จำลองบทสนทนา LINE**: เรียก `handleEvent` ผ่าน capture client แล้วเอา
+Flex message ที่ได้มาเรนเดอร์เป็น HTML · ความกำกวมของรุ่นสินค้าตอบด้วย "การ์ดให้กดเลือก" ·
+การแก้ใบลิงก์ออกไปหน้า `/web/quote-edit` อีกหน้าหนึ่ง
+
+ปัญหาคือ **โมเดลแชทกับโมเดลฟอร์มขัดกันโดยธรรมชาติ**:
+
+| เรื่อง | แบบแชท (v4) | แบบฟอร์ม (v5 — ที่ต้องการ) |
+| --- | --- | --- |
+| รุ่นกำกวม | การ์ด + ปุ่มกดเลือกทีละรายการ → ต้องจำ state `pending_product` ใน DB | **dropdown ในแถวสินค้า** เลือกแล้วจบ ไม่ต้องมี state |
+| บริษัทซ้ำ | การ์ดเลือกบริษัท → state `pending_company` | dropdown ในฟอร์ม |
+| แก้ใบ | ลิงก์ออกไปอีกหน้า (`/web/quote-edit`) | อยู่ในหน้าเดียวกัน |
+| ผลลัพธ์ที่ backend คืน | Flex JSON ที่ต้องแปลงกลับเป็น UI | **ข้อมูลดิบ** ให้ frontend เรนเดอร์เอง |
+
+v4 ถึงกับมีขั้นตอน *ย้อนความเป็น LINE ออก* อยู่ในตัวเอง (ขั้น 3: "แปลง action ที่เป็น `uri`
+ชี้ `liff.line.me/...` → `/web/quote-edit?...`") ซึ่งเป็นสัญญาณว่ากำลังฝืนโครงสร้าง
+
+### 0.3 สิ่งที่ตรวจแล้วว่า **ไม่ผูกกับ LINE อยู่แล้ว** — ใช้ได้เลย ไม่ต้องแก้อะไร
+
+ตรวจโค้ดจริง 2026-09-08:
+
+* **วงจร ร่าง → แก้ → ยืนยัน → PDF ไม่มี LINE เลย** — `index.ts` ช่วง 880–1320
+  (`PUT /api/quotation/:id` · `POST /api/quotation/:id/confirm` · `/cancel`)
+  **ไม่มี `lineClient` / `replyMessage` / `pushMessage` แม้แต่ตัวเดียว** · ตัว confirm log ว่า `[Push Disabled]`
+* [`liff_pages/quote-edit.html`](../liff_pages/quote-edit.html) (4,120 บรรทัด) ขับทั้งวงจรผ่าน REST 9 เส้นนี้อยู่แล้ว
+  — LIFF ในหน้านั้นถูกใช้แค่เรื่อง *ตัวตน* ไม่ได้ใช้ส่งข้อความ:
+  `/api/quotations` · `/api/quotations/delivery-preview` · `/api/quotation/:id` (PUT) ·
+  `/api/quotation/:id/cancel` · `/api/products/search` · `/api/products/:code/blocked` ·
+  `/api/customers/search` · `/api/customer/:id/contacts` · `/api/shipping-fee/config`
+* **ตรรกะธุรกิจอยู่ใน service หมดแล้ว** — `quotationService`: `processQuotationRequest` ·
+  `insertDraftQuotations` · `validateQuotationItems` · `confirmQuotationAtomic` · `enrichQuotationData` ·
+  `resolveContactFlow` · `buildItemSnapshots` · `cancelOldRevision` · บวก `customerService` ·
+  `productService` · `shippingFee` · `rules/*` · `pdfGenerator` · `odooSaleOrderExport`
+  — ทั้งหมดไม่รู้จัก LINE
+* **revise ก็เป็น service แล้ว** — [`quotationAgent.handleQuotationEditRequest()`](../services/quotationAgent.ts#L79)
+  ทำครบ: หาใบที่ใช้งานอยู่ → `validateQuotationItems` → ยกเลิกร่างค้าง → คัดลอกเป็นร่าง revision
+  ด้วย `appendReviseFrom` · แกนจริงราว 40 บรรทัดใช้แต่ service **ติดแค่บรรทัดสุดท้ายที่คืนค่าเป็น Flex**
+
+⇒ หน้าใหม่เรียกของพวกนี้ได้ตรง ๆ **โดยไม่ต้องผ่าน `handleEvent` เลย**
+
+### 0.4 จุดเดียวที่ต้องแตะของเก่า — ย้ายตัวสกัดออกมาเป็น service
+
+สิ่งเดียวที่หน้าใหม่ต้องใช้แล้ว **ยังฝังอยู่ใน `handleEvent`** คือ "ข้อความดิบ → ร่างใบ"
+วัดขอบเขตจริงใน [`handlers/lineHandler.ts`](../handlers/lineHandler.ts):
+
+| ช่วง | เนื้อหา | เว็บต้องใช้ไหม |
+| --- | --- | --- |
+| 1524–1556 | ประกอบ `historyContext` จาก `getRecentMessages` (15 นาทีล่าสุด + ตัดที่ยกเลิก/ยืนยัน) | ✅ ใช้ (บริบทของบทสนทนาเดียวกัน) |
+| 1557–1638 | **prompt สกัด ~80 บรรทัด** รวมกฎ 15 ข้อ + กฎเหล็กห้ามเดารุ่น | ✅ ใช้ |
+| 1639–1710 | `parseAiJson` ทนทาน + retry 3 ครั้งผูกกับงบเวลา + fallback `UNCLEAR` | ✅ ใช้ |
+| 1712–1720 | branch `REGISTER` → Flex เลือกสาขา | ❌ ไม่ใช้ (แอดมินไม่ลงทะเบียนผ่านหน้านี้) |
+| 1722–1801 | `findProduct` ทุกรายการ + ซ่อมรหัสที่ถูกตัดบรรทัด + สร้าง `slots` | ✅ ใช้ |
+| 1802 เป็นต้นไป | ตัดสินใจส่ง Flex เลือกรุ่น / `processQuotationRequest` → Flex สรุป | ❌ ไม่ใช้ (เว็บเรนเดอร์เอง) |
+
+**รวมที่ต้องใช้ร่วมกัน ≈ 265 บรรทัด** (ไม่ใช่แค่ prompt) — `buildResolvedItem()` ที่บรรทัด 86
+เป็น helper ระดับโมดูลอยู่แล้วและบริสุทธิ์ ย้ายไปด้วยได้
+
+> **ตัดสินใจ 2026-09-08: ย้ายออกเป็น `services/quoteExtraction.ts` ให้ทั้ง LINE และเว็บเรียกร่วมกัน**
+> ไม่ copy ไปไฟล์ใหม่ — prompt คือสมองของระบบ มีสองชุดเมื่อไหร่ วันหนึ่งจะแก้ไม่ครบแล้วเพี้ยน
+> เงียบ ๆ โดยไม่มี error · เป็นการ "ย้ายล้วน" พฤติกรรมต้องเท่าเดิมทุกบิต
+> `lineHandler` เหลือแค่เรียก 1 ครั้งแล้วเอา `slots` ไปเรนเดอร์ Flex เหมือนเดิม
+>
+> **ด่านที่คุมการย้ายนี้:** `diag:extraction-reliability` · `diag:customer-search` (ก่อน–หลัง) ·
+> `diag:queue-sim` · และ **ยิงข้อความจริงใน LINE 1 รอบ** — รอบนี้ด่าน LINE *จำเป็นจริง*
+> เพราะเป็นการผ่าตัดทางเดินหลักของบอท ไม่ใช่แค่เปลี่ยนชื่อตัวแปรแบบเฟส A
+
+### 0.5 สิ่งที่หายไปจาก v4
+
+* **ไม่ต้องมี `services/webChatService.ts`** ที่ประกอบ event ปลอมแล้วเรียก `handleEvent`
+* **ไม่ต้องมี `FlexRenderer`** ฝั่ง frontend
+* **ไม่ต้องมี `/web/quote-edit`** และ shim ของ `window.liff` — ฟอร์มอยู่ในหน้าเดียวกันแล้ว
+* **ไม่ต้องมี state machine** `pending_product` / `pending_company` สำหรับเส้นทางเว็บ
+  (ยังอยู่ครบสำหรับ LINE ไม่ถูกแตะ)
+* **เฟส A กลายเป็นโค้ดที่ไม่มีใครเรียก** — `services/chatChannel.ts` + `opts.client` ใน `handleEvent`
+  ถูกเขียนไว้เพื่อฉีด capture client ซึ่ง v5 ไม่ใช้แล้ว
+  ⇒ ปล่อยไว้ก็ไม่มีผล (ค่าปริยายเท่าของเดิม) แต่ **ควรถอยออกตอนเฟส J** เพื่อไม่ให้เหลือทางเข้าที่ไม่มีใครใช้
+
+### 0.6 สิ่งที่ **ไม่** เปลี่ยนจาก v4
+
+* **§2 ตัวตนพร็อกซี ยังจำเป็นเต็ม ๆ** — `quotations.user_id` มี FK ไป `salesperson` ·
+  ช่อง H = เซลส์ / ช่อง J = แอดมิน · `web:` prefix ยังเป็นสวิตช์ของ §3–§5 ทั้งหมด
+  ⇒ **เฟส B ที่ทำเสร็จแล้วยังใช้ได้ทั้งก้อน ไม่ต้องแก้**
+* §3 โหมด advise · §4 override เครดิต/ค่าขนส่ง · §5 ผู้ติดต่อใหม่ — ห้อยกับ `user_id LIKE 'web:%'`
+  เหมือนเดิมทุกข้อ ไม่เกี่ยวกับว่า UI เป็นแชทหรือฟอร์ม
+
+---
 
 ## วิธีทำงานของแผนนี้ (dev → server)
 
@@ -58,9 +163,13 @@
 
 ## สรุปสำหรับตัดสินใจ (อ่านหน้านี้พอ)
 
-**จะทำ:** แท็บใหม่ใน Admin Portal ให้ admin/subadmin **วางข้อความชุดเดียวกับที่เซลส์พิมพ์ใน LINE**
-แล้วไหลเข้า pipeline เดิมทั้งเส้น — LLM สกัด → `findProduct` → `processQuotationRequest` → การ์ดสรุปร่าง
-→ กดยืนยัน/ยกเลิก → ได้เลขที่ + PDF
+**จะทำ (v5):** แท็บใหม่ใน Admin Portal — **หน้าเดียว** ที่ admin/subadmin
+**วางข้อความชุดเดียวกับที่เซลส์พิมพ์ใน LINE** → ระบบสกัดเป็น **ฟอร์มร่างที่แก้ได้ทุกช่อง**
+(เพิ่ม-ลบ-แก้สินค้า · เลือกรุ่นที่กำกวมจาก dropdown · เลือกบริษัท/ผู้ติดต่อ) → กดยืนยัน → ได้เลขที่ + PDF
+· **revise ใบเก่าได้ในหน้าเดียวกัน**
+
+ไหลเข้า pipeline เดิมทั้งเส้น (LLM สกัด → `findProduct` → `processQuotationRequest` →
+`confirmQuotationAtomic`) แต่ **ไม่ผ่าน `handleEvent` และไม่มี Flex** — ดู §0
 
 **สิ่งที่ต่างจาก LINE (ขอบเขตใหม่ของ v2):**
 
@@ -73,10 +182,10 @@
 
 **หัวใจของแผน 3 ข้อ:**
 
-1. **Adapter ไม่ใช่ refactor** — ตรรกะทั้งหมดอยู่ใน `handleEvent()` ซึ่งผูกกับ LINE แค่จุดเดียวคือ
-   `lineClient.replyMessage()` (52 จุด / 50 จุดอยู่ในฟังก์ชันนี้) ⇒ ไม่แตะ 50 จุดนั้น แต่ **shadow ตัวแปร**
-   ที่หัวฟังก์ชันแล้วฉีด client ปลอมที่ "เก็บข้อความแทนส่ง" เข้าไป
-   ⇒ diff ที่ไฟล์เสี่ยงที่สุดของระบบเหลือ **3 บรรทัด**
+1. **แยกของที่ใช้ร่วมกันออกมา ไม่ใช่ยืมทั้งก้อน** (เปลี่ยนจาก v4) — วงจร ร่าง→แก้→ยืนยัน→PDF
+   **ไม่ผูกกับ LINE อยู่แล้ว** (พิสูจน์ใน §0.3) · ของที่ยังติดอยู่ใน `handleEvent` มีชิ้นเดียวคือ
+   "ข้อความดิบ → ร่างใบ" (~265 บรรทัด) ⇒ **ย้ายออกเป็น `services/quoteExtraction.ts`**
+   ให้ LINE กับเว็บเรียกร่วมกัน · ที่เหลือของหน้าใหม่เป็นไฟล์ใหม่ล้วน
 
 2. **ตัวตนพร็อกซี (proxy identity)** — แอดมินไม่ใช่ **ผู้ขาย (Odoo ช่อง H)** แต่เป็น
    **ผู้จัดทำใบ (Odoo ช่อง J `employee_quotations`)** ซึ่งเป็นบทบาทที่มีอยู่จริงในข้อมูล Odoo อยู่แล้ว
@@ -87,20 +196,26 @@
    (LINE user id ขึ้นต้นด้วย `U` + hex 32 ตัวเสมอ) ⇒ พิสูจน์ได้ว่าไม่กระทบของเดิมโดยไม่ต้องรัน
    · **ข้อยกเว้นเดียว: ขั้น 6c (ตรึงทีมขาย)** ซึ่งเป็นการแก้ปัญหาที่ flow ผู้ติดต่อใหม่ทำให้โผล่
    และจงใจให้มีผลกับทุกใบ — แยก commit ไว้ต่างหาก (§5.7)
+   · ส่วนเฟส C (ย้ายตัวสกัด) ไม่ใช่ข้อยกเว้นของกติกานี้ เพราะ**ตั้งใจให้ผลลัพธ์เท่าเดิมทุกบิต**
+   แต่เป็นเฟสที่ต้องพิสูจน์ด้วยการยิงจริง ไม่ใช่พิสูจน์ด้วยการอ่านโค้ด
+
+**ตารางนี้ปรับเป็น v5 แล้ว** — เรียงตามเฟสของ §6.0
 
 | เฟส | ทำอะไร | เปลี่ยนพฤติกรรมของเดิมไหม |
 | --- | --- | --- |
-| 1 | เปิดช่องฉีด reply client ใน `lineHandler` (3 บรรทัด) | ❌ ไม่ (ยิงข้อความจริงใน LINE เทียบก่อน/หลัง) |
-| 2 | คอลัมน์ `admin_users.employee_quotation_id` + ตัวตนพร็อกซี | ❌ ไม่ (คอลัมน์ใหม่ไม่มีใครอ่านนอกหน้าใหม่) |
-| 3 | `webChatService` + route `/api/admin/webchat/*` | ❌ ไม่ (คิวแยก ไม่แย่ง slot LINE) |
-| 4 | **โหมด advise** (`quotePolicy`) — กฎกลายเป็นคำเตือน + **บันทึกคำเตือนถาวรตอนยืนยัน** | ❌ ไม่ (ไม่ส่ง `userId`/`warnings` = เหมือนเดิม) |
-| 5 | **`quotation_overrides`** — เครดิต + สั่งมี/ไม่มีบรรทัดค่าขนส่ง | ❌ ไม่ (ไม่มีแถว = ไม่ทำอะไร) |
-| 6 | **`local_contacts` + Arm 3** — เพิ่มผู้ติดต่อ | ❌ ไม่ (ตารางว่าง = view ให้ผลชุดเดิมเป๊ะ) |
-| 6b | **รายการงานค้างคีย์ผู้ติดต่อเข้า Odoo** + pre-flight เตือนตอน export ใบ | ❌ ไม่ (ไม่มีผู้ติดต่อ local = ไม่มี dialog) |
-| 6c | **ตรึงทีมขาย (คอลัมน์ I) ตอนยืนยันใบ** | ⚠️ **ใช่ — ขั้นเดียวของแผนที่กระทบใบ LINE ด้วย** (§5.7) |
-| 7 | หน้า React + Flex renderer + แผงเครื่องมือแอดมิน | ❌ ไม่ |
-| 8 | `/web/quote-edit` (reuse ไฟล์ LIFF เดิม + liff shim) | ❌ ไม่ (ไฟล์ HTML ไม่แก้เลย) |
-| 9 | ตัวกรอง "ออกจากเว็บ / ออกจาก LINE" + **ป้าย "⚠️ ข้ามกฎ N ข้อ"** ในหน้าประวัติ | ❌ ไม่ (ค่าตั้งต้น `all` = ผลเหมือนเดิม) |
+| B | คอลัมน์ `admin_users.employee_quotation_id` + ตัวตนพร็อกซี + route `makers`/`me` | ❌ ไม่ (คอลัมน์ใหม่ไม่มีใครอ่านนอกหน้าใหม่) |
+| **C** | **ย้ายตัวสกัดออกเป็น `quoteExtraction`** (~265 บรรทัดจาก `lineHandler`) | ⚠️ **ตั้งใจให้ไม่เปลี่ยน แต่เป็นการผ่าตัดทางเดินหลักของบอท** ⇒ ด่าน LINE จริง 3 เคส (§6.0) |
+| D | `webQuoteService` + route `/api/admin/webquote/*` | ❌ ไม่ (ไฟล์ใหม่ · คิวแยก ไม่แย่ง slot LINE) |
+| E | หน้า React หน้าเดียว (ฟอร์ม) | ❌ ไม่ (frontend ล้วน) |
+| F | **โหมด advise** (`quotePolicy`) — กฎกลายเป็นคำเตือน + **บันทึกคำเตือนถาวรตอนยืนยัน** | ❌ ไม่ (ไม่ส่ง `userId`/`warnings` = เหมือนเดิม) |
+| G | **`quotation_overrides`** — เครดิต + สั่งมี/ไม่มีบรรทัดค่าขนส่ง | ❌ ไม่ (ไม่มีแถว = ไม่ทำอะไร) |
+| **H** | **ตรึงทีมขาย (คอลัมน์ I) ตอนยืนยันใบ** | ⚠️ **ใช่ — กระทบใบ LINE ด้วยโดยตั้งใจ** (§5.7) |
+| I | **`local_contacts` + Arm 3** + รายการงานค้างคีย์ Odoo + pre-flight ตอน export | ❌ ไม่ (ตารางว่าง = view ให้ผลชุดเดิมเป๊ะ) |
+| J | ตัวกรอง "ออกจากเว็บ / ออกจาก LINE" + **ป้าย "⚠️ ข้ามกฎ N ข้อ"** ในหน้าประวัติ | ❌ ไม่ (ค่าตั้งต้น `all` = ผลเหมือนเดิม) |
+| K | ถอยเฟส A ออก + เอกสาร | ❌ ไม่ (ถอนโค้ดที่ไม่มีใครเรียก) |
+
+> **v5 มี 2 เฟสที่แตะเส้นทาง LINE คือ C กับ H** — ที่เหลือเป็นไฟล์ใหม่ที่ LINE ไม่รู้จัก
+> (v4 มีเฟสเดียวคือ 6c เพราะมันเลือกทาง "ยืมโค้ดเดิมทั้งก้อน" แทนที่จะ "แยกของที่ใช้ร่วมกันออกมา")
 
 ---
 
@@ -347,7 +462,7 @@ export function resolveQuotePolicy(userId?: string | null): PolicyMode {
   return String(userId ?? '').startsWith('web:') ? 'advise' : 'enforce';
 }
 
-/** ถังพักคำเตือนต่อ userId — webChatService ดึงไปแสดงต่อท้ายการ์ดสรุป */
+/** ถังพักคำเตือนต่อ userId — webQuoteService ดึงไปแสดงในฟอร์ม */
 export function recordWarnings(userId: string, violations: Violation[]): void;
 export function drainWarnings(userId: string): Violation[];
 ```
@@ -390,23 +505,31 @@ export function drainWarnings(userId: string): Violation[];
 
 * key = `web:<admin>:<sp>` ซึ่ง **`KeyedTaskQueue` การันตีว่ามีงานเดียวต่อ key ณ เวลาหนึ่ง**
   (คิวของเว็บเป็น instance แยก concurrency 4 แต่ยังคีย์ด้วย userId เหมือนกัน) ⇒ ไม่มีทางสลับกัน
-* `webChatService` เรียก `drainWarnings()` ทันทีหลัง `handleEvent` คืนค่า แล้วทิ้ง
-* มี TTL 5 นาที + เพดานจำนวน key กัน memory รั่วเมื่อ drain ไม่ถึง (เช่น handleEvent โยน error)
+* `webQuoteService` เรียก `drainWarnings()` ทันทีหลังจบงานแต่ละก้าว แล้วทิ้ง
+* มี TTL 5 นาที + เพดานจำนวน key กัน memory รั่วเมื่อ drain ไม่ถึง (เช่นงานโยน error)
 * **LINE ไม่มีวันเขียนถังนี้** เพราะ `recordWarnings` ถูกเรียกในสาขา advise เท่านั้น
+
+> **v5 — ต้องทบทวนตอนเริ่มเฟส F ว่ายังต้องมีถังพักไหม**
+> ถังพักนี้ถูกออกแบบตอนที่เว็บเรียก `handleEvent` แล้วเห็นแต่ Flex ที่ออกมา จึงต้องเก็บ violation
+> ออกมานอกทาง · ใน v5 `webQuoteService` เรียก `validateQuotationItems()` **เองโดยตรง**
+> ⇒ ก้าว `propose` / `createDraft` อ่าน violations จากค่าที่ฟังก์ชันคืนได้เลย ไม่ต้องใช้ถัง
+> **เหลือที่เดียวที่ยังต้องใช้คือตอน `POST /api/quotation/:id/confirm`** ซึ่งตรวจกฎอยู่ข้างใน endpoint
+> ⇒ ทางเลือกคือ (ก) คงถังพักไว้เฉพาะเส้นนั้น หรือ (ข) ให้ endpoint คืน `warnings` มาใน response
+> เลือกตอนเฟส F เมื่อเห็นโค้ดจริงแล้ว — อย่าเพิ่งสร้างถังพักตั้งแต่ยังไม่รู้ว่าต้องใช้
 
 ### 3.4 คำเตือนไปโผล่ที่ไหน
 
 | ชนิด | ที่แสดง |
 | --- | --- |
-| จาก `validateQuotationItems` (BLOCKED/stock/MOQ/min-price/blacklist/credit/system) | ฟองข้อความสีเหลืองต่อท้ายการ์ดสรุปในหน้าเว็บ (webChatService drain มาต่อ) |
-| จากการ์ดสรุปเอง (blacklist / credit hold / ต่ำกว่าราคาขั้นต่ำ) | กล่องเตือนในการ์ด **คู่กับ**ปุ่มยืนยัน |
-| ตอนกดยืนยัน | ไม่มี 422 อีก — ด่านคืน `violations: []` · คำเตือนที่บันทึกไว้ยังโชว์ในสายแชท |
+| จาก `validateQuotationItems` (BLOCKED/stock/MOQ/min-price/blacklist/credit/system) | **แถบเหลืองเหนือปุ่มยืนยันในฟอร์ม** (v5: อ่านจากค่าที่ฟังก์ชันคืนตรง ๆ) |
+| จากการตรวจตอนสร้างร่าง (blacklist / credit hold / ต่ำกว่าราคาขั้นต่ำ) | แถบเตือนในฟอร์ม **คู่กับ**ปุ่มยืนยันที่ยังกดได้ |
+| ตอนกดยืนยัน | ไม่มี 422 อีก — ด่านคืน `violations: []` · คำเตือนที่บันทึกไว้ยังโชว์ค้างในฟอร์ม |
 | **หลังออกใบแล้ว (ย้อนหลัง)** | **ป้าย "⚠️ ข้ามกฎ N ข้อ" ในหน้าประวัติใบเสนอราคา** — ดู 3.5 |
 
 ### 3.5 บันทึกถาวรว่า "ใบนี้ออกโดยข้ามกฎอะไรบ้าง" (ตัดสินใจ 2026-09-07)
 
-**ปัญหา:** ถังพักคำเตือน (3.3) มี TTL 5 นาที และอยู่แค่ในสายแชท ⇒ เปิดใบเดิมดูวันถัดไป
-จะไม่มีร่องรอยเลยว่าใบนั้นออกทั้งที่ติด blacklist / ราคาต่ำกว่าขั้นต่ำ / สต็อกไม่พอ
+**ปัญหา:** คำเตือนที่โชว์ในฟอร์มอยู่แค่ในหน้าจอรอบนั้น (ถังพักตาม 3.3 มี TTL 5 นาที)
+⇒ เปิดใบเดิมดูวันถัดไปจะไม่มีร่องรอยเลยว่าใบนั้นออกทั้งที่ติด blacklist / ราคาต่ำกว่าขั้นต่ำ / สต็อกไม่พอ
 **เลือกทางเลือก ค.** — เก็บลง DB **และ**ติดป้ายให้เห็นในหน้าประวัติ (ไม่ใช่แค่ซ่อนไว้ใน log)
 
 ```sql
@@ -727,7 +850,7 @@ GREATEST( (SELECT max(sync_updated_at) FROM public.customers),
 
 ### 5.4 endpoint และการตรวจ
 
-`POST /api/admin/webchat/contacts` (admin, subadmin)
+`POST /api/admin/webquote/contacts` (admin, subadmin)
 
 | ตรวจ | ผลถ้าไม่ผ่าน |
 | --- | --- |
@@ -882,45 +1005,53 @@ COALESCE(q.customer_sales_team, st.sales_team)   -- ← ที่จุดปร
 
 #### ตารางเฟส
 
-| เฟส | เนื้องาน (ขั้นเดิม) | migration | ต้องมีเฟสไหนก่อน | ขึ้น prod เดี่ยวได้ | เครื่องที่เหมาะ | สถานะ |
+**ตารางนี้เป็นของ v5 แล้ว** — เฟส C/D/E ถูกนิยามใหม่ตาม §0 · เฟสที่เหลือเนื้องานเท่าเดิมแต่เลื่อนตัวอักษร
+
+| เฟส | เนื้องาน | migration | ต้องมีเฟสไหนก่อน | ขึ้น prod เดี่ยวได้ | เครื่องที่เหมาะ | สถานะ |
 | --- | --- | --- | --- | --- | --- | --- |
-| **A** | เปิดช่องฉีด reply client (ขั้น 1) | — | — | ✅ ไม่เปลี่ยนพฤติกรรมเลย | dev เขียน · **ด่าน LINE จริงที่ server** | 🟨 |
-| **B** | ตัวตนพร็อกซี + route ตั้งชื่อผู้จัดทำ (ขั้น 2 · ขั้น 8 เฉพาะ `makers`/`me`) | 1 | A | ✅ | dev | ✅ |
-| **C** | แชทผ่านเว็บฝั่งหลังบ้าน (ขั้น 3 · ขั้น 8 ที่เหลือของทางเดินหลัก · `/web/quote-edit`) | — | B | ✅ ยังไม่มี UI เรียก | dev | ⬜ |
-| **D** | หน้าเว็บ + `FlexRenderer` (ขั้น 9 เฉพาะแกน) | — | C | ✅ **← ฟีเจอร์ใช้งานได้จริงครั้งแรก** | dev | ⬜ |
-| **E** | โหมด advise + บันทึกคำเตือน + ป้าย "ข้ามกฎ" (ขั้น 4 · 4b) | 1 | D | ✅ | dev | ⬜ |
-| **F** | override เครดิต + ค่าขนส่ง (ขั้น 5 · ขั้น 7 เฉพาะ 2 ตารางนี้) | 2 | D | ✅ | dev | ⬜ |
-| **G** | **ตรึงทีมขาย (ขั้น 6c)** | 1 | — (อิสระ) | ✅ | **server** — กระทบใบ LINE ด้วย | ⬜ |
-| **H** | ผู้ติดต่อใหม่ + รายการงานค้างคีย์ Odoo (ขั้น 6 · 6b · ขั้น 7 ที่เหลือ) | 1 ก้อน (แก้ view) | D **และ G** | ✅ | dev เขียน · **rebuild view ทั้งสองเครื่อง** | ⬜ |
-| **I** | ตัวกรอง "ออกจากเว็บ / ออกจาก LINE" (ขั้น 10) | — | — (อิสระ) | ✅ | **เครื่องไหนก็ได้** — เฟสสั้นสุด | ⬜ |
-| **J** | เอกสาร (ขั้น 11) + ปิดแผน | — | ทุกเฟส | — | เครื่องไหนก็ได้ | ⬜ |
+| ~~**A**~~ | ~~เปิดช่องฉีด reply client~~ — **v5 ไม่ใช้แล้ว** โค้ดยังอยู่แต่ไม่มีใครเรียก ถอยออกที่เฟส K | — | — | ✅ ไม่เปลี่ยนพฤติกรรม | — | ⚪ ยกเลิก |
+| **B** | ตัวตนพร็อกซี + route ตั้งชื่อผู้จัดทำ (ขั้น 2 · ขั้น 8 เฉพาะ `makers`/`me`) | 1 | — | ✅ | dev | ✅ |
+| **C** | **ย้ายตัวสกัดออกเป็น `services/quoteExtraction.ts`** (ขั้น 1′ — ผ่าตัดทางเดินหลักของ LINE) | — | — (อิสระ) | ✅ ย้ายล้วน พฤติกรรมเท่าเดิม | dev เขียน · **ด่าน LINE จริงที่ server** | ⬜ |
+| **D** | หลังบ้านของหน้าเว็บ · `services/webQuoteService.ts` + route `/api/admin/webquote/*` (ขั้น 3′ · ขั้น 8′) | — | B **และ** C | ✅ ยังไม่มี UI เรียก | dev | ⬜ |
+| **E** | **หน้าเว็บหน้าเดียว** `frontend/src/admin/QuoteRequest.tsx` (ขั้น 9′) | — | D | ✅ **← ฟีเจอร์ใช้งานได้จริงครั้งแรก** | dev | ⬜ |
+| **F** | โหมด advise + บันทึกคำเตือน + ป้าย "ข้ามกฎ" (ขั้น 4 · 4b — เดิมเฟส E) | 1 | E | ✅ | dev | ⬜ |
+| **G** | override เครดิต + ค่าขนส่ง (ขั้น 5 · ขั้น 7 บางส่วน — เดิมเฟส F) | 2 | E | ✅ | dev | ⬜ |
+| **H** | **ตรึงทีมขาย (ขั้น 6c — เดิมเฟส G)** | 1 | — (อิสระ) | ✅ | **server** — กระทบใบ LINE ด้วย | ⬜ |
+| **I** | ผู้ติดต่อใหม่ + รายการงานค้างคีย์ Odoo (ขั้น 6 · 6b · ขั้น 7 ที่เหลือ — เดิมเฟส H) | 1 ก้อน (แก้ view) | E **และ H** | ✅ | dev เขียน · **rebuild view ทั้งสองเครื่อง** | ⬜ |
+| **J** | ตัวกรอง "ออกจากเว็บ / ออกจาก LINE" (ขั้น 10 — เดิมเฟส I) | — | — (อิสระ) | ✅ | **เครื่องไหนก็ได้** — เฟสสั้นสุด | ⬜ |
+| **K** | เอกสาร (ขั้น 11) + **ถอยเฟส A ออก** + ปิดแผน | — | ทุกเฟส | — | เครื่องไหนก็ได้ | ⬜ |
 
 > **ความหมายของสถานะ:** ⬜ ยังไม่เริ่ม · 🟨 โค้ดเสร็จและ push ขึ้น `dev` แล้ว แต่ยังมีด่านที่
-> **ทำบนเครื่อง dev ไม่ได้** ค้างอยู่ · ✅ ผ่านด่านครบทุกตัวของเฟสนั้น
+> **ทำบนเครื่อง dev ไม่ได้** ค้างอยู่ · ✅ ผ่านด่านครบทุกตัวของเฟสนั้น · ⚪ ยกเลิก (v5 ไม่ใช้แล้ว)
 >
-> **เฟส A อยู่ที่ 🟨** — โค้ดเสร็จบน `dev` เมื่อ 2026-09-07 · `npx tsc --noEmit` · `diag:queue-sim` ·
-> `diag:abort-check` ผ่านหมด · **ค้างด่านเดียวคือ "ยิงข้อความจริงใน LINE ก่อน/หลัง"** ซึ่งต้องทำที่
-> server หลัง deploy (เหตุผลอยู่ท้าย §6.0) ⇒ ใครหยิบงานต่อที่ server ช่วยปิดด่านนี้แล้วเปลี่ยนเป็น ✅
-> · เฟส B เริ่มได้เลยโดยไม่ต้องรอ เพราะ A ไม่เปลี่ยนพฤติกรรมและถอยง่ายที่สุด
+> **เฟส A = ⚪ ยกเลิก** — โค้ดเสร็จและ push แล้ว (`70adfd3`) แต่ v5 ไม่เรียก `handleEvent` จากเว็บ
+> อีกต่อไป ⇒ `services/chatChannel.ts` และ `opts.client` กลายเป็นทางเข้าที่ไม่มีใครใช้
+> **ไม่ต้องปิดด่าน LINE ของเฟส A แล้ว** เพราะจะถูกถอยออกทั้งก้อนที่เฟส K
+> (ไม่ถอยทันทีเพราะไม่มีอันตราย ค่าปริยายเท่าของเดิม และเฟส C กำลังจะแตะไฟล์เดียวกันอยู่แล้ว —
+> ถอยตอน K ทีเดียวจะได้ไม่ต้องแก้ไฟล์นั้นสามรอบ)
 >
 > **เฟส B เสร็จแล้ว (✅)** 2026-09-07 — migration ลงบน DB dev แล้ว (probe ข้างล่างขึ้น `ลงแล้ว`)
 > · `tsc` ผ่าน · Manual ข้อ 9 + ข้อ 16 ยิงผ่าน HTTP จริงแล้วผ่านหมด · `ensureWebProxy` ทดสอบสร้าง–
 > เรียกซ้ำ–ลบจริงบน DB แล้วไม่มีแถวตกค้าง
 > ⚠️ **บน server ยังต้องรัน `migrations/changes/2026-09-07_05_admin_users_employee_quotation_id.sql`
-> ก่อน deploy โค้ดของเฟสนี้** — ไม่งั้น `/api/admin/webchat/me` จะพังเพราะคอลัมน์ยังไม่มี
+> ก่อน deploy โค้ดของเฟสนี้** — ไม่งั้น route `me` จะพังเพราะคอลัมน์ยังไม่มี
 
 **ลำดับที่บังคับจริง ๆ มีแค่นี้ — นอกนั้นสลับได้ตามใจ:**
 
 ```
-A → B → C → D ─┬─→ E
-               ├─→ F
-               └─→ H          (H ต้องมี G ด้วย ไม่งั้นคอลัมน์ I ว่างทันทีที่ผู้ติดต่อเข้า Odoo)
-G ─────────────────┘          G อิสระจาก A–D ทำเมื่อไหร่ก็ได้ ขอแค่ก่อน H
-I                             อิสระทั้งหมด · J ปิดท้าย
+B ─┐
+   ├─→ D → E ─┬─→ F
+C ─┘          ├─→ G
+              └─→ I          (I ต้องมี H ด้วย ไม่งั้นคอลัมน์ I ว่างทันทีที่ผู้ติดต่อเข้า Odoo)
+H ────────────────┘          H อิสระจาก B–E ทำเมื่อไหร่ก็ได้ ขอแค่ก่อน I
+J                            อิสระทั้งหมด · K ปิดท้าย
 ```
 
-> **ทำไม G ต้องมาก่อน H** — ผู้ติดต่อที่แอดมินเพิ่มเองจะ "หลบ" ให้แถวจริงทันทีที่ Odoo sync กลับมา
-> ⇒ `contact_id` หายจาก view ⇒ คอลัมน์ I ว่าง (§5.7) · ถ้าปล่อย H ขึ้นก่อน G จะเกิดกับ**ทุกใบ**
+> **B กับ C ทำสลับกันหรือพร้อมกันก็ได้** — คนละไฟล์กันคนละเรื่องกัน (B = `webIdentity` + route,
+> C = ย้ายตัวสกัดใน `lineHandler`) · ถ้าทำพร้อมกันต้องแยก `git worktree` ตามกติกาข้างบน
+>
+> **ทำไม H ต้องมาก่อน I** — ผู้ติดต่อที่แอดมินเพิ่มเองจะ "หลบ" ให้แถวจริงทันทีที่ Odoo sync กลับมา
+> ⇒ `contact_id` หายจาก view ⇒ คอลัมน์ I ว่าง (§5.7) · ถ้าปล่อย I ขึ้นก่อน H จะเกิดกับ**ทุกใบ**
 > ที่ออกให้ผู้ติดต่อใหม่ ไม่ใช่เคสหายาก
 
 #### ตรวจว่า "เครื่องที่นั่งอยู่ตอนนี้" ตามถึงไหนแล้ว
@@ -1004,45 +1135,97 @@ npx tsc --noEmit                                    # ฐานสะอาด�
 | **`.env` / `docker-compose.override.yml` คนละค่า** | dev ใช้ `PG_HOST=localhost` + `APP_URL=http://localhost:3011` · server ใช้ `db` + โดเมนจริง | ทั้งสองไฟล์ถูก `.gitignore` อยู่แล้ว — อย่าไปปลดออก |
 | **migration ขึ้น prod ล่วงหน้าก่อนโค้ด** | ทุกไฟล์เป็น additive จึงปลอดภัย **ยกเว้นเฟส H ที่แก้นิยาม view** | เฟส H ต้องนับแถวก่อน–หลังทันที (82,512 / odoo 78,206 / saleorder 4,306) |
 
-#### ด่าน LINE จริงของเฟส A — ต้องนัดเวลา
+#### ด่าน LINE จริงของเฟส C — เฟสเดียวของ v5 ที่ต้องมี
 
-ด่านของเฟส A คือ *"ยิงข้อความจริงใน LINE 1 รอบก่อนแก้และหลังแก้ ต้องได้ผลเหมือนกันเป๊ะ"* (§9)
-ซึ่ง **ทำบนเครื่อง dev ไม่ได้ฟรี ๆ** เพราะต้องสลับ webhook ของ LINE channel มาที่ ngrok
+**v5 มีเฟสเดียวที่แตะทางเดินของ LINE คือเฟส C** (ย้ายตัวสกัดออกเป็น service) — เฟสอื่นทั้งหมด
+เป็นไฟล์ใหม่ที่ LINE ไม่รู้จัก จึงไม่ต้องมีด่านนี้
+
+ด่านคือ *"ยิงข้อความขอใบเสนอราคาจริงใน LINE 1 รอบก่อนย้ายและหลังย้าย ต้องได้ผลเหมือนกันเป๊ะ"* —
+ต้องครอบ 3 เคสเป็นอย่างน้อยเพราะเป็นสามทางออกของ `slots`:
+
+1. ข้อความปกติที่รุ่นถูกทุกตัว → ต้องได้การ์ดสรุปเหมือนเดิม
+2. รุ่นกำกวม → ต้องได้การ์ดให้กดเลือกรุ่นเหมือนเดิม (ทดสอบ `pending_product` ที่ยังต้องทำงาน)
+3. รุ่นพิมพ์ผิด → ต้องได้รายงาน + ปุ่มค้นหาสินค้าเหมือนเดิม
+
+**ทำบนเครื่อง dev ไม่ได้ฟรี ๆ** เพราะต้องสลับ webhook ของ LINE channel มาที่ ngrok
 = บอท production หยุดรับข้อความระหว่างนั้น
 
-⇒ **ทำที่ server หลัง deploy เฟส A** (diff แค่ 3 บรรทัดและไม่เปลี่ยนพฤติกรรม จึงถอยง่ายที่สุดในบรรดาทุกเฟส)
-· ถ้าจะทดสอบที่ dev ต้องนัดช่วงเวลาที่ยอมให้บอทเงียบได้ และคืน webhook กลับทุกครั้ง
+⇒ ทางที่ถูกกว่า: **deploy เฟส C ขึ้น server ก่อน แล้วทักบอทที่ใช้งานอยู่จริง** — webhook ชี้ที่นั่น
+อยู่แล้ว ไม่ต้องสลับอะไร ไม่มี downtime · ส่วน "ก่อนย้าย" ใช้ผลจากบอทตัวเดิมที่ยังรันอยู่ก่อน deploy
+· ถ้าจำเป็นต้องทดสอบที่ dev จริง ๆ ต้องนัดช่วงที่ยอมให้บอทเงียบได้ และคืน webhook กลับทุกครั้ง
+
+> **นี่คือเฟสที่เสี่ยงที่สุดของทั้งแผน** — ย้ายโค้ด ~265 บรรทัดออกจากทางเดินหลักของบอทที่ใช้งานจริง
+> ⇒ commit ของเฟส C ต้องเป็น **"ย้ายล้วน"** ห้ามปรับปรุงอะไรไปพร้อมกันแม้แต่นิดเดียว
+> อยากปรับ ให้แยกเป็น commit ถัดไปหลังด่านผ่านแล้ว จะได้ `git revert` ก้อนเดียวจบถ้าพัง
 
 ---
 
-### ขั้น 1 — เปิดช่องฉีด reply client · `handlers/lineHandler.ts` (แก้ 3 บรรทัด)  **[เฟส A]**
+### ~~ขั้น 1~~ — เปิดช่องฉีด reply client  **[เฟส A — v5 ยกเลิก]**
 
-1. บรรทัด 1: `import { lineClient as defaultLineClient, createChatCompletion } from '../config/clients.js';`
-2. [lineHandler.ts:281](../handlers/lineHandler.ts#L281) ใน `handleImage` → `defaultLineClient`
-3. **บรรทัดแรกสุดของ `handleEvent`**: `const lineClient = opts.client ?? defaultLineClient;`
-   + เพิ่ม `client?: ReplyClient` เข้า type ของ `opts`
+ทำไปแล้ว (`70adfd3`) แต่ v5 ไม่เรียก `handleEvent` จากเว็บอีกแล้ว ⇒ `services/chatChannel.ts`
+และ `opts.client` ไม่มีใครเรียก · **ถอยออกที่เฟส K** · รายละเอียดที่ §0.5
+
+---
+
+### ขั้น 1′ — ย้ายตัวสกัดออกเป็น `services/quoteExtraction.ts` (ใหม่)  **[เฟส C]**
+
+**หัวใจของ v5** — ยกโค้ด "ข้อความดิบ → ร่างใบ" ออกจาก `handleEvent` มาเป็น service ที่ทั้ง LINE
+และเว็บเรียกร่วมกัน · ขอบเขตที่วัดไว้แล้วอยู่ใน §0.4
+
+**ย้ายอะไรบ้าง** (จาก [`handlers/lineHandler.ts`](../handlers/lineHandler.ts))
+
+| จาก | เนื้อหา |
+| --- | --- |
+| 1524–1556 | ประกอบ `historyContext` (15 นาทีล่าสุด · ตัดที่ยกเลิก/ยืนยัน) |
+| 1557–1638 | prompt สกัด ~80 บรรทัด + กฎ 15 ข้อ |
+| 1639–1710 | `parseAiJson` + retry 3 ครั้ง + fallback `UNCLEAR` (`extraction_failed`) |
+| 1722–1801 | `findProduct` ทุกรายการ · ซ่อมรหัสที่ถูกตัดบรรทัด · สร้าง `slots` |
+| 86–118 | `buildResolvedItem()` — helper บริสุทธิ์ ย้ายไปด้วย |
+
+**หน้าตาที่ต้องการ**
 
 ```ts
-// services/chatChannel.ts (ใหม่ ~15 บรรทัด)
-export interface ReplyClient {
-  replyMessage(p: { replyToken: string; messages: any[] }): Promise<any>;
+// services/quoteExtraction.ts (ใหม่)
+export interface QuoteSlot {
+  resolved: boolean;
+  itemForDb?: any;                 // resolved = true
+  item?: any;                      // resolved = false — ของที่ AI สกัดมาได้
+  candidates?: Array<{ model: string; sales_price: number; /* ... */ }>;
+                                   // มี candidate = กำกวม · ไม่มี = พิมพ์ผิด
 }
-export function createCaptureClient() {
-  const captured: any[] = [];
-  return {
-    captured,
-    client: {
-      async replyMessage(p: { replyToken: string; messages: any[] }) {
-        captured.push(...p.messages);   // เก็บแทนส่งออก LINE
-        return null;
-      }
-    } as ReplyClient
-  };
+
+export interface ExtractedQuote {
+  intent: 'QUOTATION' | 'REGISTER' | 'UNCLEAR' | string;
+  extraction_failed?: boolean;     // UNCLEAR เพราะระบบล่ม ไม่ใช่เพราะเซลส์พิมพ์ไม่ชัด
+  reply_message?: string;
+  quoteData?: any;                 // quotation_data ดิบจาก AI (customer_query / contact_query / …)
+  slots?: QuoteSlot[];             // เรียงตามลำดับที่เซลส์พิมพ์เสมอ
+  successReport?: string;          // ข้อความสรุปรายการที่ resolve ได้
+  itemReports?: string;            // รายงานรายการที่มีปัญหา
 }
+
+export async function extractQuoteFromText(params: {
+  userId: string;                  // ใช้ดึงประวัติแชท — เว็บส่ง web:<admin>:<sp> เข้ามา
+  text: string;
+  remainingMs?: () => number;      // งบเวลา — ไม่ส่ง = ไม่จำกัด
+  checkpoint?: (step: string) => void;   // ด่านตรวจของ C.3 — ไม่ส่ง = ไม่ตรวจ
+}): Promise<ExtractedQuote>;
 ```
 
-> ⚠️ **TDZ** — ต้องเป็นบรรทัดแรกจริง ๆ ถ้ามีการอ้าง `lineClient` ก่อนบรรทัดประกาศจะพังตอนรัน
-> ไม่ใช่ตอน compile ⇒ ด่านตรวจคือ `npx tsc --noEmit` **บวก** ยิงข้อความจริงใน LINE 1 รอบ
+> ⚠️ **`remainingMs` / `checkpoint` ต้องเป็น optional และค่าปริยายต้องไม่จำกัด/ไม่ตรวจ**
+> ของเดิมสองตัวนี้เป็น closure ใน `handleEvent` ที่ผูกกับ `opts.deadlineAt` / `opts.signal`
+> ถ้าทำเป็น required เส้นทางเว็บจะต้องปลอมขึ้นมา และเส้น CLI/diag ที่เรียกโดยไม่มี deadline จะพัง
+
+**`lineHandler` เหลืออะไร** — เรียก `extractQuoteFromText()` 1 ครั้ง แล้วเอา `slots` ไปตัดสินใจ
+ส่ง Flex เหมือนเดิมทุกบรรทัด (บรรทัด 1802 เป็นต้นไปไม่ต้องแตะ) · branch `REGISTER` ยังอยู่ที่เดิม
+
+> **กติกาเหล็กของเฟสนี้: ย้ายล้วน ห้ามปรับปรุงอะไรไปพร้อมกัน**
+> prompt ต้องเหมือนเดิมทุกตัวอักษร (รวมช่องว่าง/ย่อหน้า — มันเป็นส่วนหนึ่งของ input ที่โมเดลเห็น)
+> · ตัวเลข `MAX_EXTRACTION_ATTEMPTS = 3` และเกณฑ์ `remainingMs() < 8_000` ห้ามขยับ
+> · ลำดับการเรียก `findProduct` ต้องยัง `Promise.all` พร้อมกันเหมือนเดิม
+>
+> **ด่าน:** `diag:extraction-reliability` · `diag:customer-search` (ก่อน–หลัง) · `diag:queue-sim` ·
+> `npx tsc --noEmit` · **ยิงข้อความจริงใน LINE 3 เคส** (ดูท้าย §6.0)
 
 ### ขั้น 2 — migration + ตัวตนพร็อกซี · `services/webIdentity.ts` (ใหม่)  **[เฟส B]**
 
@@ -1063,46 +1246,71 @@ listOdooQuotationMakers()          → 70 ชื่อผู้จัดทำ�
 > ⇒ **cache TTL** แบบเดียวกับ `services/rules/cache.ts` + ตั้ง `statement_timeout`
 > **`sale_orders` ไม่ถูกแตะเลยทั้งตอนออกใบและตอน export**
 
-### ขั้น 3 — ตัวกลาง · `services/webChatService.ts` (ใหม่)  **[เฟส C]**
+### ขั้น 3′ — หลังบ้านของหน้าเว็บ · `services/webQuoteService.ts` (ใหม่)  **[เฟส D]**
 
-`runWebChat({ adminId, spUserId, kind: 'text'|'postback', text?, data? })`
+ไฟล์ใหม่ทั้งก้อน · **ไม่แตะ `handleEvent` ไม่มี Flex ไม่มี replyToken** · คืน "ข้อมูลดิบ" ให้ frontend
+เรนเดอร์เอง · ทุกฟังก์ชันรับ `adminId` + `spUserId` แล้วแปลงเป็น `webUserId` ด้วย `ensureWebProxy()`
+จาก §2 ก่อนเสมอ (กัน FK 23503 + refresh ชื่อ/ลายเซ็นเซลส์ให้ทันปัจจุบัน)
 
-* `ensureWebProxy()` ก่อนเสมอ (กัน FK 23503 + refresh โปรไฟล์)
-* ประกอบ synthetic event หน้าตาเดียวกับที่ LINE ส่งมา · `replyToken = 'web-<uuid>'`
-* `createCaptureClient()` → `handleEvent(event, { client, deadlineAt, signal })`
-* **`drainWarnings(webUserId)`** หลัง handleEvent คืนค่า → ต่อท้าย captured เป็นฟองเตือน (ดู 3.3)
-* **คิวแยกของตัวเอง** `new KeyedTaskQueue(4)` — ห้ามใช้ instance เดียวกับ `/callback`
-* ใช้ `runWithDeadline` ตัวเดิม แต่ส่งงบ `WEB_BUDGET_MS = 60_000`
-* แปลง action ที่เป็น `uri` ชี้ `liff.line.me/...` → `/web/quote-edit?...` **ที่จุดเดียว**
+```ts
+// 1) ข้อความ → ร่าง (ยังไม่เขียน quotations)
+proposeFromText({ adminId, spUserId, text })
+  → { slots, quoteData, customerCandidates, contactCandidates, unresolvedCount, extractionFailed }
+  ใช้ extractQuoteFromText() จากขั้น 1′ + findCustomerCandidates/findContactCandidates
+  ⚠️ ยังไม่ deletePendingQuotations และยังไม่ insert — ให้แอดมินเห็นฟอร์มก่อนตัดสินใจ
 
-### ขั้น 4 — โหมด advise · `services/quotePolicy.ts` (ใหม่) + จุดต่อ 3 จุด  **[เฟส E]**
+// 2) ฟอร์มที่แอดมินเคาะแล้ว → ร่างจริงใน DB
+createDraft({ adminId, spUserId, customerId, contactId, items })
+  → { quotes }           ใช้ processQuotationRequest() / insertDraftQuotations() ตัวเดิม
+
+// 3) บันทึกการแก้ในฟอร์ม — ใช้ PUT /api/quotation/:id เดิม ไม่เขียนใหม่
+
+// 4) ยืนยัน / ยกเลิก — ใช้ POST /api/quotation/:id/confirm | /cancel เดิม ไม่เขียนใหม่
+
+// 5) revise
+reviseQuotation({ adminId, spUserId, quotationNo })
+  → { draftQuoteId }
+  ทำตามลำดับเดียวกับ quotationAgent.handleQuotationEditRequest() เป๊ะ:
+  loadActiveQuotation → validateQuotationItems → ยกเลิกร่างค้าง → insertDraftQuotations(appendReviseFrom)
+  ต่างกันแค่ **คืน id ของร่าง แทนที่จะคืน Flex** ⇒ frontend เปิดฟอร์มร่างนั้นต่อในหน้าเดิม
+```
+
+**คิว** — `new KeyedTaskQueue(4)` ของตัวเอง **ห้ามใช้ instance เดียวกับ `/callback`**
+ไม่งั้นแอดมิน 1 คนวางข้อความยาว ๆ จะไปกินสล็อตของเซลส์ที่รอ LINE ตอบอยู่
+· ใช้ `runWithDeadline` ตัวเดิม งบ `WEB_BUDGET_MS = 60_000` (เว็บไม่มี replyToken 30 วิมาบีบ)
+
+> **ทำไมแยก `propose` กับ `createDraft` เป็นสองก้าว** — ของเดิมใน LINE ทำรวดเดียว
+> (`deletePendingQuotations` แล้ว insert ทันที) เพราะแชทไม่มีที่ให้ "ดูก่อนแล้วค่อยกด"
+> ฟอร์มมี ⇒ แยกก้าวได้ **และต้องแยก** ไม่งั้นแค่วางข้อความผิดก็ไปลบร่างที่ค้างอยู่ทิ้งแล้ว
+
+### ขั้น 4 — โหมด advise · `services/quotePolicy.ts` (ใหม่) + จุดต่อ 3 จุด  **[เฟส F]**
 
 ดูรายละเอียดใน §3.2 — `validateQuotationItems` (+~8 บรรทัด) · call site 8 จุด (property เดียวต่อจุด) ·
 `getQuotationSummaryMessage` (+~6 บรรทัด)
 
-### ขั้น 4b — บันทึกคำเตือนถาวรตอนยืนยัน  **[เฟส E]**
+### ขั้น 4b — บันทึกคำเตือนถาวรตอนยืนยัน  **[เฟส F]**
 
 ดู §3.5 — ตาราง `quotation_issue_warnings` + `confirmQuotationAtomic(quoteId, quote, { warnings })`
 (ไม่ส่ง `warnings` = ไม่เขียนอะไร ⇒ LINE ไม่เปลี่ยน) · ป้าย + ตัวกรองในหน้าประวัติทำรวมกับขั้น 10
 
-### ขั้น 5 — override · `services/quoteOverrides.ts` (ใหม่) + 2 migration  **[เฟส F]**
+### ขั้น 5 — override · `services/quoteOverrides.ts` (ใหม่) + 2 migration  **[เฟส G]**
 
 ดู §4 — ตาราง `quotation_overrides` + `shipping_fee_name_presets` ·
 เปลี่ยน `applyShippingFeeToQuoteGroup` → `applyQuoteGroupRules` 4 จุด ·
 แทนที่การกำหนด `shouldHave` ใน `shippingFee.ts` (~5 บรรทัด)
 
-### ขั้น 6 — ผู้ติดต่อ · `services/localContacts.ts` (ใหม่) + Arm 3  **[เฟส H]**
+### ขั้น 6 — ผู้ติดต่อ · `services/localContacts.ts` (ใหม่) + Arm 3  **[เฟส I]**
 
 ดู §5 — ตาราง `local_contacts` + sequence + Arm 3 ใน `customers_data_build` +
 watermark 1 บรรทัดใน `refreshCustomerDirectory.ts` + rebuild `customers_data_view` (`force: true`)
 
-### ขั้น 6b — รายการงานค้าง "คีย์ผู้ติดต่อเข้า Odoo" (อยู่ใน `services/localContacts.ts`)  **[เฟส H]**
+### ขั้น 6b — รายการงานค้าง "คีย์ผู้ติดต่อเข้า Odoo" (อยู่ใน `services/localContacts.ts`)  **[เฟส I]**
 
 ดู §5.6 — คอลัมน์ `local_contacts.odoo_added_at` + รายการงานค้างพร้อมปุ่มคัดลอกรายช่อง +
 ปุ่มดาวน์โหลด xlsx/csv (หัวคอลัมน์ไทย ไม่ใช่ฟิลด์ Odoo) + pre-flight เตือนตอน export ใบเสนอราคา
 **ไม่มีไฟล์ service ใหม่** — งานเล็กพอที่จะอยู่ใน `localContacts.ts` ได้
 
-### ขั้น 6c — ตรึงทีมขายตอนยืนยันใบ  **[เฟส G]**
+### ขั้น 6c — ตรึงทีมขายตอนยืนยันใบ  **[เฟส H]**
 
 ดู §5.7 — คอลัมน์ `quotations.customer_sales_team` + resolve ใน `confirmQuotationAtomic()`
 + `COALESCE(snapshot, join สด)` ที่จุดประกอบแถว export
@@ -1110,7 +1318,7 @@ watermark 1 บรรทัดใน `refreshCustomerDirectory.ts` + rebuild `cu
 > **ขั้นนี้เป็นขั้นเดียวของแผนที่เปลี่ยนพฤติกรรมของใบที่ออกจาก LINE** — แยก commit ออกมาต่างหาก
 > เพื่อให้ย้อนกลับได้เดี่ยว ๆ โดยไม่ต้องถอยทั้งแผน
 
-### ขั้น 7 — audit ของตารางใหม่  **[เฟส F + H]**
+### ขั้น 7 — audit ของตารางใหม่  **[เฟส G + I]**
 
 เติม 3 ตารางใหม่เข้า loop ของ [2026-09-03_04_audit_logs.sql](../migrations/changes/2026-09-03_04_audit_logs.sql#L330)
 (migration ใหม่ที่ใช้ฟังก์ชัน `audit_stmt()` ตัวเดิม — ไม่แก้ไฟล์เก่า):
@@ -1122,56 +1330,97 @@ watermark 1 บรรทัดใน `refreshCustomerDirectory.ts` + rebuild `cu
 ```
 ทั้งสามเขียนเฉพาะตอนแอดมินกดปุ่ม ⇒ ไม่เข้าข่ายกฎห้ามติด trigger (ตารางที่ sync/แชทเขียนรัว)
 
-### ขั้น 8 — route · `index.ts` (ต่อท้ายกลุ่ม `/api/admin/*`)  **[เฟส B + C + F + H]**
+### ขั้น 8′ — route · `index.ts` (ต่อท้ายกลุ่ม `/api/admin/*`)  **[เฟส B + D + F + G + I]**
 
-| route | สิทธิ์ | หน้าที่ |
-| --- | --- | --- |
-| `GET /api/admin/webchat/makers` | admin, subadmin | 70 ชื่อผู้จัดทำจาก Odoo |
-| `GET/PUT /api/admin/webchat/me` | admin, subadmin | อ่าน/ตั้ง `employee_quotation_id` — **PUT 400 ถ้าไม่อยู่ในรายชื่อ** |
-| `GET /api/admin/webchat/salespersons` | admin, subadmin | รายชื่อ "ออกในนาม" + สถานะลายเซ็น |
-| `GET /api/admin/webchat/history?spUserId=` | admin, subadmin | โหลดบทสนทนาเดิมจาก `messages` |
-| `POST /api/admin/webchat/message` | admin, subadmin | วางข้อความ → คืน messages + warnings |
-| `POST /api/admin/webchat/postback` | admin, subadmin | ยืนยัน/ยกเลิก/เลือกบริษัท/เลือกรุ่น |
-| `GET /api/admin/webchat/payment-terms` | admin, subadmin | 15 ค่าเครดิตที่มีจริง (ฟีเจอร์ 1) |
-| `PUT /api/admin/webchat/quotes/:id/credit` | admin, subadmin | เขียนทับเครดิตของใบนั้น — **400 ถ้าค่าไม่อยู่ในชุด** |
-| `GET/POST/DELETE /api/admin/webchat/shipping-presets` | admin, subadmin | dropdown ชื่อค่าขนส่ง (ฟีเจอร์ 2) |
-| `PUT /api/admin/webchat/quotes/:id/shipping` | admin, subadmin | ตั้ง `shipping_mode` (`force_on`/`force_off`/ล้าง) + ชื่อ/ราคาของบรรทัด |
-| `POST /api/admin/webchat/contacts` | admin, subadmin | เพิ่มผู้ติดต่อใหม่ (ฟีเจอร์ 3) |
-| `DELETE /api/admin/webchat/contacts/:id` | admin, subadmin | ลบผู้ติดต่อที่เพิ่งเพิ่ม (409 ถ้ามีใบอ้างอยู่) |
-| `GET /api/admin/webchat/contacts/pending` | admin, subadmin | รายการงานค้างคีย์เข้า Odoo (`scope=pending\|all`) + ธง "ค้างเกิน 7 วัน" |
-| `GET /api/admin/webchat/contacts/pending.xlsx\|.csv` | admin, subadmin | ดาวน์โหลดรายการเดียวกัน หัวคอลัมน์ภาษาไทย (ไม่ใช่ไฟล์ import ของ Odoo) |
-| `POST /api/admin/webchat/contacts/mark-added` | admin, subadmin | ประทับ/ถอน `odoo_added_at` (ถอน = set NULL) · รับหลาย id พร้อมกัน |
-| `GET /api/admin/quotations/export/preflight` | admin, subadmin | นับใบที่อ้างผู้ติดต่อซึ่งยังไม่เข้า Odoo → ให้ UI เตือนก่อนดาวน์โหลด |
-| `GET /web/quote-edit` | เท่ากับ `/liff/quote-edit` | เสิร์ฟ `quote-edit.html` เดิม + inject `window.liff` shim |
+> **เปลี่ยนชื่อกลุ่มจาก `webchat` เป็น `webquote`** — v5 ไม่ใช่แชทแล้ว ชื่อเดิมจะทำให้เข้าใจผิดถาวร
+> · เฟส B ปล่อย `webchat/makers` กับ `webchat/me` ไปแล้วบน `dev` **แต่ยังไม่เคยขึ้น production**
+> ⇒ **เฟส D ย้ายสองตัวนี้ไป `webquote/` ด้วย** ไม่ต้องทำ backward-compat ให้เปลือง
 
-**เรื่อง auth ของ `/web/quote-edit`** — หน้านี้เรียก `PUT /api/quotation/:id`, `/confirm`, `/cancel`
-ซึ่ง **ไม่ได้ตรวจ LINE token อยู่แล้ว** (ใช้ `isQuotationOwner()` จาก `userId` ใน body — [index.ts:1146](../index.ts#L1146))
-และ `/liff/quote-edit` ก็เปิดสาธารณะอยู่ตอนนี้ ⇒ ระดับความปลอดภัย **เท่าเดิม ไม่ได้เปิดช่องใหม่**
+| route | เฟส | สิทธิ์ | หน้าที่ |
+| --- | --- | --- | --- |
+| `GET /api/admin/webquote/makers` | B→D | admin, subadmin | 70 ชื่อผู้จัดทำจาก Odoo |
+| `GET/PUT /api/admin/webquote/me` | B→D | admin, subadmin | อ่าน/ตั้ง `employee_quotation_id` — **PUT 400 ถ้าไม่อยู่ในรายชื่อ** |
+| `GET /api/admin/webquote/salespersons` | D | admin, subadmin | รายชื่อ "ออกในนาม" + สถานะลายเซ็น (`listActingSalespersons()` มีแล้วจากเฟส B) |
+| `POST /api/admin/webquote/propose` | D | admin, subadmin | **วางข้อความ → คืน `slots` + candidates** (ยังไม่เขียน DB) |
+| `POST /api/admin/webquote/drafts` | D | admin, subadmin | ฟอร์มที่เคาะแล้ว → สร้างร่างจริง คืน `quotes` |
+| `POST /api/admin/webquote/revise` | D | admin, subadmin | `quotationNo` → ร่าง revision คืน `draftQuoteId` |
+| `GET /api/admin/webquote/payment-terms` | F | admin, subadmin | 15 ค่าเครดิตที่มีจริง (ฟีเจอร์ 1) |
+| `PUT /api/admin/webquote/quotes/:id/credit` | G | admin, subadmin | เขียนทับเครดิตของใบนั้น — **400 ถ้าค่าไม่อยู่ในชุด** |
+| `GET/POST/DELETE /api/admin/webquote/shipping-presets` | G | admin, subadmin | dropdown ชื่อค่าขนส่ง (ฟีเจอร์ 2) |
+| `PUT /api/admin/webquote/quotes/:id/shipping` | G | admin, subadmin | ตั้ง `shipping_mode` (`force_on`/`force_off`/ล้าง) + ชื่อ/ราคาของบรรทัด |
+| `POST /api/admin/webquote/contacts` | I | admin, subadmin | เพิ่มผู้ติดต่อใหม่ (ฟีเจอร์ 3) |
+| `DELETE /api/admin/webquote/contacts/:id` | I | admin, subadmin | ลบผู้ติดต่อที่เพิ่งเพิ่ม (409 ถ้ามีใบอ้างอยู่) |
+| `GET /api/admin/webquote/contacts/pending` | I | admin, subadmin | รายการงานค้างคีย์เข้า Odoo (`scope=pending\|all`) + ธง "ค้างเกิน 7 วัน" |
+| `GET /api/admin/webquote/contacts/pending.xlsx\|.csv` | I | admin, subadmin | ดาวน์โหลดรายการเดียวกัน หัวคอลัมน์ภาษาไทย (ไม่ใช่ไฟล์ import ของ Odoo) |
+| `POST /api/admin/webquote/contacts/mark-added` | I | admin, subadmin | ประทับ/ถอน `odoo_added_at` (ถอน = set NULL) · รับหลาย id พร้อมกัน |
+| `GET /api/admin/quotations/export/preflight` | I | admin, subadmin | นับใบที่อ้างผู้ติดต่อซึ่งยังไม่เข้า Odoo → ให้ UI เตือนก่อนดาวน์โหลด |
 
-> ⚠️ **แต่ endpoint ใหม่ทั้ง 13 ตัวข้างบนต้องผ่าน middleware ตรวจ JWT ของ Admin Portal ทุกตัว**
-> — โหมด advise ทำให้ "ใครยิง `POST /api/admin/webchat/message` ได้ = ออกใบข้ามกฎได้ทุกข้อ"
+**หายไปจาก v4 (ไม่ต้องทำแล้ว):** `webchat/history` · `webchat/message` · `webchat/postback`
+· `GET /web/quote-edit` + `window.liff` shim — ฟอร์มอยู่ในหน้าเดียวกันแล้ว ไม่ต้องเสิร์ฟหน้า LIFF ซ้ำ
+
+**endpoint เดิมที่หน้าใหม่ใช้ตรง ๆ โดยไม่ต้องแก้อะไร** (ตรวจแล้วว่าไม่มี LINE — §0.3)
+`PUT /api/quotation/:id` · `POST /api/quotation/:id/confirm` · `/cancel` ·
+`POST /api/quotations/delivery-preview` · `GET /api/products/search` · `/api/products/:code/blocked` ·
+`/api/customers/search` · `/api/customer/:id/contacts` · `/api/shipping-fee/config`
+
+> ⚠️ **endpoint ใหม่ในกลุ่ม `/api/admin/webquote/*` ต้องผ่าน `adminAuthMiddleware` + `requireRole` ทุกตัว**
+> — โหมด advise (เฟส F) ทำให้ "ใครยิง `POST /webquote/drafts` ได้ = ออกใบข้ามกฎได้ทุกข้อ"
 > จึงเป็นเส้นที่ต้องรัดกว่าเส้น LIFF เดิม ไม่ใช่เท่ากัน
+>
+> ⚠️ **แต่ endpoint เดิม 9 ตัวข้างบนยังตรวจสิทธิ์ด้วย `isQuotationOwner()` จาก `userId` ใน body เหมือนเดิม**
+> ([index.ts:1146](../index.ts#L1146)) — หน้าใหม่ต้องส่ง `webUserId` ที่ได้จาก `/webquote/drafts` ไปด้วย
+> ระดับความปลอดภัยของเส้นเหล่านี้ **เท่าเดิม ไม่ได้เปิดช่องใหม่** (วันนี้ `/liff/quote-edit` ก็เปิดสาธารณะอยู่)
+> ถ้าจะรัดเพิ่มให้ทำเป็นงานแยก ไม่ใช่ของแผนนี้
 
-### ขั้น 9 — Frontend · `frontend/src/admin/QuoteChat.tsx` (ใหม่) + `AdminApp.tsx`  **[เฟส D + E + F + H]**
+### ขั้น 9′ — Frontend หน้าเดียว · `frontend/src/admin/QuoteRequest.tsx` (ใหม่) + `AdminApp.tsx`  **[เฟส E + F + G + I]**
 
-* แท็บใหม่ `{ key: 'quotechat', label: 'ขอใบเสนอราคา', roles: ['admin','subadmin'] }`
-* ยังไม่ตั้ง `employee_quotation_id` → บล็อกหน้าไว้ ให้เลือกชื่อจาก dropdown ก่อน (ครั้งเดียว)
-  — dropdown ค้นหาได้อย่างเดียว **ไม่มีช่องพิมพ์ชื่ออิสระ**
-* แถบบน: dropdown "ออกในนาม" (บังคับเลือกก่อนพิมพ์) + ป้ายเตือนถ้ายังไม่มีลายเซ็น
-  + แสดงตัวเล็ก ๆ ว่า "ผู้จัดทำ: &lt;ชื่อแอดมิน&gt;"
-* textarea วางข้อความ + สายฟองแชท + ปุ่มจากการ์ด
-* `FlexRenderer` เล็ก ๆ รองรับเฉพาะ subset ที่ระบบใช้จริง:
-  `bubble(header/body/footer)` · `box(vertical/horizontal)` · `text` · `separator` · `filler` ·
-  `button(postback/uri/message)` · `quickReply` (~200 บรรทัด)
-* **ฟองคำเตือนสีเหลือง** ต่อท้ายการ์ด (จาก `warnings`) · `SYSTEM_ERROR` เป็นแถบแดงแยกชนิด (ดู 3.1)
-* **แผงเครื่องมือแอดมิน** (ข้างการ์ดสรุป — เปิดเมื่อมีใบร่างอยู่):
-  * 💳 **เครดิต** — dropdown 15 ค่า + ปุ่ม "คืนค่าเดิม" · แสดงค่าจริงของลูกค้ากำกับไว้ให้เทียบ
-  * 🚚 **ค่าขนส่ง** — ตารางบรรทัด (ชื่อ/ราคา/จำนวน) เพิ่ม–ลบได้ · ช่องชื่อเป็น combobox
-    (เลือก preset หรือพิมพ์ใหม่ + ติ๊ก "บันทึกไว้ใช้ครั้งหน้า") · มีหมายเหตุว่าชื่อนี้ขึ้น PDF แต่ไม่ไป Odoo
-  * 👤 **เพิ่มผู้ติดต่อ** — ปุ่มในการ์ดเลือกผู้ติดต่อ → ฟอร์ม (ชื่อ*/ตำแหน่ง/โทร/อีเมล) → เลือกให้อัตโนมัติ
-* ปุ่ม `uri` ที่ชี้ `/web/quote-edit` → เปิดแท็บใหม่ + ปุ่ม "โหลดสถานะล่าสุด" กลับมาที่แชท
+* แท็บใหม่ `{ key: 'quoterequest', label: 'ขอใบเสนอราคา', roles: ['admin','subadmin'] }`
+* **หน้าเดียว 3 ส่วนเรียงลงมา ไม่มีการเปลี่ยนหน้า ไม่มีแท็บซ้อน**
 
-### ขั้น 10 — ตัวกรอง "ออกจากเว็บ / ออกจาก LINE" · หน้าประวัติใบเสนอราคา  **[เฟส I]**
+**ส่วนที่ 0 — แถบตั้งค่า (บนสุด)**
+* ยังไม่ตั้ง `employee_quotation_id` → บล็อกทั้งหน้า ให้เลือกชื่อจาก dropdown ก่อน (ครั้งเดียว)
+  — dropdown ค้นหาได้อย่างเดียว **ไม่มีช่องพิมพ์ชื่ออิสระ** (ฝั่ง server ตอบ 400 อยู่แล้ว)
+* dropdown "ออกในนาม" (บังคับเลือกก่อนพิมพ์) + ป้ายเตือนถ้าเซลส์คนนั้นยังไม่มีลายเซ็น
+* ป้ายเล็ก ๆ ว่า "ผู้จัดทำ: &lt;ชื่อแอดมิน&gt;" — ให้เห็นตลอดว่าใบนี้จะถูกบันทึกในนามใคร
+
+**ส่วนที่ 1 — ช่องพิมพ์ข้อความ**
+* `textarea` วางข้อความยาว ๆ + ปุ่ม "สร้างร่าง" → `POST /webquote/propose`
+* ระหว่างรอ: สปินเนอร์ + ข้อความว่ากำลังสกัด (งบ 60 วิ)
+* `extraction_failed` → แถบแดง "ระบบไม่ว่างชั่วคราว" + ปุ่มลองใหม่ **โดยไม่ล้างข้อความที่พิมพ์ไว้**
+
+**ส่วนที่ 2 — ฟอร์มร่าง (หัวใจของ v5)**
+* หัวฟอร์ม: บริษัท / ผู้ติดต่อ / เครดิต / เงื่อนไขจัดส่ง — เป็น dropdown ที่ **เติมค่าที่ AI เดาไว้ให้ก่อน**
+  * บริษัทกำกวม (มี `customerCandidates` หลายตัว) = dropdown ที่ยังไม่เลือกให้ + ไฮไลต์ว่าต้องเคาะ
+  * ค้นหาเพิ่มได้ผ่าน `/api/customers/search` เดิม
+* ตารางสินค้า — 1 แถวต่อ 1 `slot` **เรียงตามที่เซลส์พิมพ์เสมอ**:
+
+  | สถานะ slot | หน้าตาในตาราง |
+  | --- | --- |
+  | `resolved` | แถวปกติ แก้จำนวน/ราคา/ส่วนลดได้ |
+  | ไม่ resolved + มี `candidates` (กำกวม) | **dropdown ในแถวนั้น** เลือกรุ่นแล้วแถวกลายเป็นปกติทันที |
+  | ไม่ resolved + ไม่มี `candidates` (พิมพ์ผิด) | แถวสีแดง + ช่องค้นหาสินค้า (`/api/products/search`) |
+
+  ⇒ **ไม่ต้องมี state `pending_product` ใน DB เลย** — ความกำกวมถูกแก้ในหน้าเดียวก่อนสร้างร่าง
+* เพิ่มแถวสินค้าเอง / ลบแถว / จัดลำดับ ได้ตลอด
+* ปุ่ม "สร้างร่าง" → `POST /webquote/drafts` → ได้ `quotes` แล้วฟอร์มสลับเป็นโหมดแก้ใบร่าง
+  ซึ่งบันทึกด้วย `PUT /api/quotation/:id` เดิม
+* ปุ่ม **ยืนยัน** → `POST /api/quotation/:id/confirm` เดิม → แสดงเลขที่ + ลิงก์ PDF ในหน้าเดียวกัน
+* ปุ่ม **ยกเลิก** → `/cancel` เดิม
+
+**ส่วนที่ 3 — revise**
+* ช่องกรอกเลขที่ใบ (หรือปุ่มจากหน้าประวัติ) → `POST /webquote/revise` → ได้ `draftQuoteId`
+  → **โหลดเข้าฟอร์มส่วนที่ 2 ในหน้าเดิม** ไม่เปลี่ยนหน้า
+
+**ของที่มาทีหลัง (ต่อยอดบนฟอร์มเดิม ไม่ใช่หน้าใหม่)**
+* เฟส F — **แถบคำเตือนเหลือง** เหนือปุ่มยืนยัน (จาก `warnings`) · `SYSTEM_ERROR` เป็นแถบแดงแยกชนิด (§3.1)
+* เฟส G — 💳 เครดิต: dropdown 15 ค่า + ปุ่ม "คืนค่าเดิม" แสดงค่าจริงของลูกค้ากำกับไว้ให้เทียบ
+  · 🚚 ค่าขนส่ง: แถวในตารางสินค้าเลย ช่องชื่อเป็น combobox (เลือก preset หรือพิมพ์ใหม่ +
+  ติ๊ก "บันทึกไว้ใช้ครั้งหน้า") + หมายเหตุว่าชื่อนี้ขึ้น PDF แต่ไม่ไป Odoo
+* เฟส I — 👤 เพิ่มผู้ติดต่อ: ปุ่มข้าง dropdown ผู้ติดต่อ → ฟอร์ม (ชื่อ*/ตำแหน่ง/โทร/อีเมล) → เลือกให้อัตโนมัติ
+
+> **ไม่มี `FlexRenderer`** — เป็นสิ่งที่ v5 ตัดทิ้งทั้งก้อน (~200 บรรทัดที่ v4 ต้องเขียน)
+
+### ขั้น 10 — ตัวกรอง "ออกจากเว็บ / ออกจาก LINE" · หน้าประวัติใบเสนอราคา  **[เฟส J]**
 
 **ที่มาของค่า:** `quotations.user_id` ขึ้นต้นด้วย `web:` = ออกจากเว็บ · นอกนั้น = ออกจาก LINE
 ⇒ **ไม่ต้องเพิ่มคอลัมน์และไม่ต้อง backfill**
@@ -1203,10 +1452,18 @@ export function sourceFilterCondition(filter: SourceFilter): string {
 
 **ไม่ต้องเพิ่ม index** — ตาราง 1,458 แถว มี `idx_quotations_user_id` อยู่แล้ว
 
-### ขั้น 11 — เอกสาร  **[เฟส J]**
+### ขั้น 11 — เอกสาร + ถอยเฟส A ออก  **[เฟส K]**
 
 เติมหัวข้อสั้นใน `AGENTS.md` (แผนที่งาน + โครงสร้าง + กติกา "โหมด advise ห้อยกับ `web:%` เท่านั้น")
 — ไม่มี env ใหม่ จึงไม่ต้องแตะ `DEPLOY.md`
+
+**ถอยเฟส A ออก** (§0.5) — ลบ `services/chatChannel.ts` · ถอน `opts.client` และบรรทัด
+`const lineClient = opts.client ?? defaultLineClient` ใน `handleEvent` · คืน `import { lineClient }`
+กับ `handleImage` เป็นของเดิม
+⇒ **แตะไฟล์เดียวกับเฟส C ⇒ ต้องรันด่านของเฟส C ซ้ำอีกรอบ** (รวมยิงข้อความจริงใน LINE)
+· ถ้ายังไม่อยากรันด่านหนักรอบสอง จะเก็บโค้ดเฟส A ไว้เฉย ๆ ก็ได้ ไม่มีอันตราย
+(ค่าปริยายเท่าของเดิมทุกบิต) แต่ต้องเขียนคอมเมนต์กำกับว่าไม่มีใครเรียกแล้ว
+ไม่งั้นคนอ่านทีหลังจะนึกว่ามีเส้นทางที่ยังใช้อยู่
 
 ---
 
@@ -1219,9 +1476,15 @@ export function sourceFilterCondition(filter: SourceFilter): string {
   โหมด advise คือการ **ลดชั้นผลลัพธ์** ของกฎเดิม ไม่ใช่การเขียนกฎชุดใหม่
 * ไม่แก้ `productService.ts` · `customerService.ts` · `pdfGenerator.ts` ·
   `quote-edit.html` · `blacklistService.ts` · `creditHoldService.ts`
-* ⚠️ **ข้อยกเว้นเดียว:** ขั้น 6c (ตรึงทีมขาย) แตะ `confirmQuotationAtomic()` และจุดประกอบแถวของ
-  `odooSaleOrderExport` — เป็นขั้นเดียวที่เปลี่ยนพฤติกรรมของใบที่ออกจาก LINE ด้วย (เหตุผลใน §5.7)
-  จึงต้องแยก commit และมีด่าน `diag:confirm-race` + `diag:odoo-export` กำกับ
+  — **`quote-edit.html` ไม่ถูกแตะเลยใน v5 เช่นกัน** หน้าใหม่เขียนฟอร์มของตัวเอง
+  ไม่ได้ยืมหน้านั้นมาใช้ (v4 เคยจะยืม + ใส่ `window.liff` shim — v5 ตัดทิ้ง)
+* ⚠️ **ข้อยกเว้น 2 ข้อ:**
+  * ขั้น 6c (ตรึงทีมขาย · เฟส H) แตะ `confirmQuotationAtomic()` และจุดประกอบแถวของ
+    `odooSaleOrderExport` — เปลี่ยนพฤติกรรมของใบที่ออกจาก LINE ด้วยโดยตั้งใจ (เหตุผลใน §5.7)
+    จึงต้องแยก commit และมีด่าน `diag:confirm-race` + `diag:odoo-export` กำกับ
+  * **ขั้น 1′ (ย้ายตัวสกัด · เฟส C)** แตะ `handlers/lineHandler.ts` ~265 บรรทัด
+    — ตั้งใจให้ผลลัพธ์เท่าเดิมทุกบิต แต่เป็นการผ่าตัดทางเดินหลัก จึงต้องเป็น commit "ย้ายล้วน"
+    และพิสูจน์ด้วยการยิงข้อความจริงใน LINE 3 เคส ไม่ใช่พิสูจน์ด้วยการอ่านโค้ด
 * **ไม่แก้ตาราง `customers`** — ผู้ติดต่อใหม่อยู่ในตารางของตัวเอง (จะถูก sync ทับ)
 * **ไม่ลบ/แก้ค่าเครดิตของลูกค้าในฐานข้อมูล** — override เป็นของใบนั้นใบเดียว
 
@@ -1231,8 +1494,11 @@ export function sourceFilterCondition(filter: SourceFilter): string {
 
 | ความเสี่ยง | การกัน |
 | --- | --- |
-| shadow ตัวแปรใน `handleEvent` ทำของเดิมพัง | diff 3 บรรทัด + typecheck + ยิงข้อความจริงใน LINE ก่อน/หลัง |
+| **ย้ายตัวสกัด ~265 บรรทัดออกจาก `handleEvent` แล้วบอททำงานเพี้ยน** (เฟส C — ความเสี่ยงอันดับ 1 ของ v5) | commit "ย้ายล้วน" ห้ามปรับปรุงอะไรพร้อมกัน · prompt ต้องเหมือนเดิมทุกตัวอักษรรวมช่องว่าง · `diag:extraction-reliability` + `diag:customer-search` ก่อน–หลัง · **ยิงข้อความจริงใน LINE 3 เคส** · ถอยได้ด้วย `git revert` ก้อนเดียว |
+| **prompt กลายเป็น 2 ชุดแล้วแก้ไม่ครบ** | ไม่ copy — ย้ายออกมาชุดเดียวให้ทั้ง LINE และเว็บเรียก (§0.4) · ถ้าเห็น prompt สกัดโผล่ในไฟล์ที่สองเมื่อไหร่ = ผิดกติกาแผนนี้ |
+| **`remainingMs`/`checkpoint` ถูกทำเป็น required แล้วเส้น CLI/diag พัง** | ทั้งคู่ optional · ค่าปริยาย = ไม่จำกัด/ไม่ตรวจ · `diag:web-quote` ข้อ 1 เรียกโดยไม่ส่งทั้งสองตัว |
 | โหลดจากเว็บแย่ง slot คิว LINE | คิวคนละ instance, concurrency 4 |
+| **ก้าว propose ไปลบร่างที่ค้างอยู่** | `propose` ห้ามเขียน DB เลย · `deletePendingQuotations` ย้ายไปอยู่ที่ `createDraft` เท่านั้น · Manual ข้อ 8b + `diag:web-quote` ข้อ 2 |
 | แอดมินลบร่างของเซลส์ใน LINE | `user_id` คนละค่า ⇒ `deletePendingQuotations` แตะเฉพาะร่างของคู่ (admin × เซลส์) นั้น |
 | แถวพร็อกซีโผล่ปนในหน้าจัดการพนักงาน | กรอง `NOT LIKE 'web:%'` |
 | โปรไฟล์พร็อกซีค้างเก่า | `ensureWebProxy()` refresh ทุก request (1 query) |
@@ -1264,19 +1530,27 @@ export function sourceFilterCondition(filter: SourceFilter): string {
 
 | เฟส | ด่านบังคับ |
 | --- | --- |
-| **A** | `diag:queue-sim` · **ยิงข้อความจริงใน LINE ก่อน/หลัง** (ดู §6.0 ท้ายหัวข้อ) |
-| **B** | ไม่มี diag เดิมครอบ — เคสใหม่ข้อ 9 ของ Manual (`PUT /me` ชื่อมั่ว → 400) |
-| **C** | `diag:queue-sim` (คิวแยกไม่แย่ง slot) · Manual 1 (curl ล้วน ยังไม่มี UI) |
-| **D** | `frontend lint + build` · Manual 1–6 |
-| **E** | `diag:quote-validation` (+เคสใหม่ enforce/advise) · `diag:confirm-race` · Manual 7 · 7b |
-| **F** | `diag:shipping-fee` (+เคส force_on/force_off) · `diag:odoo-export` (คอลัมน์ G · M) · `diag:pdf-render` · Manual 10 · 11 |
-| **G** | **`diag:confirm-race` + `diag:odoo-export` ทั้งก่อนและหลัง** (เฟสเดียวที่กระทบใบ LINE) · Manual 6 ของ webModeSmoke |
-| **H** | `diag:customer-search` **ก่อน–หลัง** · `diag:contact-scope` · `diag:orphan-contacts` · นับแถว view ก่อน–หลัง · Manual 12 · 12b–12d · 13 · 14 |
-| **I** | Manual 15 (เว็บ + LINE = ทั้งหมด พอดี) |
-| **J** | — |
+| ~~**A**~~ | ยกเลิก — ไม่ต้องปิดด่านแล้ว (§0.5) |
+| **B** | ✅ ผ่านแล้ว — Manual ข้อ 9 (`PUT /me` ชื่อมั่ว → 400) + ข้อ 16 (ไม่มี JWT → 401) |
+| **C** | **หนักที่สุดของแผน** — `diag:extraction-reliability` · `diag:customer-search` **ก่อน–หลัง** · `diag:queue-sim` · **ยิงข้อความจริงใน LINE 3 เคส** (ปกติ / รุ่นกำกวม / รุ่นพิมพ์ผิด — ดูท้าย §6.0) |
+| **D** | `diag:web-quote` ข้อ 1–3 (ใหม่) · Manual 1 ด้วย curl ล้วน ยังไม่มี UI |
+| **E** | `frontend lint + build` · Manual 1–6 |
+| **F** | `diag:quote-validation` (+เคสใหม่ enforce/advise) · `diag:confirm-race` · Manual 7 · 7b |
+| **G** | `diag:shipping-fee` (+เคส force_on/force_off) · `diag:odoo-export` (คอลัมน์ G · M) · `diag:pdf-render` · Manual 10 · 11 |
+| **H** | **`diag:confirm-race` + `diag:odoo-export` ทั้งก่อนและหลัง** (เฟสเดียวนอกจาก C ที่กระทบใบ LINE) · Manual 6 ของ webModeSmoke |
+| **I** | `diag:customer-search` **ก่อน–หลัง** · `diag:contact-scope` · `diag:orphan-contacts` · นับแถว view ก่อน–หลัง · Manual 12 · 12b–12d · 13 · 14 |
+| **J** | Manual 15 (เว็บ + LINE = ทั้งหมด พอดี) |
+| **K** | รันด่านของ C ซ้ำอีกรอบหลังถอยเฟส A ออก (แตะไฟล์เดียวกัน) |
 
-`scripts/diag/webModeSmoke.ts` เขียนเพิ่มทีละส่วนตามเฟส (ข้อ 1–2 ที่เฟส E · 3–4 ที่ F ·
-6 ที่ G · 5 · 7–9 ที่ H) — ไม่ต้องเขียนครบตั้งแต่เฟสแรก
+**สคริปต์ใหม่ `scripts/diag/webQuoteSmoke.ts` (`npm run diag:web-quote`)** — เขียนเพิ่มทีละส่วนตามเฟส:
+1. `extractQuoteFromText()` ด้วยข้อความจริง → ต้องได้ `slots` ครบ 3 แบบ (resolved / กำกวมมี candidate /
+   พิมพ์ผิดไม่มี candidate) และ**เรียงตามลำดับที่พิมพ์** · เรียกโดยไม่ส่ง `remainingMs`/`checkpoint` ต้องทำงานได้ **[C]**
+2. `proposeFromText()` — ต้อง**ไม่**เขียน `quotations` และ**ไม่**เรียก `deletePendingQuotations` **[D]**
+3. `createDraft()` → `PUT /api/quotation/:id` → `confirm` ครบวงจรด้วย `webUserId` **[D]**
+4. `reviseQuotation()` — ใบที่ยืนยันแล้ว → ได้ร่าง revision · ใบร่าง (ยังไม่มีเลข) → ต้องปฏิเสธ **[D]**
+
+`scripts/diag/webModeSmoke.ts` ของ v4 ยังใช้ตามเดิมสำหรับเฟส F–J (ข้อ 1–2 ที่ F · 3–4 ที่ G ·
+6 ที่ H · 5 · 7–9 ที่ I)
 
 ### 9.1 คำสั่งทั้งหมด (อ้างอิงรวม)
 
@@ -1320,21 +1594,27 @@ npm run diag:confirm-race
 9. **trim ชื่อใหม่** — ส่งชื่อที่มีช่องว่างหัว/ท้ายเข้า `POST /contacts` → ค่าที่เก็บต้องถูก trim แล้ว ·
    และต้องไม่ไปแตะชื่อของผู้ติดต่อที่มาจาก Odoo (ตรวจว่า `customers` ไม่ถูกเขียนเลย)
 
-**เคสบังคับ (ด่านของขั้น 1):** ยิงข้อความจริงใน LINE 1 รอบก่อนแก้และหลังแก้ ต้องได้ผลเหมือนกันเป๊ะ
+**เคสบังคับ (ด่านของเฟส C):** ยิงข้อความจริงใน LINE **3 เคส** ก่อนย้ายและหลังย้าย ต้องได้ผลเหมือนกันเป๊ะ
+— (1) รุ่นถูกทุกตัว → การ์ดสรุปเดิม · (2) รุ่นกำกวม → การ์ดเลือกรุ่นเดิม · (3) รุ่นพิมพ์ผิด → รายงานเดิม
 
-**Manual บนหน้าเว็บ:**
-1. ข้อความปกติ → การ์ดสรุป → ยืนยัน → ได้เลข + PDF
+**Manual บนหน้าเว็บ (ปรับเป็น v5 — ฟอร์ม ไม่ใช่แชท):**
+1. วางข้อความปกติ → กด "สร้างร่าง" → ฟอร์มมีรายการครบและเรียงตามที่พิมพ์ → ยืนยัน → ได้เลข + PDF
 2. เปิด PDF เช็คว่าชื่อ+ลายเซ็นเป็นของ**เซลส์ที่เลือก** ไม่ใช่แอดมิน
 2b. export Odoo: ช่อง H = ชื่อเซลส์ · ช่อง J = ชื่อแอดมิน (สังกัด `(PM)`/`(THT)` ถูกต้อง)
-3. รุ่นกำกวม → ปุ่มเลือกรุ่น · 4. รุ่นพิมพ์ผิด → รายงาน + ปุ่มค้นหาสินค้า · 5. บริษัทซ้ำ → ปุ่มเลือกบริษัท
-6. ลูกค้าไม่มีในระบบ → การ์ดกรอกข้อมูลลูกค้า → `/web/quote-edit`
+3. **รุ่นกำกวม → แถวนั้นเป็น dropdown** เลือกแล้วกลายเป็นแถวปกติทันที ไม่ต้องรีเฟรช
+4. **รุ่นพิมพ์ผิด → แถวสีแดง + ช่องค้นหาสินค้า** เลือกได้จากผลค้นหา
+5. **บริษัทซ้ำ → dropdown บริษัทที่หัวฟอร์ม** ยังไม่เลือกให้ + ไฮไลต์ว่าต้องเคาะ
+5b. **เพิ่ม/ลบแถวสินค้าเอง** แล้วยอดรวมต้องอัปเดตตรง
+6. ลูกค้าไม่มีในระบบ → ฟอร์มให้กรอกข้อมูลลูกค้าในหน้าเดียวกัน (ไม่เด้งออกไปหน้าอื่น)
+6b. **revise:** ใส่เลขใบที่ยืนยันแล้ว → ร่างใหม่โหลดเข้าฟอร์มในหน้าเดิม · ใบที่ยังไม่มีเลข → ต้องปฏิเสธ
 7. **ลูกค้าถูกระงับ / ติดเครดิต / สินค้าติดกฎ / ต่ำกว่าราคาขั้นต่ำ / สต็อกไม่พอ**
    → ต้องเห็น**คำเตือน** และ**ยังมีปุ่มยืนยัน** และกดแล้วออกเลขได้จริง (ฟีเจอร์ 0)
 7b. เปิดหน้าประวัติใบเสนอราคา → ใบจากข้อ 7 ต้องมีป้าย **⚠️ ข้ามกฎ N ข้อ** · คลิกแล้วเห็นข้อความ
-   ตรงกับที่เห็นในแชท · ตัวกรอง "เฉพาะที่ข้ามกฎ" ต้องได้ใบนั้น · ค่าตั้งต้น "ทั้งหมด" ต้องได้ผลเดิม ·
+   ตรงกับที่เห็นในฟอร์ม · ตัวกรอง "เฉพาะที่ข้ามกฎ" ต้องได้ใบนั้น · ค่าตั้งต้น "ทั้งหมด" ต้องได้ผลเดิม ·
    ไฟล์ export Odoo ต้องยังมี 20 คอลัมน์ A–T เท่าเดิม
-8. เซลส์คนเดียวกันพิมพ์ใน LINE พร้อมกัน — ร่างของทั้งสองฝั่งต้องไม่ลบกัน
-9. `PUT /api/admin/webchat/me` ด้วยชื่อมั่ว (curl ข้าม UI) ต้องได้ `400`
+8. เซลส์คนเดียวกันพิมพ์ใน LINE พร้อมกับแอดมินทำในเว็บ — ร่างของทั้งสองฝั่งต้องไม่ลบกัน
+8b. **วางข้อความผิดแล้วกด "สร้างร่าง" ต้องไม่ไปลบร่างที่ค้างอยู่** (ก้าว propose ห้ามเขียน DB)
+9. `PUT /api/admin/webquote/me` ด้วยชื่อมั่ว (curl ข้าม UI) ต้องได้ `400`
 10. `PUT .../credit` ด้วยค่าเครดิตมั่ว (curl) ต้องได้ `400` · ค่าที่ถูกต้องต้องขึ้น PDF + Odoo คอลัมน์ G
 11. ตั้งชื่อค่าขนส่งเป็นข้อความเอง + สั่ง `force_on` → บันทึก → เปิดหน้าแก้ไขใบ บันทึกซ้ำ →
     **ชื่อและบรรทัดต้องอยู่ครบ** · ชื่อต้องขึ้นบน PDF · Odoo คอลัมน์ M ต้องยังเป็น `SOFBLDXXXX0010`
@@ -1350,23 +1630,29 @@ npm run diag:confirm-race
 14. ลบผู้ติดต่อที่มีใบอ้างอยู่ → `409`
 15. ตัวกรองแหล่งที่มา: **เว็บ + LINE = ทั้งหมด** พอดี (ทดสอบซ้ำหลัง `UPDATE` แถวหนึ่งเป็น `user_id = NULL`
     ใน transaction ที่จบด้วย ROLLBACK) · ปุ่มส่งออกต้องกรองตรงกับตารางที่เห็น
-16. **ยิง endpoint `/api/admin/webchat/*` โดยไม่มี JWT → ต้องได้ 401 ทุกตัว**
+16. **ยิง endpoint `/api/admin/webquote/*` โดยไม่มี JWT → ต้องได้ 401 ทุกตัว**
 
 ---
 
 ## 10. ประเมินขนาด
 
+**ปรับเป็น v5 แล้ว**
+
 | ประเภท | ไฟล์ |
 | --- | --- |
-| แก้ไฟล์เดิม (จุดต่อ) | `handlers/lineHandler.ts` (3+3) · `services/quotationService.ts` (+~12 · **+~12 ที่ `confirmQuotationAtomic` ในขั้น 6c**) · `utils/flexTemplates.ts` (+~6) · `services/shippingFee.ts` (+3) · `services/quotationAgent.ts` (+1) · `scripts/sync/refreshCustomerDirectory.ts` (+1) · `db/repositories.ts` (+~20 · รวม COALESCE ของคอลัมน์ I) |
-| แก้ไฟล์เดิม (route/UI) | `index.ts` (+~470) · `frontend/src/admin/AdminApp.tsx` (+~5) · `frontend/src/admin/Quotations.tsx` (+~95 · รวม dialog pre-flight + ป้าย/ตัวกรอง "ข้ามกฎ") |
-| ไฟล์ใหม่ (service) | `chatChannel.ts` · `webIdentity.ts` · `webChatService.ts` · `quotePolicy.ts` · `quoteOverrides.ts` · `localContacts.ts` |
-| ไฟล์ใหม่ (frontend) | `QuoteChat.tsx` + `FlexRenderer.tsx` + แผงเครื่องมือแอดมิน 3 ตัว + แผงรายการงานค้างคีย์ Odoo |
-| ไฟล์ใหม่ (diag) | `scripts/diag/webModeSmoke.ts` |
-| migration | 7 ไฟล์ — `admin_users.employee_quotation_id` · `quotation_overrides` · `shipping_fee_name_presets` · `local_contacts` + `odoo_added_at` + Arm 3 · **`quotations.customer_sales_team`** · **`quotation_issue_warnings`** · audit triggers ของตารางใหม่ (ทั้งหมด additive) |
+| **ย้ายออกจากไฟล์เดิม (เฟส C)** | `handlers/lineHandler.ts` **−~265 บรรทัด** → `services/quoteExtraction.ts` แล้วเหลือจุดเรียก ~10 บรรทัด · **ย้ายล้วน ไม่ปรับปรุงอะไร** |
+| แก้ไฟล์เดิม (จุดต่อ) | `services/quotationService.ts` (+~12 · **+~12 ที่ `confirmQuotationAtomic` ในขั้น 6c**) · `utils/flexTemplates.ts` (+~6) · `services/shippingFee.ts` (+3) · `services/quotationAgent.ts` (+1) · `scripts/sync/refreshCustomerDirectory.ts` (+1) · `db/repositories.ts` (+~20 · รวม COALESCE ของคอลัมน์ I) |
+| แก้ไฟล์เดิม (route/UI) | `index.ts` (+~350 · น้อยกว่า v4 เพราะไม่มี `/web/quote-edit` + shim และไม่มี route แชท) · `frontend/src/admin/AdminApp.tsx` (+~5) · `frontend/src/admin/Quotations.tsx` (+~95 · รวม dialog pre-flight + ป้าย/ตัวกรอง "ข้ามกฎ") |
+| ไฟล์ใหม่ (service) | **`quoteExtraction.ts`** · `webIdentity.ts` ✅ · **`webQuoteService.ts`** · `quotePolicy.ts` · `quoteOverrides.ts` · `localContacts.ts` |
+| ไฟล์ใหม่ (frontend) | **`QuoteRequest.tsx`** (หน้าเดียว: ช่องพิมพ์ + ตารางสินค้าแก้ได้ + หัวฟอร์ม + revise) + แผงเครื่องมือแอดมิน 3 ตัว + แผงรายการงานค้างคีย์ Odoo |
+| ไฟล์ใหม่ (diag) | **`scripts/diag/webQuoteSmoke.ts`** + `scripts/diag/webModeSmoke.ts` |
+| ~~ตัดทิ้งจาก v4~~ | ~~`chatChannel.ts`~~ (ถอยที่ K) · ~~`webChatService.ts`~~ · ~~`FlexRenderer.tsx`~~ (~200 บรรทัด) · ~~`/web/quote-edit` + liff shim~~ |
+| migration | 7 ไฟล์ เท่าเดิม — `admin_users.employee_quotation_id` ✅ · `quotation_overrides` · `shipping_fee_name_presets` · `local_contacts` + `odoo_added_at` + Arm 3 · **`quotations.customer_sales_team`** · **`quotation_issue_warnings`** · audit triggers ของตารางใหม่ (ทั้งหมด additive) |
 
-**บรรทัดที่แตะในไฟล์ตรรกะเดิม รวม ~46 บรรทัด** (เดิม ~29 + ขั้น 6c อีก ~17)
-— ส่วนที่เหลือเป็นไฟล์ใหม่และ route/UI
+**v5 แลกอะไรกับอะไร** — เขียน frontend เองมากขึ้น (ฟอร์มจริง แทนที่จะเรนเดอร์ Flex) แต่ได้คืนมาคือ
+ตัดโค้ดตัวกลางทิ้งทั้งก้อน (`webChatService` + `FlexRenderer` + state machine + route แชท 3 เส้น)
+และ**ได้ UX ที่ตรงกับที่ต้องการจริง** · ราคาที่ต้องจ่ายเพิ่มคือเฟส C ซึ่งเป็นการผ่าตัดทางเดินหลักของบอท
+ครั้งเดียว แล้วจบ
 
 ---
 
@@ -1403,9 +1689,16 @@ npm run diag:confirm-race
 * **ตรึงทีมขาย (คอลัมน์ I) ตอนยืนยันใบ** ด้วย `COALESCE(snapshot, join สด)` — ยอมรับว่าเป็น
   ขั้นเดียวที่เปลี่ยนพฤติกรรมของใบ LINE ด้วย จึงแยก commit (§5.7)
 
-## 12. คำถามที่ยังค้าง — **ไม่มีแล้ว**
+## 12. คำถามที่ยังค้าง
 
-ปิดครบทั้งหมดเมื่อ 2026-09-07:
+**v5 เปิดคำถามใหม่ 2 ข้อ ที่ตั้งใจให้ตอบตอนถึงเฟสนั้น ไม่ใช่ตอนนี้:**
+
+| คำถาม | ตอบเมื่อ |
+| --- | --- |
+| ยังต้องมี "ถังพักคำเตือน" (`recordWarnings`/`drainWarnings`) ไหม เมื่อ `webQuoteService` เรียก `validateQuotationItems` เองได้ — เหลือแค่เส้น `confirm` ที่ตรวจกฎอยู่ข้างใน endpoint | **เฟส F** ตอนเห็นโค้ดจริง (§3.3) |
+| ฟอร์มควรเก็บร่างที่ยังไม่กด "สร้างร่าง" ไว้ข้ามการรีเฟรชหน้าไหม (ตอนนี้แผนบอกว่าไม่เก็บ — หายก็พิมพ์ใหม่) | **เฟส E** ตอนลองใช้จริง |
+
+**ที่ปิดไปแล้วเมื่อ 2026-09-07:**
 
 | คำถาม | คำตอบ |
 | --- | --- |
