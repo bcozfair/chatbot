@@ -64,6 +64,14 @@ const CASES: Case[] = [
 ];
 
 /**
+ * ตัด \r ทิ้งก่อนเทียบเสมอ — git ตั้ง `* text=auto` ไว้ ⇒ ไฟล์ golden ถูกเก็บเป็น LF ในรีโป
+ * แต่ตอน checkout บน Windows กลายเป็น CRLF · ถ้าเทียบดิบ ๆ ด่านจะล้มทั้งที่โค้ดไม่ได้เปลี่ยน
+ * (ฝั่งที่สร้างสดจาก JSON.stringify เป็น \n เสมอ ไม่ว่าเครื่องไหน)
+ * ที่ยังจับได้ครบคือช่องว่างทุกตัวที่มีความหมาย — เว้นวรรคท้ายบรรทัด/ย่อหน้า/บรรทัดว่าง
+ */
+const lf = (s: string): string => s.replace(/\r\n/g, '\n');
+
+/**
  * ลบ "ค่าที่เปลี่ยนทุกครั้งโดยธรรมชาติ" ออกก่อนเทียบ — ไม่ใช่การผ่อนเกณฑ์
  * (uuid ของใบ / เลขที่ใบ / วันที่ / เวลา) ที่เหลือต้องตรงทุกตัวอักษร
  */
@@ -96,8 +104,8 @@ async function main() {
   // ⇒ ถ้าใครไป "จัดย่อหน้าให้สวย" ในไฟล์ service วันหลัง ด่านนี้จะล้มทันที
   let promptOk = true;
   if (!SAVE) {
-    const want = fs.readFileSync(PROMPT_GOLDEN_PATH, 'utf8');
-    const got = buildExtractionPrompt('<<CONTENT>>', '<<HISTORY>>');
+    const want = lf(fs.readFileSync(PROMPT_GOLDEN_PATH, 'utf8'));
+    const got = lf(buildExtractionPrompt('<<CONTENT>>', '<<HISTORY>>'));
     promptOk = want === got;
     if (promptOk) {
       console.log(`${GREEN}✓${RESET} prompt เหมือนก่อนย้ายทุกตัวอักษร (${got.length} ตัวอักษร)`);
@@ -168,7 +176,7 @@ async function main() {
     process.exit(1);
   }
 
-  const golden = JSON.parse(fs.readFileSync(GOLDEN_PATH, 'utf8'));
+  const golden = JSON.parse(lf(fs.readFileSync(GOLDEN_PATH, 'utf8')));
   let pass = 0, fail = 0;
   for (const c of CASES) {
     const want = golden[c.key];
