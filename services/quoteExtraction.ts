@@ -57,6 +57,18 @@ export interface ExtractQuoteParams {
   remainingMs?: () => number;
   /** ด่านตรวจก่อนเริ่มขั้นตอนหนัก (C.3) — ไม่ส่ง = ไม่ตรวจ */
   checkpoint?: (step: string) => void;
+  /**
+   * ล้างใบร่างที่ค้างของ `userId` ทิ้งก่อนสกัดหรือไม่ — **ค่าปริยาย `true` = พฤติกรรมของ LINE เดิมเป๊ะ**
+   *
+   * ข้อยกเว้นเดียวของ "ค่าปริยาย = ไม่ทำอะไร" ในไฟล์นี้ และตั้งใจให้เป็นแบบนั้น:
+   * ทางเดินของ LINE พึ่งพาการล้างตรงนี้อยู่ (แชทไม่มีที่ให้ "ดูก่อนแล้วค่อยกด" — สกัดใหม่
+   * = ทิ้งของเก่าเสมอ) ถ้าค่าปริยายเป็น false เส้นทางเดิมจะเปลี่ยนพฤติกรรมเงียบ ๆ
+   *
+   * หน้าเว็บส่ง `false` เพราะ `proposeFromText()` เป็นแค่การ "ขอดูร่าง" ยังไม่ตัดสินใจอะไร —
+   * แค่วางข้อความผิดแล้วไปลบร่างที่แอดมินทำค้างไว้ทิ้ง คือของที่แก้คืนไม่ได้
+   * (docs/plan-web-quote-request.md ขั้น 3′ · ด่าน `diag:web-quote` ข้อ 2 ตรวจข้อนี้โดยตรง)
+   */
+  purgePending?: boolean;
 }
 
 // คำนวณรายการสินค้าที่พร้อมบันทึก (ราคา/ส่วนลดสุทธิ) จาก product ในฐานข้อมูล + item ที่เซลส์ระบุ + ส่วนลดระดับบิล
@@ -225,6 +237,7 @@ export async function extractQuoteFromText(params: ExtractQuoteParams): Promise<
   const content = params.text;
   const remainingMs = params.remainingMs ?? (() => Infinity);
   const checkpoint = params.checkpoint ?? (() => {});
+  const purgePending = params.purgePending ?? true;
 
       checkpoint('ดึงประวัติแชท + สกัดคำสั่งด้วย LLM');
       // ดึงประวัติการคุยย้อนหลังของ userId นี้
@@ -314,7 +327,8 @@ export async function extractQuoteFromText(params: ExtractQuoteParams): Promise<
       // เพื่อให้ branch REGISTER/PRODUCT_INFO/UNCLEAR ที่ไม่ได้ย้ายมายังอยู่ที่เดิมและอ่านง่าย
       if (aiResult.intent === 'QUOTATION' && aiResult.quotation_data && aiResult.quotation_data.items && aiResult.quotation_data.items.length > 0) {
         // ลบรายการใบเสนอราคาเก่าที่ยังค้างอยู่ทั้งหมดออกถาวร
-        await deletePendingQuotations(userId);
+        // (หน้าเว็บปิดด้วย purgePending: false — ยังไม่ถึงขั้นตัดสินใจ ดูหัวข้อ ExtractQuoteParams)
+        if (purgePending) await deletePendingQuotations(userId);
 
         let quoteData = aiResult.quotation_data;
         let isAllValid = true;

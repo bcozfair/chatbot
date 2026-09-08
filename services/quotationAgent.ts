@@ -36,8 +36,12 @@ export function detectQuotationEditIntent(text: string): EditIntent | null {
  * ดึงใบเสนอราคาที่ "ยังใช้งานอยู่" (active/ล่าสุด) จากเลขที่ที่เซลส์อ้างถึง
  * รองรับทั้งเลขฐาน (QP-260705030) และเลข revision (QP-260705030-01)
  * คืนค่าใบที่ revision สูงสุดและยังไม่ถูกยกเลิก
+ *
+ * export ตั้งแต่เฟส D — `services/webQuoteService.ts` ต้องเดินลำดับเดียวกับ
+ * `handleQuotationEditRequest()` เป๊ะ การก๊อปตรรกะ "เลือกใบที่ใช้งานอยู่" ไปไว้อีกที่
+ * แปลว่าวันหนึ่งสองเส้นจะเลือกคนละใบโดยไม่มีใครรู้ตัว
  */
-async function loadActiveQuotation(quoteNo: string): Promise<any | null> {
+export async function loadActiveQuotation(quoteNo: string): Promise<any | null> {
   let baseQuoteNo = quoteNo;
   const m = quoteNo.match(/^((?:QP|QT)-\d+)(-\d+)$/i);
   if (m) baseQuoteNo = m[1];

@@ -386,10 +386,23 @@ export async function getIssuerSnapshot(userId: string | null | undefined): Prom
 
 /** มีไฟล์ลายเซ็นของรหัสพนักงานนี้ไหม — กติกาเดียวกับ GET /api/admin/salespersons */
 export function hasSaleSignature(salespersonId: string | null | undefined): boolean {
+  return saleSignatureUrl(salespersonId) !== null;
+}
+
+/**
+ * URL ลายเซ็นของเซลส์ที่หน้าเว็บเอาไปใส่ `<img src>` ได้ตรง ๆ — ไม่มีไฟล์ = null
+ *
+ * นามสกุลจริงรู้ได้เฉพาะฝั่ง server (ไฟล์เป็น .png หรือ .jpg ก็ได้) ⇒ ถ้าไม่ส่งมาให้
+ * หน้าเว็บจะต้องเดานามสกุลเอง = ขึ้นรูปแตกเป็นบางคน (ขั้น 9′ ของแผน)
+ */
+export function saleSignatureUrl(salespersonId: string | null | undefined): string | null {
   const spId = salespersonId ? String(salespersonId).trim() : '';
-  if (spId === '') return false;
+  if (spId === '') return null;
   const dir = path.join(process.cwd(), 'data', 'sale_sigs');
-  return SIG_EXTENSIONS.some(ext => fs.existsSync(path.join(dir, `${spId}${ext}`)));
+  for (const ext of SIG_EXTENSIONS) {
+    if (fs.existsSync(path.join(dir, `${spId}${ext}`))) return `/data/sale_sigs/${spId}${ext}`;
+  }
+  return null;
 }
 
 export interface ActingSalesperson {
@@ -399,6 +412,8 @@ export interface ActingSalesperson {
   phone: string | null;
   /** false = ใบที่ออกในนามคนนี้จะไม่มีลายเซ็น (เท่ากับตอนเขาออกใบเอง) — หน้าเว็บเตือนตั้งแต่ตอนเลือก */
   has_sale_sig: boolean;
+  /** URL รูปลายเซ็นพร้อมนามสกุลจริง (null = ยังไม่มี) — ให้หน้าเว็บพรีวิวก่อนออกใบ (เฟส D) */
+  sig_url: string | null;
 }
 
 /**
@@ -415,13 +430,17 @@ export async function listActingSalespersons(): Promise<ActingSalesperson[]> {
        AND user_id NOT LIKE 'web:%'
      ORDER BY name ASC
   `);
-  return rows.map((r: any) => ({
-    user_id: r.user_id,
-    name: r.name,
-    salesperson_id: r.salesperson_id ? String(r.salesperson_id) : null,
-    phone: r.phone ?? null,
-    has_sale_sig: hasSaleSignature(r.salesperson_id),
-  }));
+  return rows.map((r: any) => {
+    const sigUrl = saleSignatureUrl(r.salesperson_id);
+    return {
+      user_id: r.user_id,
+      name: r.name,
+      salesperson_id: r.salesperson_id ? String(r.salesperson_id) : null,
+      phone: r.phone ?? null,
+      has_sale_sig: sigUrl !== null,
+      sig_url: sigUrl,
+    };
+  });
 }
 
 // ── แถวพร็อกซี ───────────────────────────────────────────────────────────────

@@ -1,6 +1,7 @@
 # แผนงาน: หน้าเว็บขอใบเสนอราคาสำหรับ admin/subadmin (วางข้อความเหมือนคุยใน LINE)
 
-> **สถานะ: v5.4 — form-first + ตัวตนผู้เสนอราคาบน PDF · ✅ เฟส B + B2 + C เสร็จแล้ว · เฟส A ยกเลิก · ถัดไปคือเฟส D**
+> **สถานะ: v5.5 — form-first + ตัวตนผู้เสนอราคาบน PDF · ✅ เฟส B + B2 + C เสร็จแล้ว
+> · 🟨 เฟส D โค้ดครบแล้ว รอรันด่านบนเครื่อง dev · เฟส A ยกเลิก · ถัดไปคือเฟส E**
 > v1 สำรวจจากโค้ดจริง + วัดกับ DB จริง 2026-09-04 · v2–v3 สำรวจ/วัดเพิ่ม + ตัดสินใจ 2026-09-07
 > · v4 แบ่งเฟสเพื่อสลับเครื่อง dev ↔ server 2026-09-07
 > · **v5 เจ้าของสั่งเปลี่ยนเป็นหน้าเดียวแบบฟอร์ม ไม่จำลองแชท LINE 2026-09-08 — อ่าน §0 ก่อนทุกอย่าง**
@@ -12,6 +13,10 @@
 >   · ด่าน "ยิงข้อความจริงใน LINE 3 เคส" ทำแบบ *จำลอง* บน dev ด้วย `npm run diag:line-parity`
 >   (เรียก `handleEvent` ตัวจริง + ดักข้อความด้วย capture client แล้วเทียบ golden ที่เก็บก่อนย้าย)
 >   — **ยังต้องยิงจริงบน server อีกครั้งตอน deploy** ดูท้าย §6.0**
+> · **v5.5 เฟส D เขียนครบแล้ว 2026-09-08 — `services/webQuoteService.ts` + 4 route ของกลุ่ม
+>   `webquote` + ด่านใหม่ `npm run diag:web-quote` · โค้ดเขียนบน server (worktree ของ session)
+>   แต่ DB ของ server ยังไม่ได้รัน migration ของเฟส B/B2 ⇒ **รันด่านไม่ได้ที่นี่**
+>   สถานะจึงเป็น 🟨 จนกว่าจะรัน `diag:web-quote` + `npx tsc --noEmit` ผ่านบนเครื่อง dev**
 >
 > **✅ เงื่อนไข "รอ `plan-product-block-rules.md`" ผ่านแล้ว** — แผนนั้นจบครบ 5 เฟสและขึ้น production
 > 2026-09-07 (commit `413a721` บน `main`) ⇒ แผนนี้เริ่มได้
@@ -1381,7 +1386,7 @@ COALESCE(q.customer_sales_team, st.sales_team)   -- ← ที่จุดปร
 | **B** | ตัวตนพร็อกซี + route ตั้งชื่อผู้จัดทำ (ขั้น 2 · ขั้น 8 เฉพาะ `makers`/`me`) | 1 | — | ✅ | dev | ✅ |
 | **B2** | **ตัวตนผู้เสนอราคาบน PDF** — ชื่อ+เบอร์+ลายเซ็นแอดมิน · snapshot 3 คีย์ · แยกช่องลายเซ็น · เปลี่ยนชื่อ route `webchat`→`webquote` (ขั้น 2b) | 1 (2 คอลัมน์) | B | ✅ ยังไม่มี UI เรียก · PDF ของ LINE ไม่ขยับ | dev | ✅ |
 | **C** | **ย้ายตัวสกัดออกเป็น `services/quoteExtraction.ts`** (ขั้น 1′ — ผ่าตัดทางเดินหลักของ LINE) | — | — (อิสระ) | ✅ ย้ายล้วน พฤติกรรมเท่าเดิม | dev เขียน+จำลองด่าน (`diag:line-parity`) · **ยังต้องยิงจริงที่ server ตอน deploy** | ✅ |
-| **D** | หลังบ้านของหน้าเว็บ · `services/webQuoteService.ts` + route `/api/admin/webquote/*` (ขั้น 3′ · ขั้น 8′) | — | B **และ** C | ✅ ยังไม่มี UI เรียก | dev | ⬜ |
+| **D** | หลังบ้านของหน้าเว็บ · `services/webQuoteService.ts` + route `/api/admin/webquote/*` (ขั้น 3′ · ขั้น 8′) | — | B **และ** C | ✅ ยังไม่มี UI เรียก | dev | 🟨 |
 | **E** | **หน้าเว็บหน้าเดียว** `frontend/src/admin/QuoteRequest.tsx` (ขั้น 9′) | — | D | ✅ **← ฟีเจอร์ใช้งานได้จริงครั้งแรก** | dev | ⬜ |
 | **F** | โหมด advise + บันทึกคำเตือน + ป้าย "ข้ามกฎ" (ขั้น 4 · 4b — เดิมเฟส E) | 1 | E | ✅ | dev | ⬜ |
 | **G** | override เครดิต + ค่าขนส่ง (ขั้น 5 · ขั้น 7 บางส่วน — เดิมเฟส F) | 2 | E | ✅ | dev | ⬜ |
@@ -1392,6 +1397,13 @@ COALESCE(q.customer_sales_team, st.sales_team)   -- ← ที่จุดปร
 
 > **ความหมายของสถานะ:** ⬜ ยังไม่เริ่ม · 🟨 โค้ดเสร็จและ push ขึ้น `dev` แล้ว แต่ยังมีด่านที่
 > **ทำบนเครื่อง dev ไม่ได้** ค้างอยู่ · ✅ ผ่านด่านครบทุกตัวของเฟสนั้น · ⚪ ยกเลิก (v5 ไม่ใช้แล้ว)
+>
+> **เฟส D = 🟨** — โค้ดครบและ push ขึ้น `dev` แล้ว (`services/webQuoteService.ts` · 4 route ·
+> `scripts/diag/webQuoteSmoke.ts`) แต่ **เขียนบน server ซึ่ง DB ยังไม่มีคอลัมน์ของเฟส B/B2**
+> (`admin_users.employee_quotation_id` · `employee_quotation_phone` · `signature_key`)
+> ⇒ `diag:web-quote` รันที่นี่ไม่ได้ · ด่านที่ต้องผ่านก่อนเปลี่ยนเป็น ✅ **ทำบนเครื่อง dev**:
+> `npx tsc --noEmit` · `npm run diag:web-quote` (ต้องเปิด `npm run dev` ไว้ — ข้อ 3 ยิง HTTP จริง)
+> · ยิง Manual 1 ด้วย curl ล้วน (ยังไม่มี UI)
 >
 > **เฟส A = ⚪ ยกเลิก** — โค้ดเสร็จและ push แล้ว (`70adfd3`) แต่ v5 ไม่เรียก `handleEvent` จากเว็บ
 > อีกต่อไป ⇒ `services/chatChannel.ts` และ `opts.client` กลายเป็นทางเข้าที่ไม่มีใครใช้
@@ -2165,6 +2177,7 @@ npm --prefix frontend run lint && npm --prefix frontend run build
 # ── ด่านที่พิสูจน์ว่าเส้นทาง LINE ไม่ขยับ (ต้องผ่านเหมือนก่อนแก้ทุกตัว) ──
 npm run diag:line-parity           # ใหม่ (เฟส C) — จำลองยิงข้อความเข้าบอท 3 เคส + เทียบ prompt ทีละตัวอักษร
                                    #   --save = บันทึก golden ใหม่ (ทำ "ก่อน" แก้เท่านั้น) · --print = ดูผลดิบ
+npm run diag:web-quote             # ใหม่ (เฟส D) — ข้อ 1–4 ของ §9.0 · ต้องเปิด npm run dev ไว้ (ข้อ 3 ยิง HTTP จริง)
 npm run diag:queue-sim
 npm run diag:quote-validation      # + เคสใหม่: userId LINE = enforce, userId web: = advise
 npm run diag:shipping-fee          # + เคสใหม่: force_on/force_off ทับเกณฑ์ได้ · ชื่อ/ราคาที่ตั้งไว้ต้องอยู่รอด

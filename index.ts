@@ -96,6 +96,13 @@ import {
   deleteAdminSignature,
 } from './services/webIdentity.js';
 import {
+  WebQuoteError,
+  listSalespersonsForWeb,
+  proposeFromText,
+  createDraft as createWebQuoteDraft,
+  reviseQuotation as reviseWebQuotation,
+} from './services/webQuoteService.js';
+import {
   getClientIp,
   checkLoginRateLimit,
   recordFailedLogin,
@@ -2417,6 +2424,87 @@ app.delete('/api/admin/webquote/me/signature', adminAuthMiddleware, requireRole(
   } catch (err: any) {
     console.error('DELETE /api/admin/webquote/me/signature error:', err);
     res.status(500).json({ error: 'ไม่สามารถลบลายเซ็นได้' });
+  }
+});
+
+// ═══════════ หน้าเว็บขอใบเสนอราคา — หลังบ้านของฟอร์ม (เฟส D) ═══════════
+// แผน: docs/plan-web-quote-request.md ขั้น 3′ + ขั้น 8′ · ตรรกะอยู่ที่ services/webQuoteService.ts
+//
+// route กลุ่มนี้ "บาง" โดยตั้งใจ — อ่าน body → เรียก service → แปลง error เป็น HTTP
+// ไม่มีการตัดสินใจทางธุรกิจสักบรรทัด เพื่อให้ด่าน diag เรียก service ตัวเดียวกันได้โดยตรง
+// โดยไม่ต้องยิง HTTP และผลที่ได้ยังเป็นของจริง (ไม่ใช่ทางเดินคู่ขนานที่ค่อย ๆ เพี้ยน)
+
+/** แปลง WebQuoteError เป็น HTTP ตามที่มันบอกมาเอง — error อื่นถือเป็น 500 และไม่รั่วรายละเอียดออกไป */
+function sendWebQuoteError(res: any, where: string, err: any) {
+  if (err instanceof WebQuoteError) {
+    if (err.status >= 500) console.error(`${where} error:`, err);
+    return res.status(err.status).json({ error: err.message, code: err.code, ...(err.detail ?? {}) });
+  }
+  console.error(`${where} error:`, err);
+  return res.status(500).json({ error: 'ระบบไม่ว่างชั่วคราว รบกวนลองใหม่อีกครั้ง' });
+}
+
+/**
+ * รายชื่อเซลส์ที่เลือกเป็น "ออกในนาม" ได้ + สถานะ/URL ลายเซ็นของแต่ละคน
+ * แถวพร็อกซี `web:%` ถูกกรองออกตั้งแต่ใน listActingSalespersons() (§2.3b · ด่าน pdf-issuer เคส 7)
+ */
+app.get('/api/admin/webquote/salespersons', adminAuthMiddleware, requireRole('admin', 'subadmin'), async (req: any, res: any) => {
+  try {
+    res.json({ salespersons: await listSalespersonsForWeb() });
+  } catch (err: any) {
+    sendWebQuoteError(res, 'GET /api/admin/webquote/salespersons', err);
+  }
+});
+
+/**
+ * วางข้อความ → คืน slots + candidates ให้ฟอร์มเรนเดอร์ — **ยังไม่เขียน DB สักแถว**
+ *
+ * ยังไม่ลบร่างที่ค้างอยู่ด้วย (`purgePending: false` ใน service) เพราะแค่วางข้อความผิด
+ * ก็ไม่ควรทำลายงานที่แอดมินทำค้างไว้ — ต่างจากแชทที่ไม่มีจังหวะ "ดูก่อนแล้วค่อยกด"
+ */
+app.post('/api/admin/webquote/propose', adminAuthMiddleware, requireRole('admin', 'subadmin'), express.json({ limit: '1mb' }), async (req: any, res: any) => {
+  try {
+    res.json(await proposeFromText({
+      adminId: req.admin.id,
+      spUserId: req.body?.sp_user_id,
+      text: req.body?.text,
+    }));
+  } catch (err: any) {
+    sendWebQuoteError(res, 'POST /api/admin/webquote/propose', err);
+  }
+});
+
+/**
+ * ฟอร์มที่เคาะแล้ว → ร่างจริง · คืน `quotes` + `web_user_id`
+ *
+ * `web_user_id` ต้องส่งกลับไปด้วยเสมอ เพราะขั้นถัดไป (PUT /api/quotation/:id · confirm · cancel)
+ * เป็น endpoint เดิมที่ตรวจสิทธิ์ด้วย `isQuotationOwner()` จาก `userId` ใน body (ขั้น 8′)
+ */
+app.post('/api/admin/webquote/drafts', adminAuthMiddleware, requireRole('admin', 'subadmin'), express.json({ limit: '2mb' }), async (req: any, res: any) => {
+  try {
+    res.json(await createWebQuoteDraft({
+      adminId: req.admin.id,
+      spUserId: req.body?.sp_user_id,
+      customerId: req.body?.customer_id,
+      contactId: req.body?.contact_id,
+      items: req.body?.items,
+      quoteData: req.body?.quote_data,
+    }));
+  } catch (err: any) {
+    sendWebQuoteError(res, 'POST /api/admin/webquote/drafts', err);
+  }
+});
+
+/** เลขที่ใบที่ยืนยันแล้ว → ร่าง revision · คืน `draft_quote_id` ให้ฟอร์มเปิดต่อในหน้าเดิม */
+app.post('/api/admin/webquote/revise', adminAuthMiddleware, requireRole('admin', 'subadmin'), express.json(), async (req: any, res: any) => {
+  try {
+    res.json(await reviseWebQuotation({
+      adminId: req.admin.id,
+      spUserId: req.body?.sp_user_id,
+      quotationNo: req.body?.quotation_no,
+    }));
+  } catch (err: any) {
+    sendWebQuoteError(res, 'POST /api/admin/webquote/revise', err);
   }
 });
 
