@@ -2488,7 +2488,6 @@ app.post('/api/admin/webquote/drafts', adminAuthMiddleware, requireRole('admin',
       customerId: req.body?.customer_id,
       contactId: req.body?.contact_id,
       items: req.body?.items,
-      quoteData: req.body?.quote_data,
     }));
   } catch (err: any) {
     sendWebQuoteError(res, 'POST /api/admin/webquote/drafts', err);

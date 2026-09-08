@@ -230,11 +230,10 @@ export interface WebQuoteItemInput {
   /** ทางสำรองเมื่อ client มีแต่รหัสรุ่น */
   model?: string | null;
   quantity?: number | string;
-  /** ราคาที่แอดมินพิมพ์ทับ — ไม่ส่ง = ใช้ราคาขายของสินค้า (กติกาเดียวกับ LINE) */
+  /** ราคาต่อหน่วยที่แอดมินตั้ง — ไม่ส่ง/0 = ใช้ราคาขายของสินค้าจาก DB */
   price?: number | string | null;
   discount_1?: number | string | null;
   discount_2?: number | string | null;
-  discount_is_net?: boolean;
 }
 
 export interface CreateDraftResult {
@@ -246,13 +245,21 @@ export interface CreateDraftResult {
 }
 
 /**
- * แปลง item ที่ฟอร์มส่งมาเป็น itemForDb ด้วย **buildResolvedItem ตัวเดียวกับทางเดิม**
+ * แปลง item ที่ฟอร์มส่งมาเป็น itemForDb — การ map ฟิลด์ใช้ `buildResolvedItem` ตัวเดียวกับทางเดิม
  *
  * ไม่รับข้อมูลสินค้าที่ client ส่งมาเป็นของจริงสักฟิลด์ — ชื่อ · brand · series · production ·
- * product_id · ราคาตั้ง ถูกอ่านใหม่จาก DB เสมอ · client กำหนดได้แค่ "จำนวน · ราคาที่ตั้งใจ
- * พิมพ์ทับ · ส่วนลด" ซึ่งเป็นสิทธิ์ของคนออกใบอยู่แล้ว
+ * product_id · ราคาตั้ง ถูกอ่านใหม่จาก DB เสมอ · client กำหนดได้แค่ "จำนวน · ราคา · ส่วนลด"
+ * ซึ่งเป็นสิทธิ์ของคนออกใบอยู่แล้ว
+ *
+ * ⚠️ **จุดเดียวที่เส้นเว็บต่างจากเส้น LINE โดยตั้งใจ: ราคาที่ตั้งเองไม่ล้างส่วนลด**
+ * `buildResolvedItem` มีกติกา "พิมพ์ราคามาเอง = ราคาสุทธิ ⇒ ส่วนลดเป็น 0" ซึ่งถูกต้องสำหรับ
+ * *ข้อความอิสระ* (เซลส์พิมพ์ "ราคา 650" หมายถึงสุทธิ) แต่ผิดสำหรับ *ฟอร์ม* ที่มีช่องราคาและ
+ * ช่องส่วนลดแยกกันอยู่ตรงหน้า — สิ่งที่แอดมินเห็นในฟอร์มต้องเป็นสิ่งที่ถูกบันทึกเป๊ะ ไม่งั้น
+ * แค่เปิดร่างที่ระบบสกัดมา (ราคาตั้ง + ลด 30%) แล้วกดสร้าง ส่วนลดจะหายไปเงียบ ๆ
+ * ⇒ เรียก buildResolvedItem โดย **ไม่ส่ง price** (ให้มันคิดส่วนลดบนราคาตั้งตามปกติ)
+ *   แล้วค่อยทับราคาต่อหน่วยทีหลังถ้าแอดมินตั้งมา
  */
-async function resolveItems(items: WebQuoteItemInput[], quoteData: any): Promise<any[]> {
+async function resolveItems(items: WebQuoteItemInput[]): Promise<any[]> {
   const out: any[] = [];
   for (const [i, raw] of items.entries()) {
     const tplId = raw?.product_template_id;
@@ -282,13 +289,14 @@ async function resolveItems(items: WebQuoteItemInput[], quoteData: any): Promise
       product,
       {
         quantity: Number.isFinite(qty) && qty > 0 ? qty : 1,
-        price: raw?.price,
         discount_1: raw?.discount_1,
         discount_2: raw?.discount_2,
-        discount_is_net: raw?.discount_is_net,
       },
-      quoteData ?? {}
+      {}
     );
+
+    const price = Number(raw?.price);
+    if (Number.isFinite(price) && price > 0) itemForDb.price = price;
     out.push(itemForDb);
   }
   return out;
@@ -308,8 +316,6 @@ export async function createDraft(params: {
   customerId: number | string;
   contactId: number | string;
   items: WebQuoteItemInput[];
-  /** ส่วนลดระดับบิลจากฟอร์ม (discount_1 / discount_2 / discount_is_net) */
-  quoteData?: any;
 }): Promise<CreateDraftResult> {
   if (!Array.isArray(params.items) || params.items.length === 0) {
     throw new WebQuoteError('BAD_REQUEST', 'ต้องมีรายการสินค้าอย่างน้อย 1 รายการ (items)', 400);
@@ -338,7 +344,7 @@ export async function createDraft(params: {
     const customer = await getCustomerById(resolvedCustomerId);
     if (!customer) throw new WebQuoteError('BAD_REQUEST', `ไม่พบบริษัท id=${resolvedCustomerId}`, 400);
 
-    const itemsForDb = await resolveItems(params.items, params.quoteData ?? {});
+    const itemsForDb = await resolveItems(params.items);
 
     const { items: expanded, violations } = await validateQuotationItems(itemsForDb, {
       stage: 'draft',
