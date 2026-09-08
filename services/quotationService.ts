@@ -21,6 +21,7 @@ import { buildThaiAddress } from '../utils/address.js';
 import { resolveDeliveryTerms } from '../utils/deliveryTerms.js';
 import { isBlacklisted } from './blacklistService.js';
 import { checkCreditHold, type CreditHoldResult } from './creditHoldService.js';
+import { getIssuerSnapshot } from './webIdentity.js';
 import { thaiDateDMY, thaiYearMonth } from '../utils/thaiTime.js';
 import {
   loadQuotationRules,
@@ -559,7 +560,10 @@ export async function insertDraftQuotations(
         employeeDetails = {
           salesperson_id: salespersonIdStr,
           saleperson: spData.name || '',
-          sale_phone: spData.phone || ''
+          sale_phone: spData.phone || '',
+          // ตัวตน "ผู้เสนอราคา" ของใบที่ออกจากเว็บ — ใบจาก LINE ได้ null แล้ว spread เป็นศูนย์คีย์
+          // ⇒ snapshot ของใบ LINE เหมือนเดิมทุกไบต์ (docs/plan-web-quote-request.md §2.6)
+          ...(await getIssuerSnapshot(userId) ?? {})
         };
       }
     } catch (err) {
@@ -1684,10 +1688,14 @@ export async function updateQuotationCustomerSnapshot(
     console.error("Error updating customer snapshot in helper:", err);
   }
 
+  // ⚠️ จุดนี้เขียน employee_details ทับทั้งก้อนทุกครั้งที่ผูก/เปลี่ยนลูกค้าของใบ
+  //    ลืมเติม issuer_* ตรงนี้ = ชื่อผู้เสนอราคาหายเงียบ ๆ ทันทีที่ผู้ใช้เลือกลูกค้า
+  //    (กับดักเดียวกับ whitelist ของ legacyItems — ด่าน diag:pdf-issuer เคส 5 จับจุดนี้โดยเฉพาะ)
   const employeeDetails = {
     salesperson_id: salesperson.salesperson_id || null,
     saleperson: salesperson.name || '',
-    sale_phone: salesperson.phone || ''
+    sale_phone: salesperson.phone || '',
+    ...(await getIssuerSnapshot(salesperson.user_id) ?? {})
   };
 
   await pool.query(
@@ -1900,6 +1908,11 @@ export async function enrichQuotationData(quoteDb: any): Promise<any> {
       salesperson_name: employeeDetails.saleperson || '',
       salesperson_phone: employeeDetails.sale_phone || '',
       salesperson_employee_code: salespersonId || null,
+      // ตัวตนผู้เสนอราคา — มีเฉพาะใบที่ออกจากเว็บ · ใบ LINE ได้ null ทั้งสามตัวและ pdfGenerator
+      // จะเดินเส้นเดิมทุกบรรทัด (issuer_name เป็นสวิตช์เดียวของทางใหม่ · §2.7)
+      issuer_name: employeeDetails.issuer_name || null,
+      issuer_phone: employeeDetails.issuer_phone || null,
+      issuer_sig_key: employeeDetails.issuer_sig_key || null,
       items: legacyItems,
       revise_from: reviseFrom,
       quote_company: quoteCompany

@@ -18,6 +18,8 @@ import {
   getSalespersonByUserId,
   insertSalesperson,
   updateSalespersonByUserId,
+  listSalespersonsForAdmin,
+  findDuplicateEmployeeCodeNames,
   getBranchesByCodes,
   getBranches,
   ODOO_EXPORT_SALES_TEAM_JOIN,
@@ -87,8 +89,11 @@ import { adminAuthMiddleware, requireRole, type Role } from './config/auth.js';
 import {
   listOdooQuotationMakers,
   isValidQuotationMaker,
-  getAdminQuotationMaker,
+  getAdminIssuerProfile,
   setAdminQuotationMaker,
+  getAdminSignature,
+  saveAdminSignature,
+  deleteAdminSignature,
 } from './services/webIdentity.js';
 import {
   getClientIp,
@@ -2184,24 +2189,14 @@ app.post('/api/admin/signatures/upload', adminAuthMiddleware, requireRole('admin
 app.get('/api/admin/salespersons', adminAuthMiddleware, requireRole('admin'), async (req: any, res: any) => {
   console.log(">>> GET /api/admin/salespersons received!");
   try {
-    // quotation_count ใช้เตือนตอนลบ — ลบพนักงานแล้ว FK ตั้ง quotations.user_id = NULL (ON DELETE SET NULL)
-    //
-    // ตัดแถวพร็อกซีของหน้าเว็บแอดมิน (`web:<admin_id>:<sp_user_id>`) ออก — แถวพวกนั้นไม่ใช่พนักงานจริง
-    // แต่ก๊อป name/salesperson_id มาจากเซลส์ตัวจริง ⇒ ถ้าไม่กรอง หน้า "จัดการข้อมูลพนักงาน"
-    // จะเห็นชื่อซ้ำและขึ้นเตือนรหัสพนักงานซ้ำทุกคู่ (แผน web-quote-request §2.8)
-    // ผลที่ยอมรับแล้ว: quotation_count ของเซลส์จะไม่นับใบที่แอดมินออกในนามเขา
-    const result = await pool.query(`
-      SELECT s.user_id, s.name, s.status, s.phone, s.salesperson_id, s.branch,
-             s.employee_quotation_id, s.created_at, s.updated_at,
-             (SELECT count(*) FROM quotations q WHERE q.user_id = s.user_id) AS quotation_count
-        FROM salesperson s
-       WHERE s.user_id NOT LIKE 'web:%'
-       ORDER BY s.name ASC`);
+    // query อยู่ที่ db/repositories.ts เพื่อให้ด่าน diag:pdf-issuer เคส 7 เรียกตัวเดียวกันได้
+    // (การกรอง `web:%` ต้องพิสูจน์ได้ ไม่ใช่เชื่อว่ายังอยู่)
+    const rows = await listSalespersonsForAdmin();
 
     const saleSigsDir = path.join(process.cwd(), 'data', 'sale_sigs');
     const extensions = ['.png', '.jpg', '.jpeg'];
 
-    const salespersons = result.rows.map((row: any) => {
+    const salespersons = rows.map((row: any) => {
       const spId = row.salesperson_id ? String(row.salesperson_id).trim() : null;
       let has_sale_sig = false;
 
@@ -2255,11 +2250,7 @@ app.put('/api/admin/salespersons/:userId', adminAuthMiddleware, requireRole('adm
 
     // ตาราง salesperson ไม่มี unique constraint บน salesperson_id และไฟล์ลายเซ็นตั้งชื่อตามรหัส
     // → รหัสซ้ำ = สองคนใช้ลายเซ็นใบเดียวกัน จึงเตือนกลับไป แต่ไม่บล็อก (ข้อมูลจริงอาจซ้ำได้)
-    const dupRes = await pool.query(
-      'SELECT name FROM salesperson WHERE salesperson_id = $1 AND user_id <> $2 ORDER BY name ASC',
-      [cleanSpId, userId]
-    );
-    const duplicateWith = dupRes.rows.map((r: any) => r.name);
+    const duplicateWith = await findDuplicateEmployeeCodeNames(cleanSpId, userId);
 
     const updated = await updateSalespersonByUserId(userId, {
       name: cleanName,
@@ -2305,37 +2296,53 @@ app.delete('/api/admin/salespersons/:userId', adminAuthMiddleware, requireRole('
   }
 });
 
-// ═══════════════ หน้าเว็บขอใบเสนอราคา — ตัวตนผู้จัดทำ (เฟส B) ═══════════════
+// ═══════════ หน้าเว็บขอใบเสนอราคา — โปรไฟล์ผู้เสนอราคา (เฟส B + B2) ═══════════
 // แผน: docs/plan-web-quote-request.md §2 · ตรรกะทั้งหมดอยู่ที่ services/webIdentity.ts
 //
-// ทุก route ในกลุ่ม /api/admin/webchat/* ต้องผ่าน adminAuthMiddleware + requireRole เสมอ
+// ทุก route ในกลุ่ม /api/admin/webquote/* ต้องผ่าน adminAuthMiddleware + requireRole เสมอ
 // — เฟสหลังเปิดโหมด "เตือนแต่ไม่บล็อก" ⇒ ใครยิงกลุ่มนี้ได้ = ออกใบข้ามกฎได้ทุกข้อ
 // เส้นนี้จึงต้องรัดกว่าเส้น LIFF เดิม ไม่ใช่เท่ากัน (§ขั้น 8 ของแผน)
+//
+// เฟส B2 เปลี่ยนชื่อกลุ่มจาก `webchat` เป็น `webquote` — v5 ไม่ได้จำลองแชทแล้ว
+// ทำได้โดยไม่ต้อง backward-compat เพราะกลุ่มนี้ยังไม่เคยขึ้น production และยังไม่มี UI เรียก
 
-/** รายชื่อผู้จัดทำที่ Odoo รู้จักจริง — ให้ dropdown ฝั่งหน้าเว็บใช้เลือก (ห้ามพิมพ์เอง) */
-app.get('/api/admin/webchat/makers', adminAuthMiddleware, requireRole('admin', 'subadmin'), async (req: any, res: any) => {
+/**
+ * รายชื่อผู้จัดทำที่ Odoo รู้จักจริง — ให้ dropdown ฝั่งหน้าเว็บใช้เลือก (ห้ามพิมพ์เอง)
+ * แต่ละรายการมี `phone` ที่ระบบเลือกให้แล้ว (เบอร์ในใบล่าสุดของชื่อนั้น · null ได้) — §2.5b
+ */
+app.get('/api/admin/webquote/makers', adminAuthMiddleware, requireRole('admin', 'subadmin'), async (req: any, res: any) => {
   try {
     res.json({ makers: await listOdooQuotationMakers() });
   } catch (err: any) {
-    console.error('GET /api/admin/webchat/makers error:', err);
+    console.error('GET /api/admin/webquote/makers error:', err);
     res.status(500).json({ error: 'ไม่สามารถดึงรายชื่อผู้จัดทำได้' });
   }
 });
 
-/** ชื่อผู้จัดทำที่แอดมินคนที่ล็อกอินอยู่ตั้งไว้ — null = ยังไม่ได้ตั้ง หน้าเว็บต้องบล็อกไม่ให้เริ่มแชท */
-app.get('/api/admin/webchat/me', adminAuthMiddleware, requireRole('admin', 'subadmin'), async (req: any, res: any) => {
+/**
+ * โปรไฟล์ผู้เสนอราคาของแอดมินที่ล็อกอินอยู่
+ *
+ * `is_ready` ผูกกับ **ชื่ออย่างเดียว** — ยังไม่อัปลายเซ็นก็ออกใบได้ปกติ (เจ้าของเคาะ 2026-09-08)
+ * ใบจะไม่มีลายเซ็นในช่องผู้เสนอราคา เท่ากับพฤติกรรมของเซลส์ที่ยังไม่มีลายเซ็นวันนี้เป๊ะ
+ * ⇒ หน้าเว็บใช้ `has_signature === false` ขึ้นป้ายเตือนค้างไว้ แต่ห้ามใช้บล็อก
+ */
+app.get('/api/admin/webquote/me', adminAuthMiddleware, requireRole('admin', 'subadmin'), async (req: any, res: any) => {
   try {
     const admin = req.admin;
-    const maker = await getAdminQuotationMaker(admin.id);
+    const profile = await getAdminIssuerProfile(admin.id);
+    const sig = await getAdminSignature(admin.id);
     res.json({
       admin_id: admin.id,
       name: admin.name,
       role: admin.role,
-      employee_quotation_id: maker,
-      is_ready: maker !== null
+      employee_quotation_id: profile?.employee_quotation_id ?? null,
+      employee_quotation_phone: profile?.employee_quotation_phone ?? null,
+      has_signature: sig.exists,
+      signature_url: sig.url,
+      is_ready: (profile?.employee_quotation_id ?? null) !== null
     });
   } catch (err: any) {
-    console.error('GET /api/admin/webchat/me error:', err);
+    console.error('GET /api/admin/webquote/me error:', err);
     res.status(500).json({ error: 'ไม่สามารถดึงข้อมูลผู้จัดทำได้' });
   }
 });
@@ -2346,8 +2353,12 @@ app.get('/api/admin/webchat/me', adminAuthMiddleware, requireRole('admin', 'suba
  * ตรวจซ้ำฝั่ง server แม้ UI จะเป็น dropdown อยู่แล้ว เพราะชื่อนี้ถูกส่งเข้าไฟล์ export ตรง ๆ
  * (ช่อง J) — ปล่อยชื่อที่ Odoo ไม่รู้จักหลุดเข้าไป = ไฟล์ import ฝั่งโน้นพัง
  * แอดมินตั้งได้เฉพาะของตัวเอง (`req.admin.id`) ไม่มีทางตั้งให้คนอื่นผ่าน route นี้
+ *
+ * ⚠️ **รับแค่ชื่อ** — เบอร์ server หาเองจากชื่อนั้น (§2.5b) ถ้า client แนบ
+ *    `employee_quotation_phone` มาด้วยจะถูก **เพิกเฉย** ไม่ใช่ตอบ error
+ *    (ไม่มี field ให้กรอกเบอร์อยู่แล้ว การส่งมาจึงเป็นความเข้าใจผิดของ client ไม่ใช่การโจมตี)
  */
-app.put('/api/admin/webchat/me', adminAuthMiddleware, requireRole('admin', 'subadmin'), express.json(), async (req: any, res: any) => {
+app.put('/api/admin/webquote/me', adminAuthMiddleware, requireRole('admin', 'subadmin'), express.json(), async (req: any, res: any) => {
   try {
     const raw = req.body?.employee_quotation_id;
     if (typeof raw !== 'string' || raw.trim() === '') {
@@ -2360,10 +2371,52 @@ app.put('/api/admin/webchat/me', adminAuthMiddleware, requireRole('admin', 'suba
       });
     }
     const saved = await setAdminQuotationMaker(req.admin.id, raw);
-    res.json({ success: true, employee_quotation_id: saved });
+    res.json({
+      success: true,
+      employee_quotation_id: saved.employee_quotation_id,
+      employee_quotation_phone: saved.employee_quotation_phone
+    });
   } catch (err: any) {
-    console.error('PUT /api/admin/webchat/me error:', err);
+    console.error('PUT /api/admin/webquote/me error:', err);
     res.status(500).json({ error: 'ไม่สามารถบันทึกชื่อผู้จัดทำได้' });
+  }
+});
+
+/**
+ * อัปโหลดลายเซ็นของตัวเอง — เก็บเป็นไฟล์ใน data/admin_sigs/<token สุ่ม>.<ext>
+ *
+ * ชื่อไฟล์เป็น token สุ่มไม่ใช่ `admin_id` เพราะ /data ถูก express.static เสิร์ฟโดยไม่มี auth
+ * ⇒ ชื่อไฟล์ที่เดาได้ = ลายเซ็นถูกดูดออกไปได้ด้วยการไล่เลข (§2.5)
+ * อัปโหลดทับใช้ token เดิม ⇒ ใบเก่าที่พิมพ์ซ้ำได้ลายเซ็นอันใหม่ (ตรงกับพฤติกรรม sale_sigs วันนี้)
+ */
+app.post('/api/admin/webquote/me/signature', adminAuthMiddleware, requireRole('admin', 'subadmin'), express.json({ limit: '10mb' }), async (req: any, res: any) => {
+  try {
+    const image = req.body?.image;
+    if (typeof image !== 'string' || image.trim() === '') {
+      return res.status(400).json({ error: 'ต้องแนบรูปลายเซ็น (image) เป็น data URL base64' });
+    }
+    const saved = await saveAdminSignature(req.admin.id, image);
+    res.json({ success: true, signature_url: saved.url, has_signature: true });
+  } catch (err: any) {
+    if (err?.message === 'INVALID_IMAGE_FORMAT') {
+      return res.status(400).json({ error: 'รูปแบบรูปไม่ถูกต้อง ต้องเป็น data URL base64' });
+    }
+    if (err?.message === 'UNSUPPORTED_IMAGE_TYPE') {
+      return res.status(400).json({ error: 'รองรับเฉพาะไฟล์ PNG และ JPG/JPEG เท่านั้น' });
+    }
+    console.error('POST /api/admin/webquote/me/signature error:', err);
+    res.status(500).json({ error: 'ไม่สามารถบันทึกลายเซ็นได้' });
+  }
+});
+
+/** ลบลายเซ็นของตัวเอง — ลบแล้วยังออกใบได้ปกติ ใบจะไม่มีลายเซ็นช่องผู้เสนอราคา */
+app.delete('/api/admin/webquote/me/signature', adminAuthMiddleware, requireRole('admin', 'subadmin'), async (req: any, res: any) => {
+  try {
+    const deleted = await deleteAdminSignature(req.admin.id);
+    res.json({ success: true, deleted, has_signature: false });
+  } catch (err: any) {
+    console.error('DELETE /api/admin/webquote/me/signature error:', err);
+    res.status(500).json({ error: 'ไม่สามารถลบลายเซ็นได้' });
   }
 });
 
@@ -2375,7 +2428,10 @@ app.get('/api/admin/stats', adminAuthMiddleware, requireRole('admin'), async (re
       SELECT
         (SELECT COUNT(*) FROM quotations)             AS quotations,
         (SELECT COUNT(*) FROM promotions)             AS promotions,
-        (SELECT COUNT(*) FROM salesperson)            AS salespersons,
+        -- ไม่นับแถวพร็อกซีของหน้าเว็บแอดมิน (ไม่ใช่คน) — การ์ดหน้าแดชบอร์ดต้องตรงกับ
+        -- จำนวนแถวในหน้า "จัดการข้อมูลพนักงาน" ซึ่งกรอง web:% ออกไปแล้ว
+        (SELECT COUNT(*) FROM salesperson
+          WHERE user_id NOT LIKE 'web:%')             AS salespersons,
         (SELECT COUNT(*) FROM quotation_rules)        AS quotation_rules,
         (SELECT COUNT(*) FROM product_optional_links) AS optional_links,
         (SELECT COUNT(*) FROM product_stock_rules)    AS stock_rules,

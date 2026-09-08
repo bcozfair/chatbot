@@ -40,6 +40,7 @@
     "diag:app-url": "tsx scripts/diag/appUrlSmoke.ts",
     "diag:pdf-render": "tsx scripts/diag/pdfRenderSmoke.ts",
     "diag:pdf-cache": "tsx scripts/diag/pdfCacheSmoke.ts",
+    "diag:pdf-issuer": "tsx scripts/diag/pdfIssuerSmoke.ts",
     "diag:company-name": "tsx scripts/diag/companyNameConsistencySmoke.ts",
     "diag:contact-scope": "tsx scripts/diag/contactScopeSmoke.ts",
     "diag:sync-api": "tsx scripts/diag/syncApiSmoke.ts",

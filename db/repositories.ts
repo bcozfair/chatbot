@@ -282,6 +282,44 @@ export async function getSalespersonByUserId(userId: string): Promise<any | null
   } catch (err) { logErr('getSalespersonByUserId', err); return null; }
 }
 
+/**
+ * แถวพนักงานขายทั้งหมดสำหรับหน้า "จัดการข้อมูลพนักงาน" — **ตัดแถวพร็อกซีของหน้าเว็บแอดมินออก**
+ *
+ * `web:<admin_id>:<sp_user_id>` ไม่ใช่คน แต่ก๊อป name/salesperson_id มาจากเซลส์ตัวจริง
+ * ⇒ ไม่กรอง = หน้านี้เห็นชื่อซ้ำและขึ้นเตือนรหัสพนักงานซ้ำทุกคู่
+ * (docs/plan-web-quote-request.md §2.11 · ด่าน `npm run diag:pdf-issuer` เคส 7)
+ *
+ * อยู่ที่นี่แทนที่จะอินไลน์ใน route เพื่อให้ด่านเรียก **ตัวเดียวกับที่ endpoint เรียกจริง** ได้
+ */
+export async function listSalespersonsForAdmin(): Promise<any[]> {
+  // quotation_count ใช้เตือนตอนลบ — ลบพนักงานแล้ว FK ตั้ง quotations.user_id = NULL (ON DELETE SET NULL)
+  // ผลที่ยอมรับแล้ว: ตัวเลขนี้จะไม่นับใบที่แอดมินออกในนามเซลส์คนนั้น
+  const { rows } = await pool.query(`
+      SELECT s.user_id, s.name, s.status, s.phone, s.salesperson_id, s.branch,
+             s.employee_quotation_id, s.created_at, s.updated_at,
+             (SELECT count(*) FROM quotations q WHERE q.user_id = s.user_id) AS quotation_count
+        FROM salesperson s
+       WHERE s.user_id NOT LIKE 'web:%'
+       ORDER BY s.name ASC`);
+  return rows;
+}
+
+/**
+ * ชื่อคนอื่นที่ใช้รหัสพนักงานเดียวกัน — ใช้เตือน (ไม่บล็อก) ตอนแก้โปรไฟล์พนักงานขาย
+ *
+ * ต้องกรอง `web:%` ด้วย เพราะแถวพร็อกซี**ก๊อป `salesperson_id` มาจากเซลส์ตัวจริง**
+ * ⇒ ไม่กรอง = เซลส์ทุกคนที่แอดมินเคยออกใบในนามจะขึ้นเตือน "รหัสซ้ำ" กับตัวเอง
+ */
+export async function findDuplicateEmployeeCodeNames(salespersonId: string, exceptUserId: string): Promise<string[]> {
+  const { rows } = await pool.query(
+    `SELECT name FROM salesperson
+      WHERE salesperson_id = $1 AND user_id <> $2 AND user_id NOT LIKE 'web:%'
+      ORDER BY name ASC`,
+    [salespersonId, exceptUserId]
+  );
+  return rows.map((r: any) => r.name);
+}
+
 export async function insertSalesperson(data: Record<string, any>): Promise<any | null> {
   try {
     const row = mapSalespersonWrite(data);
