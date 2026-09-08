@@ -96,7 +96,10 @@ export function __cacheState() {
 }`;
 
 function generateEvalModule(): void {
-  let s = readFileSync(SRC, 'utf8');
+  // อ่านแล้วบังคับเป็น LF ก่อนเสมอ — ตัวชี้ (needle) ที่มีหลายบรรทัดในไฟล์นี้ต่อด้วย '\n'
+  // ถ้า checkout เป็น CRLF (เครื่อง Windows ที่ core.autocrlf=true) จะหาไม่เจอสักที่แล้ว
+  // โยน "โครงสร้างเปลี่ยนไป" ทั้งที่โค้ดไม่ได้เปลี่ยนเลย ⇒ ด่านนี้รันไม่ได้บนเครื่อง dev
+  let s = readFileSync(SRC, 'utf8').replace(/\r\n/g, '\n');
   const need = (needle: string, want: number, label: string) => {
     const got = s.split(needle).length - 1;
     if (got !== want) {
