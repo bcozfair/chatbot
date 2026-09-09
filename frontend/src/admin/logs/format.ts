@@ -115,7 +115,11 @@ export function actorStyle(actorType: string, actorSource: string | null): Actor
     return { label: 'แยกไม่ออก', hint: 'ช่วงเวลานั้นมีแอดมินมากกว่า 1 คนยิงคำสั่งเขียนพร้อมกัน',
              cls: 'bg-amber-50 border-amber-200 text-amber-700' };
   }
-  return { label: 'ไม่ทราบ', hint: 'ไม่พบ request ของแอดมินที่ครอบเวลานี้ — น่าจะแก้จาก psql หรือ script ตรง ๆ',
+  if (actorType === 'line_user') {
+    return { label: 'เจ้าตัวผ่าน LINE', hint: 'เจ้าของข้อมูลแก้เองผ่านบอท/LIFF — จับคู่จาก request ของคนคนนั้นที่ครอบเวลาที่แก้พอดี',
+             cls: 'bg-violet-50 border-violet-200 text-violet-700' };
+  }
+  return { label: 'ไม่ทราบ', hint: 'ไม่พบ request ของแอดมินหรือของเจ้าของข้อมูลเองที่ครอบเวลานี้ — น่าจะแก้จาก psql หรือ script ตรง ๆ',
            cls: 'bg-slate-100 border-slate-300 text-slate-600' };
 }
 
