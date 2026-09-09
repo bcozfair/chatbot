@@ -2239,13 +2239,17 @@ app.put('/api/admin/salespersons/:userId', adminAuthMiddleware, requireRole('adm
     const userId = req.params.userId;
     const { name, phone, salespersonId, employeeQuotationId } = req.body;
 
-    const cleanName = String(name ?? '').trim();
+    // ชื่อเก็บดิบ ๆ ไม่ trim — salesperson.name ต้องสะกดตรงกับ res.users ฝั่ง Odoo ทุกอักขระ
+    // และมีคนที่ Odoo เก็บช่องว่างท้ายไว้จริง ("คุณวิรุณ ภาคอีสาน " → "คุณวิรุณ ภาคอีสาน (PM)")
+    // trim ตรงนี้ = แอดมินแก้อะไรก็ได้ในหน้าเดียวกันแล้วช่องว่างหายเงียบ ๆ ใบถัดไป import ไม่ผ่าน
+    // ช่องว่างล้วนยังนับเป็น "ไม่ได้กรอก" ตามเดิม (ด่านตรวจข้างล่างเทียบด้วย .trim())
+    const cleanName = String(name ?? '');
     const cleanPhone = String(phone ?? '').trim() || null;
     const cleanSpId = String(salespersonId ?? '').trim();
     // ชื่อจริงฝั่ง Odoo (ช่อง J ตอน export) — ไม่บังคับกรอก และส่งค่าว่างมาเพื่อ "ลบ" ค่าเดิมได้
     const cleanEmpQuotationId = String(employeeQuotationId ?? '').trim() || null;
 
-    if (!cleanName) {
+    if (!cleanName.trim()) {
       return res.status(400).json({ error: 'ต้องระบุชื่อพนักงานขาย' });
     }
     if (!cleanSpId) {
