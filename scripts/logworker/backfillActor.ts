@@ -1,5 +1,5 @@
-import { pool, log } from './logworker/config.js';
-import { runAuditActorJob } from './logworker/auditActorJob.js';
+import { pool, log } from './config.js';
+import { runAuditActorJob } from './auditActorJob.js';
 
 /**
  * ไล่ย้อนหาชื่อคนแก้ให้แถว audit ที่เคยปิดเคสไปแล้วว่า 'ไม่ทราบ'
@@ -13,8 +13,11 @@ import { runAuditActorJob } from './logworker/auditActorJob.js';
  * ปลอดภัยกับของเดิม: แตะเฉพาะแถวที่ actor_type='unknown' และยังไม่มี actor_id เท่านั้น
  * แถวที่รู้ตัวคนทำอยู่แล้ว (direct/correlated/ambiguous) ไม่ถูกแตะ · รันซ้ำได้ผลเท่าเดิม
  *
- * รัน (บน host เหมือน logworker เพราะใช้ค่าเชื่อมต่อชุดเดียวกัน):
- *   npm run backfill:audit-actor
+ * ⚠️ ต้องรันบน host เหมือน logworker (ใช้ค่าเชื่อมต่อและ node_modules ชุดเดียวกัน)
+ *   บน server:  cd deploy/logworker && node --import tsx ../../scripts/logworker/backfillActor.ts
+ *               (node ของ nvm — ดู ExecStart ใน deploy/logworker/logworker.service)
+ *   บนเครื่อง dev ที่ลง dependency ครบ:  npm run backfill:audit-actor
+ *   ⇒ อย่ารันในคอนเทนเนอร์ app: ในนั้น 127.0.0.1 ไม่ใช่กล่อง DB (ต้องเป็น host 'db')
  */
 async function main(): Promise<void> {
   const { rows: before } = await pool.query<{ n: string }>(

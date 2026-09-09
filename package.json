@@ -54,7 +54,7 @@
     "backfill:contacts": "tsx scripts/backfillContactsFromSaleOrders.ts",
     "backfill:delivery-terms": "tsx scripts/backfillDeliveryTerms.ts",
     "backfill:print-snapshot": "tsx scripts/backfillPrintSnapshot.ts",
-    "backfill:audit-actor": "tsx scripts/backfillAuditActor.ts",
+    "backfill:audit-actor": "tsx scripts/logworker/backfillActor.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
