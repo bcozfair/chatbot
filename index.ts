@@ -24,6 +24,7 @@ import {
   getBranches,
   ODOO_EXPORT_SALES_TEAM_JOIN,
   ODOO_EXPORT_RAW_NAME_JOINS,
+  getOdooSalespersonNameVocabulary,
   ODOO_EXPORT_RAW_NAME_COLS,
   parseExportedFilter,
   exportedFilterCondition,
@@ -61,6 +62,7 @@ import {
 } from './services/creditHoldService.js';
 import {
   buildOdooSaleOrderRows,
+  buildSalespersonNameIndex,
   selectExportableQuotes,
   loadOdooExportConfig,
   parseExportCompany,
@@ -3565,9 +3567,20 @@ app.get('/api/admin/quotations/export', adminAuthMiddleware, requireRole('admin'
       );
       const emitted = exportable.filter((q: any) => claimedIds.has(String(q.id)));
 
+      // ชื่อเซลล์ช่อง H ต้องสะกดตรงกับ res.users ฝั่ง Odoo ทุกอักขระ — อ่านการสะกดจริงจาก
+      // customers.salesperson แทนการต่อสังกัดเอง (บางชื่อมีเว้นวรรคหน้าวงเล็บ บางชื่อไม่มี)
+      // query เดียวต่อไฟล์ ไม่ใช่ต่อใบ · อยู่ใน client เดียวกับ transaction เพื่อไม่ยืม pool เพิ่ม
+      const salespersonNamesByKey = buildSalespersonNameIndex(
+        await getOdooSalespersonNameVocabulary(client)
+      );
+
       // ไม่เรียก enrichQuotationData() ที่นี่ — format นี้ไม่ใช้สต๊อกสด/วันจัดส่ง/กฎโปรโมชัน
       // และ enrich ยิง query หลายครั้งต่อใบ ทำให้ export หลายร้อยใบช้าโดยไม่จำเป็น
-      const rows = buildOdooSaleOrderRows(emitted, loadOdooExportConfig(), company);
+      const rows = buildOdooSaleOrderRows(
+        emitted,
+        { ...loadOdooExportConfig(), salespersonNamesByKey },
+        company
+      );
 
       // ไม่มีใบใหม่ = ไม่สร้าง batch เปล่าให้รกประวัติ (ยังตอบไฟล์หัวคอลัมน์เปล่ากลับไปตามปกติ)
       let batchId: string | null = null;

@@ -23,6 +23,7 @@ import { pool } from '../../config/db.js';
 import {
   ODOO_EXPORT_SALES_TEAM_JOIN,
   ODOO_EXPORT_RAW_NAME_JOINS,
+  getOdooSalespersonNameVocabulary,
   ODOO_EXPORT_RAW_NAME_COLS,
   exportedFilterCondition,
   parseExportedFilter,
@@ -30,6 +31,8 @@ import {
 import {
   ODOO_SO_HEADERS,
   buildOdooSaleOrderRows,
+  buildSalespersonNameIndex,
+  salespersonNameKey,
   loadOdooExportConfig,
   parseExportCompany,
   selectExportableQuotes,
@@ -122,7 +125,11 @@ if (quotes.length === 0) {
   process.exit(0);
 }
 
-const config = loadOdooExportConfig();
+const config = {
+  ...loadOdooExportConfig(),
+  // ต้องสร้างคลังชื่อแบบเดียวกับ endpoint ไม่งั้น diag จะตรวจไฟล์คนละแบบกับของจริง
+  salespersonNamesByKey: buildSalespersonNameIndex(await getOdooSalespersonNameVocabulary()),
+};
 const tax = config.taxByCompany[company];
 console.log(`   config: tax(${company})="${tax}" sourceId="${config.sourceId}" uom="${config.uom}"`);
 
@@ -242,7 +249,22 @@ let badContact = 0;
 let badNote = 0;
 let badDelivery = 0;
 let missingDeliveryTerms = 0;
+// ตัวเทียบอิสระของช่อง H: การสะกดชื่อเซลล์ฝั่ง Odoo อ่านจาก customers ตรง ๆ
+// ไม่ได้เรียก getOdooSalespersonNameVocabulary() ที่ export ใช้ เพื่อให้จับได้ถ้าตัวนั้นเองผิด
+const odooSpellingByKey = new Map<string, string>();
+{
+  const { rows } = await pool.query<{ salesperson: string }>(
+    `SELECT DISTINCT salesperson FROM customers WHERE salesperson IS NOT NULL AND salesperson <> ''`
+  );
+  rows.forEach(r => {
+    const key = salespersonNameKey(r.salesperson);
+    if (!odooSpellingByKey.has(key) || r.salesperson === key) odooSpellingByKey.set(key, r.salesperson);
+  });
+}
+
 let badSuffix = 0;
+let spellingChecked = 0;
+let spellingMismatch = 0;
 let badSalesTeam = 0;
 let emptySalesTeam = 0;
 let noContactId = 0;
@@ -322,10 +344,26 @@ for (const quote of quotesWithItems) {
   }
 
   // H: ชื่อเซลล์ต้องมีสังกัดห้อยท้ายตามคำนำหน้าเลขที่ใบ
+  // (เทียบแบบ endsWith จึงผ่านทั้งชื่อที่มีและไม่มีเว้นวรรคหน้าวงเล็บ — การสะกดจริงตรวจข้อถัดไป)
   const expectedSuffix = quote.quotation_no.toUpperCase().startsWith('QT') ? '(THT)' : '(PM)';
   if (first.salesperson && !first.salesperson.endsWith(expectedSuffix)) {
     badSuffix++;
     console.log(`   ✗ ${quote.quotation_no}: ชื่อเซลล์ไม่ลงท้าย ${expectedSuffix} (H="${first.salesperson}")`);
+  }
+
+  // H: การสะกดต้องตรงกับ customers.salesperson ทุกอักขระ — Odoo จับคู่ res.users แบบตรงตัว
+  // ตัวเทียบอิสระ: อ่านค่าดิบจาก customers เองไม่ผ่านคลังชื่อที่ export ใช้ เพื่อให้จับได้ถ้า
+  // ท่อนสร้างคลังหรือการต่อสายที่ endpoint ผิด · ชื่อที่ไม่มีในคลัง (เซลล์ที่ยังไม่มีลูกค้าในมือ)
+  // ข้ามไป ไม่นับเป็นความผิด เพราะ export ตั้งใจให้ถอยไปใช้ชื่อที่ต่อสังกัดเองอยู่แล้ว
+  if (first.salesperson) {
+    const want = odooSpellingByKey.get(salespersonNameKey(first.salesperson));
+    if (want) {
+      spellingChecked++;
+      if (want !== first.salesperson) {
+        spellingMismatch++;
+        console.log(`   ✗ ${quote.quotation_no}: ชื่อเซลล์สะกดไม่ตรง Odoo — customers "${want}" แต่ไฟล์ได้ "${first.salesperson}"`);
+      }
+    }
   }
 
   // J: ชื่อจริงของเซลล์จาก salesperson.employee_quotation_id + สังกัดห้อยท้ายชุดเดียวกับช่อง H
@@ -399,6 +437,8 @@ ok('ชื่อในไฟล์ตรงกับตารางหลัก 
 ok('ช่อง note ตรงกับหมายเหตุการรับประกันของใบ', badNote === 0, badNote ? `(พลาด ${badNote} ใบ)` : '');
 ok('ชื่อเซลล์ (H) มีสังกัด (PM)/(THT) ห้อยท้ายตามเลขที่ใบ', badSuffix === 0,
   badSuffix ? `(พลาด ${badSuffix} ใบ)` : '');
+ok('ชื่อเซลล์ (H) สะกดตรงกับ customers.salesperson ทุกอักขระ', spellingMismatch === 0,
+  spellingMismatch ? `(พลาด ${spellingMismatch} ใบ)` : `(ตรวจ ${spellingChecked} ใบ)`);
 ok('Sales Team (I) ตรงกับ customers_data_view ของ contact_id นั้น', badSalesTeam === 0,
   badSalesTeam ? `(พลาด ${badSalesTeam} ใบ)` : `(ตรวจ ${quotesWithItems.length} ใบ)`);
 if (emptySalesTeam > 0) {
