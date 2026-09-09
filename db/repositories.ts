@@ -732,7 +732,10 @@ export async function listSalespeopleFromOrders(): Promise<any[]> {
     `);
     const seen = new Map<string, any>();
     for (const row of result.rows) {
-      const cleanName = row.name.replace(/\s*\([^)]*\)\s*$/gi, '').trim();
+      // ตัดแค่วงเล็บสังกัดท้ายชื่อ ห้ามกินช่องว่างหน้าวงเล็บหรือ trim หัวท้ายทิ้ง — Odoo สะกดบางคน
+      // โดยมีช่องว่างท้ายชื่อจริง ("คุณวิรุณ ภาคอีสาน (PM)") ตัดทิ้งแล้วชื่อที่ลงทะเบียนจะไม่ตรงกับ
+      // res.users ทำให้ไฟล์ export ของคนนั้น import เข้า Odoo ไม่ผ่านทั้งใบ
+      const cleanName = row.name.replace(/\([^)]*\)\s*$/gi, '');
       let cleanPhone = null;
       if (row.phone && row.phone !== 'null') cleanPhone = row.phone.trim();
       if (!seen.has(cleanName)) {
