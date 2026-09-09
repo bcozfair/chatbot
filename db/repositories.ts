@@ -282,6 +282,44 @@ export async function getSalespersonByUserId(userId: string): Promise<any | null
   } catch (err) { logErr('getSalespersonByUserId', err); return null; }
 }
 
+/**
+ * แถวพนักงานขายทั้งหมดสำหรับหน้า "จัดการข้อมูลพนักงาน" — **ตัดแถวพร็อกซีของหน้าเว็บแอดมินออก**
+ *
+ * `web:<admin_id>:<sp_user_id>` ไม่ใช่คน แต่ก๊อป name/salesperson_id มาจากเซลส์ตัวจริง
+ * ⇒ ไม่กรอง = หน้านี้เห็นชื่อซ้ำและขึ้นเตือนรหัสพนักงานซ้ำทุกคู่
+ * (docs/plan-web-quote-request.md §2.11 · ด่าน `npm run diag:pdf-issuer` เคส 7)
+ *
+ * อยู่ที่นี่แทนที่จะอินไลน์ใน route เพื่อให้ด่านเรียก **ตัวเดียวกับที่ endpoint เรียกจริง** ได้
+ */
+export async function listSalespersonsForAdmin(): Promise<any[]> {
+  // quotation_count ใช้เตือนตอนลบ — ลบพนักงานแล้ว FK ตั้ง quotations.user_id = NULL (ON DELETE SET NULL)
+  // ผลที่ยอมรับแล้ว: ตัวเลขนี้จะไม่นับใบที่แอดมินออกในนามเซลส์คนนั้น
+  const { rows } = await pool.query(`
+      SELECT s.user_id, s.name, s.status, s.phone, s.salesperson_id, s.branch,
+             s.employee_quotation_id, s.created_at, s.updated_at,
+             (SELECT count(*) FROM quotations q WHERE q.user_id = s.user_id) AS quotation_count
+        FROM salesperson s
+       WHERE s.user_id NOT LIKE 'web:%'
+       ORDER BY s.name ASC`);
+  return rows;
+}
+
+/**
+ * ชื่อคนอื่นที่ใช้รหัสพนักงานเดียวกัน — ใช้เตือน (ไม่บล็อก) ตอนแก้โปรไฟล์พนักงานขาย
+ *
+ * ต้องกรอง `web:%` ด้วย เพราะแถวพร็อกซี**ก๊อป `salesperson_id` มาจากเซลส์ตัวจริง**
+ * ⇒ ไม่กรอง = เซลส์ทุกคนที่แอดมินเคยออกใบในนามจะขึ้นเตือน "รหัสซ้ำ" กับตัวเอง
+ */
+export async function findDuplicateEmployeeCodeNames(salespersonId: string, exceptUserId: string): Promise<string[]> {
+  const { rows } = await pool.query(
+    `SELECT name FROM salesperson
+      WHERE salesperson_id = $1 AND user_id <> $2 AND user_id NOT LIKE 'web:%'
+      ORDER BY name ASC`,
+    [salespersonId, exceptUserId]
+  );
+  return rows.map((r: any) => r.name);
+}
+
 export async function insertSalesperson(data: Record<string, any>): Promise<any | null> {
   try {
     const row = mapSalespersonWrite(data);
@@ -449,6 +487,27 @@ export const ODOO_EXPORT_RAW_NAME_JOINS = `
 /** คอลัมน์ชื่อดิบที่คู่กับ ODOO_EXPORT_RAW_NAME_JOINS — ใส่ใน SELECT list ของทั้ง endpoint และ diag */
 export const ODOO_EXPORT_RAW_NAME_COLS =
   'raw_company.customer_name AS raw_customer_name, raw_contact.contact_name AS raw_contact_name';
+
+/**
+ * ชื่อเซลล์ทุกแบบที่ Odoo สะกดไว้จริง — คลังชื่อสำหรับช่อง H ของไฟล์ export
+ *
+ * customers.salesperson sync มาจาก Odoo ตรง ๆ จึงเป็นที่เดียวที่รู้ว่าชื่อ res.users ฝั่งโน้น
+ * สะกดอย่างไร (บางชื่อมีเว้นวรรคหน้าวงเล็บสังกัด บางชื่อไม่มี) — ดู buildSalespersonNameIndex()
+ *
+ * ~110 ค่า/78k แถว seq scan ~65ms ซึ่งรับได้เพราะ export เป็นงานที่แอดมินสั่งเป็นครั้ง ๆ
+ * ไม่ใช่ path ที่ยิงถี่ · คืน [] เมื่อพัง → export ถอยไปใช้ชื่อที่ต่อสังกัดเองตามเดิม
+ */
+export async function getOdooSalespersonNameVocabulary(executor: DbExecutor = pool): Promise<string[]> {
+  try {
+    const { rows } = await executor.query(
+      `SELECT DISTINCT salesperson FROM customers WHERE salesperson IS NOT NULL AND salesperson <> ''`
+    );
+    return rows.map((r: any) => r.salesperson as string);
+  } catch (err) {
+    logErr('getOdooSalespersonNameVocabulary', err);
+    return [];
+  }
+}
 
 // ────────────── ติดตามการส่งออกไป Odoo (กันส่งออกซ้ำ) ──────────────
 //

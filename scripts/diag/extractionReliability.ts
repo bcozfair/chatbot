@@ -11,7 +11,7 @@
 //
 //  ยิงด้วย createChatCompletion() ตัวเดียวกับ production และ params เดียวกันเป๊ะ
 //  (response_format json_object · max_tokens 8192 · temperature 0 · thinking disabled)
-//  ⚠️ prompt ใช้ mirror จาก extractionCore.ts — ถ้าแก้ prompt ใน lineHandler ต้อง sync ที่นั่นด้วย
+//  ✅ prompt มาจาก services/quoteExtraction.ts ของจริง (เฟส C ยุบสำเนาทิ้งแล้ว) ไม่ต้อง sync มือ
 //  ⚠️ ยิงด้วย historyContext = '' (ข้อความสดใหม่ ไม่มีประวัติแชทนำหน้า) prompt จึงสั้นกว่าของจริง
 //     เล็กน้อย ⇒ latency ที่วัดได้เป็น "ขอบล่าง" ของจริงจะช้ากว่านี้นิดหน่อยเมื่อมีประวัติยาว
 // ─────────────────────────────────────────────────────────────────────────────

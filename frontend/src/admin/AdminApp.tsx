@@ -9,6 +9,7 @@ import { ChangePasswordModal } from './ChangePasswordModal';
 import { Promotions } from './Promotions';
 import { Salespersons } from './Salespersons';
 import { Quotations } from './Quotations';
+import { QuoteRequest } from './QuoteRequest';
 import { PageHeaderProvider, PageHeaderOutlet } from './PageHeader';
 import { ThemeToggle } from './ThemeToggle';
 import { QuotationRules } from './QuotationRules';
@@ -40,10 +41,11 @@ import {
   KeyRound,
   Ban,
   ClipboardList,
+  FilePlus2,
 } from 'lucide-react';
 
 type MainTab =
-  | 'dashboard' | 'quotations' | 'salespersons' | 'promotions' | 'users' | 'blacklist'
+  | 'dashboard' | 'quoterequest' | 'quotations' | 'salespersons' | 'promotions' | 'users' | 'blacklist'
   // กลุ่ม "บันทึกและรายงาน" — 4 หน้าที่อยู่ใต้หัวข้อพับได้อันเดียวกัน
   | 'traffic' | 'apilogs' | 'auditlogs' | 'systemlogs'
   | 'settings';
@@ -68,6 +70,7 @@ const BRAND_BORDER = 'var(--brand-border)';
 // roles = สิทธิ์ที่เห็นเมนูนี้ — เป็นแค่การซ่อน UI เท่านั้น ตัวบังคับจริงคือ requireRole ฝั่ง backend
 const NAV_ITEMS: { key: MainTab; label: string; icon: typeof LayoutDashboard; roles: Role[] }[] = [
   { key: 'dashboard', label: 'แผงควบคุม', icon: LayoutDashboard, roles: ['admin'] },
+  { key: 'quoterequest', label: 'ขอใบเสนอราคา', icon: FilePlus2, roles: ['admin', 'subadmin'] },
   { key: 'quotations', label: 'ประวัติใบเสนอราคา', icon: FileText, roles: ['admin', 'subadmin'] },
   { key: 'promotions', label: 'จัดการโปรโมชันส่วนลด', icon: Tag, roles: ['admin'] },
   { key: 'salespersons', label: 'จัดการข้อมูลพนักงาน', icon: UserCheck, roles: ['admin'] },
@@ -98,6 +101,7 @@ const SETTINGS_SUBITEMS: { key: SubTab; label: string }[] = [
 
 const PAGE_TITLES: Record<MainTab, string> = {
   dashboard: 'แผงควบคุม',
+  quoterequest: 'ขอใบเสนอราคา',
   quotations: 'ประวัติใบเสนอราคา',
   promotions: 'จัดการโปรโมชันส่วนลด',
   salespersons: 'จัดการข้อมูลพนักงาน',
@@ -497,6 +501,10 @@ function AdminContent() {
             /* เมนูเดียวที่ role 'user' เข้าถึงได้ — admin ก็เข้าได้เหมือนกัน */
             <div className="animate-fade-in">
               <Blacklist />
+            </div>
+          ) : effectiveTab === 'quoterequest' ? (
+            <div className="animate-fade-in">
+              <QuoteRequest />
             </div>
           ) : effectiveTab === 'quotations' ? (
             <div className="animate-fade-in">

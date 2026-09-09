@@ -18,6 +18,103 @@ import { DEFAULT_WARRANTY_DISPLAY, resolveMinWarrantyDisplay, warrantyNoteText }
 import { thaiDateDMY } from "./utils/thaiTime.js";
 import { resolveDeliveryTerms, deliveryDisplayText } from "./utils/deliveryTerms.js";
 
+/**
+ * ฟอร์แมตชื่อคนที่จะขึ้นใต้เส้นลายเซ็น — กติกาเดียวกันทุกช่อง (§2.7 ข้อ 2)
+ * ตัด `คุณ` นำหน้า → ลบ `(PM)`/`(THT)` เดิมกันซ้อน → ห้อยสังกัดตามค่ายของใบ
+ * ชื่อว่าง = คืนสตริงว่าง (ผู้เรียกตัดสินเองว่าจะใส่ placeholder อะไร)
+ */
+export function formatPersonNameWithSuffix(rawName: string | null | undefined, isThemtech: boolean): string {
+  const raw = rawName ? String(rawName).trim() : '';
+  if (raw === '') return '';
+  let clean = raw.replace(/^(คุณ)\s*/, '');
+  clean = clean.replace(/\s*\((PM|THT)\)$/gi, '');
+  return clean + (isThemtech ? ' (THT)' : ' (PM)');
+}
+
+/** อ่านไฟล์ลายเซ็นเป็น data URL — ไม่มีไฟล์/อ่านไม่ได้ = null (ห้าม throw ใบต้องออกได้อยู่ดี) */
+function loadSignatureDataUrl(dirName: string, fileKey: string | null): string | null {
+  const key = fileKey ? String(fileKey).trim() : '';
+  if (key === '') return null;
+  const extensions = ['.png', '.jpg', '.jpeg', '.gif'];
+  for (const ext of extensions) {
+    const sigPath = path.join(process.cwd(), "data", dirName, `${key}${ext}`);
+    if (fs.existsSync(sigPath)) {
+      try {
+        const mimeType = ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : `image/${ext.substring(1)}`;
+        return `data:${mimeType};base64,${fs.readFileSync(sigPath).toString("base64")}`;
+      } catch (err) {
+        console.error(`Error reading signature image ${sigPath}:`, err);
+      }
+    }
+  }
+  return null;
+}
+
+export interface SignatureBlocksInput {
+  /** ชื่อเซลส์ที่ฟอร์แมตแล้ว — '' = ยังไม่มี ใช้ placeholder เดิม */
+  salespersonNameFormatted: string;
+  /** เบอร์เซลส์ดิบจาก quoteData */
+  salespersonPhone: string;
+  sigBase64: string | null;
+  /**
+   * ชื่อผู้เสนอราคาที่ฟอร์แมตแล้ว — **`null` = ไม่ใช่ใบจากเว็บ ⇒ ช่องขวาเดินเส้นเดิมทุกบรรทัด**
+   * นี่คือสวิตช์เดียวของทางใหม่ทั้งหมด (ใบ LINE และใบเก่าทุกใบไม่มีวันมีค่านี้)
+   */
+  issuerNameFormatted: string | null;
+  issuerPhone: string | null;
+  issuerSigBase64: string | null;
+}
+
+/**
+ * HTML ของช่องลายเซ็นทั้ง 3 ช่อง — แยกออกมาเพื่อให้ด่านเทียบสตริงได้ตรง ๆ โดยไม่ต้องเปิด Chrome
+ * (`npm run diag:pdf-issuer` · docs/plan-web-quote-request.md §2.7 ข้อ 3)
+ *
+ * ⚠️ ผลลัพธ์ของทางเดิม (`issuerNameFormatted === null`) ต้องเป็นสตริงเดิม **ทุกตัวอักษร**
+ *    รวมทั้งช่องว่างหน้าบรรทัด — ห้ามจัด indent ใหม่ให้สวยขึ้น
+ */
+export function buildSignatureBlocksHtml(input: SignatureBlocksInput): string {
+  const sigImg = (b64: string | null) =>
+    b64 ? `<img src="${b64}" alt="ลายเซ็น" style="max-height: 50px; max-width: 180px; object-fit: contain; display: block; margin: 0 auto;" />` : '';
+  const phoneLine = (text: string) => `            <div style="color: #111; font-size: 11px;">${text}</div>\n`;
+
+  const spName = input.salespersonNameFormatted === '' ? 'ชื่อพนักงานขาย' : input.salespersonNameFormatted;
+  const spPhoneText = input.salespersonPhone && input.salespersonPhone !== '' ? `( ${input.salespersonPhone} )` : '( เบอร์โทร )';
+
+  const isWebIssuer = input.issuerNameFormatted !== null && input.issuerNameFormatted !== '';
+  const rightSig = isWebIssuer ? input.issuerSigBase64 : input.sigBase64;
+  const rightName = isWebIssuer ? (input.issuerNameFormatted as string) : spName;
+  // ใบจากเว็บที่ชื่อนั้นไม่มีเบอร์ → **ไม่พิมพ์บรรทัดนั้นเลย** ไม่ใช่พิมพ์ `( เบอร์โทร )`
+  // ใบที่ส่งลูกค้าไม่ควรมีคำว่า "( เบอร์โทร )" โผล่ (§2.7 ข้อ 1)
+  const rightPhoneLine = isWebIssuer
+    ? (input.issuerPhone && input.issuerPhone !== '' ? phoneLine(`( ${input.issuerPhone} )`) : '')
+    : phoneLine(spPhoneText);
+
+  return `<div class="sigs">
+          <div class="sig">
+            <div class="sig-space"></div>
+            <div class="sig-line"></div>
+            <div class="sig-name">ลูกค้า (ผู้มีอำนาจ)</div>
+            <div class="sig-date">วันที่......./......./.......</div>
+          </div>
+
+          <div class="sig">
+            <div class="sig-space">${sigImg(input.sigBase64)}</div>
+            <div class="sig-line"></div>
+            <div class="sig-name">( ${spName} )</div>
+${phoneLine(spPhoneText)}            <div style="color: #111; font-size: 11px;">( พนักงานขาย )</div>
+            <div class="sig-date">วันที่......./......./.......</div>
+          </div>
+
+          <div class="sig">
+            <div class="sig-space">${sigImg(rightSig)}</div>
+            <div class="sig-line"></div>
+            <div class="sig-name">( ${rightName} )</div>
+${rightPhoneLine}            <div style="color: #111; font-size: 11px;">( ผู้เสนอราคา )</div>
+            <div class="sig-date">วันที่......./......./.......</div>
+          </div>
+        </div>`;
+}
+
 // ใช้ Chrome ตัวเดียวร่วมกันทุก request แทนการ launch ใหม่ทุกครั้ง
 // เดิม: launch ต่อ request และ browser.close() ไม่อยู่ใน finally -> error หนึ่งครั้ง = Chrome ค้าง 1 ตัว สะสมจน RAM หมด
 let browserPromise: Promise<import("puppeteer").Browser> | null = null;
@@ -308,36 +405,23 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
   }
 
   // จัดการชื่อพนักงานขายตามเงื่อนไข (QT -> THT, QP -> PM)
-  let salespersonNameFormatted = '';
-  if (quoteData.salesperson_name && quoteData.salesperson_name !== '') {
-    let cleanSpName = String(quoteData.salesperson_name).trim();
-    // ตัดคำนำหน้าชื่อ
-    cleanSpName = cleanSpName.replace(/^(คุณ)\s*/, '');
-    // ลบวงเล็บ (PM) หรือ (THT) เดิมที่อาจติดมาออกก่อนเพื่อป้องกันการซ้อนกัน
-    cleanSpName = cleanSpName.replace(/\s*\((PM|THT)\)$/gi, '');
-    const suffix = isThemtech ? ' (THT)' : ' (PM)';
-    salespersonNameFormatted = cleanSpName + suffix;
-  }
+  const salespersonNameFormatted = formatPersonNameWithSuffix(quoteData.salesperson_name, isThemtech);
 
   // ดึงไฟล์ภาพลายเซ็นพนักงานขายตามรหัสพนักงาน (ถ้ามี)
-  let sigBase64: string | null = null;
   const empCode = quoteData.salesperson_employee_code ? String(quoteData.salesperson_employee_code).trim() : null;
-  if (empCode) {
-    const extensions = ['.png', '.jpg', '.jpeg', '.gif'];
-    for (const ext of extensions) {
-      const sigPath = path.join(process.cwd(), "data", "sale_sigs", `${empCode}${ext}`);
-      if (fs.existsSync(sigPath)) {
-        try {
-          const mimeType = ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : `image/${ext.substring(1)}`;
-          const imgBase64 = fs.readFileSync(sigPath).toString("base64");
-          sigBase64 = `data:${mimeType};base64,${imgBase64}`;
-          break; // ค้นพบแล้วให้หยุดลูป
-        } catch (err) {
-          console.error(`Error reading signature image ${sigPath}:`, err);
-        }
-      }
-    }
-  }
+  const sigBase64 = loadSignatureDataUrl("sale_sigs", empCode);
+
+  // ── ตัวตน "ผู้เสนอราคา" ของใบที่ออกจากเว็บ (§2.7) ──────────────────────────
+  // `issuer_name` เป็นสวิตช์: ไม่มี = ใบ LINE/ใบเก่า → ช่องขวาเดินเส้นเดิมทุกบรรทัด
+  // ชื่อห้อยสังกัดด้วยกติกาเดียวกับชื่อเซลส์ · เบอร์ไม่ห้อย · ลายเซ็นคนละโฟลเดอร์
+  // ⚠️ ไม่มีลายเซ็นแอดมิน = ช่องขวาไม่มีรูป **ห้ามถอยไปใช้ลายเซ็นเซลส์**
+  //    ลายเซ็นคนอื่นใต้ชื่อเรา ผิดร้ายแรงกว่าไม่มีลายเซ็น
+  const issuerNameFormatted = quoteData.issuer_name
+    ? formatPersonNameWithSuffix(quoteData.issuer_name, isThemtech)
+    : null;
+  const issuerSigBase64 = issuerNameFormatted
+    ? loadSignatureDataUrl("admin_sigs", quoteData.issuer_sig_key || null)
+    : null;
 
 
   const logoFile = isThemtech ? "logo2.png" : "logo.png";
@@ -678,32 +762,14 @@ export async function generateQuotationPDF(quoteData: any, quoteNoInput?: string
         </div>
 
         <!-- ══ SIGNATURES ══ -->
-        <div class="sigs">
-          <div class="sig">
-            <div class="sig-space"></div>
-            <div class="sig-line"></div>
-            <div class="sig-name">ลูกค้า (ผู้มีอำนาจ)</div>
-            <div class="sig-date">วันที่......./......./.......</div>
-          </div>
-
-          <div class="sig">
-            <div class="sig-space">${sigBase64 ? `<img src="${sigBase64}" alt="ลายเซ็น" style="max-height: 50px; max-width: 180px; object-fit: contain; display: block; margin: 0 auto;" />` : ''}</div>
-            <div class="sig-line"></div>
-            <div class="sig-name">( ${salespersonNameFormatted === '' ? 'ชื่อพนักงานขาย' : salespersonNameFormatted} )</div>
-            <div style="color: #111; font-size: 11px;">${quoteData.salesperson_phone && quoteData.salesperson_phone !== '' ? `( ${quoteData.salesperson_phone} )` : '( เบอร์โทร )'}</div>
-            <div style="color: #111; font-size: 11px;">( พนักงานขาย )</div>
-            <div class="sig-date">วันที่......./......./.......</div>
-          </div>
-
-          <div class="sig">
-            <div class="sig-space">${sigBase64 ? `<img src="${sigBase64}" alt="ลายเซ็น" style="max-height: 50px; max-width: 180px; object-fit: contain; display: block; margin: 0 auto;" />` : ''}</div>
-            <div class="sig-line"></div>
-            <div class="sig-name">( ${salespersonNameFormatted === '' ? 'ชื่อพนักงานขาย' : salespersonNameFormatted} )</div>
-            <div style="color: #111; font-size: 11px;">${quoteData.salesperson_phone && quoteData.salesperson_phone !== '' ? `( ${quoteData.salesperson_phone} )` : '( เบอร์โทร )'}</div>
-            <div style="color: #111; font-size: 11px;">( ผู้เสนอราคา )</div>
-            <div class="sig-date">วันที่......./......./.......</div>
-          </div>
-        </div>
+        ${buildSignatureBlocksHtml({
+          salespersonNameFormatted,
+          salespersonPhone: quoteData.salesperson_phone || '',
+          sigBase64,
+          issuerNameFormatted,
+          issuerPhone: quoteData.issuer_phone || null,
+          issuerSigBase64,
+        })}
 
         <div class="form-no">F-MK-04 REV.6</div>
       </div>

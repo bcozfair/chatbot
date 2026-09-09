@@ -91,6 +91,12 @@ try {
 
   const items = [toItem(blocked[0]), toItem(normal[0]), toItem(blocked[1]), feeItem];
 
+  // ทุกจุดจริง (checkBlockedProducts · endpoint /blocked · ด่าน PDF) รายงานรหัสที่ btrim แล้ว
+  // เพราะต้อง btrim ทั้งสองฝั่งตอน match ไม่งั้นสินค้าตามข้อ (ฉ) หลุดด่าน
+  // ฝั่งที่คาดหวังจึงต้อง trim ตาม — ส่วน item ที่ป้อนเข้าไปยังใส่รหัสดิบไว้เหมือนเดิม
+  // เพื่อให้เส้นทาง trim ถูกทดสอบจริง ห้ามเปลี่ยน toItem ให้ trim เด็ดขาด
+  const codeOf = (m: any) => String(m ?? '').trim();
+
   // ── (ข)(ค) รายงานครบทุกบรรทัด พร้อมรหัสจริง ──────────────────────────────
   const found = await checkBlockedProducts(items);
   ok('รายงานครบทุกบรรทัดที่ถูกบล็อก (ไม่ใช่ตัวแรกตัวเดียว)', found.length === 2,
@@ -99,16 +105,17 @@ try {
     found.every(v => v.model && v.model !== '-'),
     found.map(v => v.model).join(', '));
   ok('รหัสที่รายงานตรงกับสินค้าที่ใส่เข้าไป',
-    found.map(v => v.model).sort().join('|') === [blocked[0].model, blocked[1].model].sort().join('|'));
-  ok('สินค้าปกติไม่ถูกรายงาน', !found.some(v => v.model === normal[0].model));
-  ok('บรรทัดค่าขนส่งถูกข้าม', !found.some(v => v.model === feeItem.model));
+    found.map(v => codeOf(v.model)).sort().join('|')
+      === [codeOf(blocked[0].model), codeOf(blocked[1].model)].sort().join('|'));
+  ok('สินค้าปกติไม่ถูกรายงาน', !found.some(v => codeOf(v.model) === codeOf(normal[0].model)));
+  ok('บรรทัดค่าขนส่งถูกข้าม', !found.some(v => codeOf(v.model) === codeOf(feeItem.model)));
   ok('warn_msg มาจากที่แอดมินกรอกไว้ใน DB',
     found.every(v => v.warn_msg && v.warn_msg.trim() !== ''),
     found[0]?.warn_msg ?? '');
 
   // ── (ก) ถ้อยคำเดียวกันทุกจุด ─────────────────────────────────────────────
   const target = blocked[0];
-  const expected = `❌ ระงับการเสนอราคา รายการ ${target.model}: ${blockWarnText(target.rule)}`;
+  const expected = `❌ ระงับการเสนอราคา รายการ ${codeOf(target.model)}: ${blockWarnText(target.rule)}`;
 
   // 1) ด่านกลาง (validateQuotationItems → buildViolationDisplay)
   const { violations } = await validateQuotationItems([toItem(target)], { stage: 'draft' });
@@ -116,9 +123,11 @@ try {
   ok('ด่านกลางให้ข้อความตาม template', gateMsg === expected, gateMsg ?? '(ไม่มี BLOCKED)');
 
   // 2) API GET /api/products/:code/blocked — ประกอบด้วยชิ้นส่วนเดียวกับที่ endpoint ใช้
+  // endpoint ส่ง prod.code ที่มาจาก `btrim(model) AS code` ตรงนี้จึงต้อง codeOf ให้ตรงกัน
+  // ถ้าใส่รหัสดิบ = เทสต์ผิดแบบเดียวกับ expected ที่เคยไม่ trim แล้วมาหักล้างกันจนดูเหมือนผ่าน
   const apiRule = findBlockingRule(rules, normalizeProductScope(target));
   const apiMsg = apiRule ? buildViolationDisplay({
-    type: 'BLOCKED', model: target.model, warn_msg: blockWarnText(apiRule) ?? undefined
+    type: 'BLOCKED', model: codeOf(target.model), warn_msg: blockWarnText(apiRule) ?? undefined
   }) : null;
   ok('API /blocked ให้ข้อความเดียวกับด่านกลาง', apiMsg === expected, apiMsg ?? '(null)');
 
