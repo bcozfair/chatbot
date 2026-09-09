@@ -176,7 +176,7 @@ function clean(value: any): string {
 }
 
 /**
- * ชื่อลูกค้า/ผู้ติดต่อต้องส่งดิบ ๆ ห้ามตัดช่องว่างหัวท้าย
+ * ชื่อลูกค้า/ผู้ติดต่อ/เซลล์ต้องส่งดิบ ๆ ห้ามตัดช่องว่างหัวท้าย
  *
  * Odoo จับคู่ res.partner ด้วยการเทียบชื่อแบบตรงตัวทุกอักขระ และชื่อที่ลงท้ายด้วยช่องว่างมีอยู่จริง
  * ในระบบ (ฝั่ง master เจอ 17,666 แถวในชื่อผู้ติดต่อ) พอ clean() .trim() ทิ้ง ค่าที่ส่งออกจะกลายเป็น
@@ -381,8 +381,10 @@ export function buildOdooSaleOrderRows(
     const contactDisplay = company && contact ? `${company}, ${contact}` : (company || contact);
     // ช่อง Salesperson ต้องมีสังกัดห้อยท้าย เพราะเซลล์คนเดียวกันเป็นคนละ user ใน Odoo ของ PM กับ THT
     const quotationNo = clean(quote.quotation_no);
+    // ชื่อเซลล์ใช้ cleanName() ไม่ใช่ clean() — salesperson.name ตั้งใจเก็บช่องว่างท้ายไว้ให้ตรงกับ
+    // ที่ Odoo สะกด ("คุณวิรุณ ภาคอีสาน " → "คุณวิรุณ ภาคอีสาน (PM)") trim ทิ้งคือทำต้นเหตุพังอีกรอบ
     const salesperson = resolveOdooSalespersonName(
-      clean(quote.employee_details?.saleperson) || clean(quote.salesperson_name),
+      cleanName(quote.employee_details?.saleperson) || cleanName(quote.salesperson_name),
       quotationNo,
       config.salespersonNamesByKey
     );
