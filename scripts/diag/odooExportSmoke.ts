@@ -24,6 +24,7 @@ import {
   ODOO_EXPORT_SALES_TEAM_JOIN,
   ODOO_EXPORT_RAW_NAME_JOINS,
   getOdooSalespersonNameVocabulary,
+  listSalespeopleFromOrders,
   ODOO_EXPORT_RAW_NAME_COLS,
   exportedFilterCondition,
   parseExportedFilter,
@@ -439,6 +440,25 @@ ok('ชื่อเซลล์ (H) มีสังกัด (PM)/(THT) ห้�
   badSuffix ? `(พลาด ${badSuffix} ใบ)` : '');
 ok('ชื่อเซลล์ (H) สะกดตรงกับ customers.salesperson ทุกอักขระ', spellingMismatch === 0,
   spellingMismatch ? `(พลาด ${spellingMismatch} ใบ)` : `(ตรวจ ${spellingChecked} ใบ)`);
+// รายชื่อใน dropdown หน้าลงทะเบียน/แก้ไข คือค่าที่จะถูกบันทึกลง salesperson.name ตรง ๆ
+// ถ้าตรงนี้ตัดช่องว่างทิ้ง ชื่อที่ลงทะเบียนใหม่จะสะกดไม่ตรง Odoo ตั้งแต่ต้นทาง
+let rosterChecked = 0;
+let rosterMismatch = 0;
+const rosterBad: string[] = [];
+for (const entry of await listSalespeopleFromOrders()) {
+  for (const suffix of ['(PM)', '(THT)']) {
+    const withSuffix = entry.name + suffix;
+    const want = odooSpellingByKey.get(salespersonNameKey(withSuffix));
+    if (want === undefined) continue;
+    rosterChecked++;
+    if (want !== withSuffix) {
+      rosterMismatch++;
+      if (rosterBad.length < 5) rosterBad.push(`[${withSuffix}] ควรเป็น [${want}]`);
+    }
+  }
+}
+ok('ชื่อใน dropdown ลงทะเบียน ต่อสังกัดแล้วตรงกับ customers.salesperson', rosterMismatch === 0,
+  rosterMismatch ? `(พลาด ${rosterMismatch} ชื่อ: ${rosterBad.join(' , ')})` : `(ตรวจ ${rosterChecked} ชื่อ)`);
 ok('Sales Team (I) ตรงกับ customers_data_view ของ contact_id นั้น', badSalesTeam === 0,
   badSalesTeam ? `(พลาด ${badSalesTeam} ใบ)` : `(ตรวจ ${quotesWithItems.length} ใบ)`);
 if (emptySalesTeam > 0) {
