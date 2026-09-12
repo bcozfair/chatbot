@@ -24,6 +24,7 @@ import { RequestTimeline } from './RequestTimeline';
  * ⚠️ กติกาที่ห้ามผ่อน: ชื่อคนทำต้องแสดง "ที่มา" ควบคู่เสมอ
  *   'ยืนยันแล้ว'    = แอปบอกมาตรง ๆ (SET LOCAL app.actor) — แม่นยำ 100%
  *   'จับคู่จากเวลา' = logworker หาจาก api_logs ที่ครอบเวลานั้น — แม่นสูงแต่ไม่ใช่ 100%
+ *   'เจ้าตัวผ่าน LINE' = เจ้าของข้อมูลแก้เองผ่านบอท/LIFF (ไม่มีแอดมินเกี่ยวข้อง) — จับคู่จากเวลาเช่นกัน
  *   'ไม่ทราบ'      = แก้จาก psql/script ตรง ๆ ← เป็นคำตอบที่ถูกต้อง ไม่ใช่ความล้มเหลว
  * ถ้าแสดงแต่ชื่อเฉย ๆ เท่ากับหน้าจอโกหกว่ารู้แน่กว่าที่รู้จริง
  *
@@ -303,6 +304,7 @@ export const AuditLogs: React.FC = () => {
             <SelectField value={state.actorType} onChange={v => set({ actorType: v, page: '1' })}>
               <option value="">ทั้งหมด</option>
               <option value="admin">รู้ตัวคนทำ</option>
+              <option value="line_user">เจ้าตัวแก้เองผ่าน LINE</option>
               <option value="unknown">ไม่ทราบ (แก้จาก psql/script)</option>
               <option value="ambiguous">แยกไม่ออก</option>
               <option value="pending">กำลังหา</option>
@@ -347,50 +349,69 @@ export const AuditLogs: React.FC = () => {
               const open = expanded === r.id;
               return (
                 <div key={r.id}>
+                  {/* แถวเดียวจบ — ทุกช่องมีความกว้างของตัวเอง ตาจึงไล่ลงคอลัมน์ได้เหมือนตาราง
+                      ส่วนที่ยาวไม่จำกัด (ชื่อรายการ) เป็นตัวเดียวที่ยืด/ตัดท้าย ที่เหลือไม่ขยับ */}
                   <button
                     onClick={() => setExpanded(open ? null : r.id)}
-                    className="w-full text-left px-4 py-3 hover:bg-slate-50 transition flex items-start gap-3
-                               focus:outline-none focus-visible:ring-2 focus-visible:ring-inset
+                    className="w-full text-left px-3 py-1.5 hover:bg-slate-50 transition flex items-center gap-2
+                               overflow-hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-inset
                                focus-visible:ring-[var(--brand-fg)]"
                     aria-expanded={open}
                   >
                     {open
-                      ? <ChevronDown className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
-                      : <ChevronRightSmall className="w-4 h-4 text-slate-300 shrink-0 mt-0.5" />}
+                      ? <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                      : <ChevronRightSmall className="w-3.5 h-3.5 text-slate-300 shrink-0" />}
 
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                        <span className="text-sm font-medium text-slate-800">{actionLabel(r.action)}</span>
-                        {r.entity_label && (
-                          <span className="text-sm text-slate-500 truncate max-w-xs">{r.entity_label}</span>
-                        )}
-                        {r.changed_cols && r.changed_cols.length > 0 && r.before && r.after && (
-                          <span className="text-xs text-slate-400">
-                            ({r.changed_cols.length} ช่อง)
-                          </span>
-                        )}
-                        {isBulk(r.action) && (
-                          <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded
-                                           border border-amber-200 bg-amber-50 text-amber-700">
-                            <Layers className="w-3 h-3" />ยกชุด
-                          </span>
-                        )}
-                      </div>
-                      <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
-                        <span title={a.hint}
-                              className={`inline-flex items-center px-1.5 py-0.5 rounded border ${a.cls}`}>
-                          {a.label}
-                        </span>
-                        <span className="text-slate-700">{r.actor_name ?? '—'}</span>
-                        <span className="text-slate-300">·</span>
-                        <span title={formatDateTime(r.occurred_at)}>{relativeTime(r.occurred_at)}</span>
-                        {r.ip && <><span className="text-slate-300">·</span><span>{r.ip}</span></>}
-                      </div>
-                    </div>
+                    <span className="shrink-0 w-20 sm:w-24 text-xs text-slate-400 truncate"
+                          title={formatDateTime(r.occurred_at)}>
+                      {relativeTime(r.occurred_at)}
+                    </span>
+
+                    <span title={a.hint}
+                          className={`shrink-0 text-[11px] leading-4 px-1.5 rounded border ${a.cls}`}>
+                      {a.label}
+                    </span>
+
+                    <span className="shrink-0 w-20 sm:w-32 text-xs text-slate-700 truncate"
+                          title={r.actor_name ?? undefined}>
+                      {r.actor_name ?? '—'}
+                    </span>
+
+                    <span className="shrink-0 text-xs font-medium text-slate-800">{actionLabel(r.action)}</span>
+
+                    {r.entity_label && (
+                      <span className="min-w-0 flex-1 text-xs text-slate-500 truncate" title={r.entity_label}>
+                        {r.entity_label}
+                      </span>
+                    )}
+
+                    {/* ดันของที่เหลือไปชิดขวาเมื่อไม่มีชื่อรายการมายืดแทน */}
+                    {!r.entity_label && <span className="flex-1" />}
+
+                    {r.changed_cols && r.changed_cols.length > 0 && r.before && r.after && (
+                      <span className="shrink-0 text-[11px] text-slate-400 hidden sm:inline"
+                            title={r.changed_cols.join(', ')}>
+                        {/* ช่องน้อย ๆ บอกชื่อช่องไปเลย มีประโยชน์กว่าการบอกแค่จำนวน */}
+                        {r.changed_cols.length <= 2
+                          ? r.changed_cols.join(', ')
+                          : `${r.changed_cols.length} ช่อง`}
+                      </span>
+                    )}
+
+                    {isBulk(r.action) && (
+                      <span className="shrink-0 inline-flex items-center gap-1 text-[11px] leading-4 px-1.5 rounded
+                                       border border-amber-200 bg-amber-50 text-amber-700">
+                        <Layers className="w-3 h-3" />ยกชุด
+                      </span>
+                    )}
+
+                    {r.ip && (
+                      <span className="shrink-0 text-[11px] text-slate-400 hidden lg:inline tabular-nums">{r.ip}</span>
+                    )}
                   </button>
 
                   {open && (
-                    <div className="px-4 pb-4 pl-11 space-y-3">
+                    <div className="px-3 pb-4 pl-9 pt-1 space-y-3">
                       <DiffTable row={r} />
 
                       <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-xs text-slate-400">

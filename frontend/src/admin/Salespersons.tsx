@@ -209,9 +209,11 @@ export function Salespersons() {
     e.preventDefault();
     if (!editingSp) return;
 
-    const name = formName.trim();
+    // ชื่อส่งดิบ ๆ ไม่ trim — ต้องสะกดตรงกับ res.users ฝั่ง Odoo ทุกอักขระ และมีคนที่ Odoo
+    // เก็บช่องว่างท้ายไว้จริง ตัดทิ้งแล้วไฟล์ export ของคนนั้นจะ import เข้า Odoo ไม่ผ่าน
+    const name = formName;
     const salespersonId = formSpId.trim();
-    if (!name) { setFormError('กรุณากรอกชื่อพนักงานขาย'); return; }
+    if (!name.trim()) { setFormError('กรุณากรอกชื่อพนักงานขาย'); return; }
     if (!salespersonId) { setFormError('กรุณากรอกรหัสพนักงานขาย'); return; }
 
     setIsSaving(true);
@@ -742,6 +744,12 @@ export function Salespersons() {
                       </div>
                     )}
                   </div>
+                  {formName !== formName.trim() && (
+                    <p className="text-[10px] text-amber-600 leading-relaxed">
+                      ชื่อนี้มีช่องว่างหัว/ท้ายอยู่ (แสดงเป็น <span className="font-mono bg-amber-50 px-1 rounded">{formName.replace(/ /g, '␣')}</span>) —
+                      ถ้า Odoo สะกดไว้แบบนี้จริงให้คงไว้ ลบทิ้งแล้วไฟล์ export ของคนนี้จะ import ไม่ผ่าน
+                    </p>
+                  )}
                   <p className="text-[10px] text-slate-400 leading-relaxed">
                     เลือกจากรายชื่อแล้วรหัส/เบอร์จะเติมให้อัตโนมัติ — พนักงานใหม่ที่ยังไม่มีออร์เดอร์ พิมพ์เองได้
                   </p>

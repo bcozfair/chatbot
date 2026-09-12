@@ -1178,10 +1178,13 @@
 
 
     btnSave.addEventListener('click', async () => {
-      const nameVal = inputName.value.trim();
+      // ส่งชื่อตามที่รายชื่อพนักงานจริงสะกดไว้ ไม่ใช่ค่าที่พิมพ์แล้ว trim — Odoo เก็บช่องว่างท้ายชื่อ
+      // ของบางคนไว้จริง ("คุณวิรุณ ภาคอีสาน (PM)") ตัดทิ้งแล้วไฟล์ export ของคนนั้น import ไม่ผ่าน
+      const matchedSp = matchSalesperson(inputName.value);
+      const nameVal = matchedSp ? matchedSp.name : inputName.value;
       const phoneVal = inputPhone.value.trim();
       const employeeCodeVal = inputEmployeeCode.value.trim();
-      if (!nameVal || !employeeCodeVal || selectedBranches.size === 0 || !userId) return;
+      if (!nameVal.trim() || !employeeCodeVal || selectedBranches.size === 0 || !userId) return;
 
       loaderText.innerText = 'กำลังบันทึกข้อมูลลงทะเบียน...';
       loaderScreen.style.opacity = '1';

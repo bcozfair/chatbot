@@ -24,6 +24,7 @@ import {
   getBranches,
   ODOO_EXPORT_SALES_TEAM_JOIN,
   ODOO_EXPORT_RAW_NAME_JOINS,
+  getOdooSalespersonNameVocabulary,
   ODOO_EXPORT_RAW_NAME_COLS,
   parseExportedFilter,
   exportedFilterCondition,
@@ -61,6 +62,7 @@ import {
 } from './services/creditHoldService.js';
 import {
   buildOdooSaleOrderRows,
+  buildSalespersonNameIndex,
   selectExportableQuotes,
   loadOdooExportConfig,
   parseExportCompany,
@@ -1457,13 +1459,16 @@ app.post('/api/salesperson/update-branches', express.json(), async (req: any, re
 
     // ชื่อต้องมาจากรายการพนักงานจริงเท่านั้น — พิมพ์ชื่อเองแล้วแนบรหัสมั่วไม่ผ่าน
     // ยอมอีกกรณีเดียว: ชื่อ+รหัสที่แอดมินตั้งไว้ในตาราง salesperson (คนใหม่ที่ยังไม่มี sale order)
-    const cleanName = String(name ?? '').trim();
+    // ไม่ trim ชื่อ — ต้องสะกดตรงกับ res.users ฝั่ง Odoo ทุกอักขระ รวมช่องว่างท้ายชื่อของบางคน
+    // (เทียบกับรายชื่อจริงด้วย eqText ที่ trim ให้อยู่แล้ว ไม่ trim ตรงนี้จึงไม่ทำให้แมตช์ไม่เจอ)
+    const cleanName = String(name ?? '');
     const eqText = (a: any, b: any) => String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase();
-    if (!cleanName) {
+    if (!cleanName.trim()) {
       return res.status(400).json({ success: false, message: 'กรุณาเลือกชื่อพนักงานขายจากรายการที่ระบบแนะนำ' });
     }
     const roster = await listSalespeopleFromOrders();
-    const matchedInRoster = roster.some((r: any) => eqText(r.name, cleanName) && eqText(r.salesperson_id, cleanSalespersonId));
+    const rosterHit = roster.find((r: any) => eqText(r.name, cleanName) && eqText(r.salesperson_id, cleanSalespersonId));
+    const matchedInRoster = !!rosterHit;
     const matchedAdminSet = !!sp && eqText(sp.name, cleanName) && eqText(sp.salesperson_id, cleanSalespersonId);
     if (!matchedInRoster && !matchedAdminSet) {
       return res.status(400).json({
@@ -1484,7 +1489,9 @@ app.post('/api/salesperson/update-branches', express.json(), async (req: any, re
       status: nextStatus
     };
 
-    updateData.name = cleanName;
+    // เก็บการสะกดจากต้นทาง (รายชื่อจริง/ที่แอดมินตั้งไว้) ไม่ใช่ค่าที่ client ส่งมา —
+    // client รุ่นเก่ายัง trim ชื่อก่อนส่ง ช่องว่างท้ายชื่อจะหายตั้งแต่ตอนลงทะเบียน
+    updateData.name = rosterHit ? rosterHit.name : (matchedAdminSet && sp ? sp.name : cleanName);
     if (phone !== undefined) updateData.phone = phone.trim();
     updateData.salesperson_id = cleanSalespersonId;
 
@@ -2237,13 +2244,17 @@ app.put('/api/admin/salespersons/:userId', adminAuthMiddleware, requireRole('adm
     const userId = req.params.userId;
     const { name, phone, salespersonId, employeeQuotationId } = req.body;
 
-    const cleanName = String(name ?? '').trim();
+    // ชื่อเก็บดิบ ๆ ไม่ trim — salesperson.name ต้องสะกดตรงกับ res.users ฝั่ง Odoo ทุกอักขระ
+    // และมีคนที่ Odoo เก็บช่องว่างท้ายไว้จริง ("คุณวิรุณ ภาคอีสาน " → "คุณวิรุณ ภาคอีสาน (PM)")
+    // trim ตรงนี้ = แอดมินแก้อะไรก็ได้ในหน้าเดียวกันแล้วช่องว่างหายเงียบ ๆ ใบถัดไป import ไม่ผ่าน
+    // ช่องว่างล้วนยังนับเป็น "ไม่ได้กรอก" ตามเดิม (ด่านตรวจข้างล่างเทียบด้วย .trim())
+    const cleanName = String(name ?? '');
     const cleanPhone = String(phone ?? '').trim() || null;
     const cleanSpId = String(salespersonId ?? '').trim();
     // ชื่อจริงฝั่ง Odoo (ช่อง J ตอน export) — ไม่บังคับกรอก และส่งค่าว่างมาเพื่อ "ลบ" ค่าเดิมได้
     const cleanEmpQuotationId = String(employeeQuotationId ?? '').trim() || null;
 
-    if (!cleanName) {
+    if (!cleanName.trim()) {
       return res.status(400).json({ error: 'ต้องระบุชื่อพนักงานขาย' });
     }
     if (!cleanSpId) {
@@ -3565,9 +3576,20 @@ app.get('/api/admin/quotations/export', adminAuthMiddleware, requireRole('admin'
       );
       const emitted = exportable.filter((q: any) => claimedIds.has(String(q.id)));
 
+      // ชื่อเซลล์ช่อง H ต้องสะกดตรงกับ res.users ฝั่ง Odoo ทุกอักขระ — อ่านการสะกดจริงจาก
+      // customers.salesperson แทนการต่อสังกัดเอง (บางชื่อมีเว้นวรรคหน้าวงเล็บ บางชื่อไม่มี)
+      // query เดียวต่อไฟล์ ไม่ใช่ต่อใบ · อยู่ใน client เดียวกับ transaction เพื่อไม่ยืม pool เพิ่ม
+      const salespersonNamesByKey = buildSalespersonNameIndex(
+        await getOdooSalespersonNameVocabulary(client)
+      );
+
       // ไม่เรียก enrichQuotationData() ที่นี่ — format นี้ไม่ใช้สต๊อกสด/วันจัดส่ง/กฎโปรโมชัน
       // และ enrich ยิง query หลายครั้งต่อใบ ทำให้ export หลายร้อยใบช้าโดยไม่จำเป็น
-      const rows = buildOdooSaleOrderRows(emitted, loadOdooExportConfig(), company);
+      const rows = buildOdooSaleOrderRows(
+        emitted,
+        { ...loadOdooExportConfig(), salespersonNamesByKey },
+        company
+      );
 
       // ไม่มีใบใหม่ = ไม่สร้าง batch เปล่าให้รกประวัติ (ยังตอบไฟล์หัวคอลัมน์เปล่ากลับไปตามปกติ)
       let batchId: string | null = null;

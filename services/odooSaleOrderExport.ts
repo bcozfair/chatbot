@@ -71,6 +71,15 @@ export interface OdooExportConfig {
   sourceId: string;
   /** O: order_line/product_uom — template กำหนดให้เป็น Pcs ทุกแถว ไม่ดูหน่วยจริงของสินค้า */
   uom: string;
+  /**
+   * H: คลังชื่อเซลล์ตามที่ Odoo สะกดจริง — key จาก salespersonNameKey(), value คือค่าดิบ
+   *
+   * สร้างจาก customers.salesperson ซึ่ง sync มาจาก Odoo โดยตรง จึงเป็นคำตอบเดียวที่เชื่อได้ว่า
+   * res.users ฝั่งโน้นสะกดชื่อไว้อย่างไร ดู buildSalespersonNameIndex() ว่าทำไมต้องมี
+   *
+   * ไม่ใส่ = ปล่อยชื่อตามที่ withCompanySuffix() ต่อให้ (พฤติกรรมเดิม) — จึงเป็น optional
+   */
+  salespersonNamesByKey?: Map<string, string>;
 }
 
 /** แถวใบเสนอราคาที่ endpoint/diag ส่งเข้ามา (มาจาก quotations LEFT JOIN salesperson) */
@@ -167,7 +176,7 @@ function clean(value: any): string {
 }
 
 /**
- * ชื่อลูกค้า/ผู้ติดต่อต้องส่งดิบ ๆ ห้ามตัดช่องว่างหัวท้าย
+ * ชื่อลูกค้า/ผู้ติดต่อ/เซลล์ต้องส่งดิบ ๆ ห้ามตัดช่องว่างหัวท้าย
  *
  * Odoo จับคู่ res.partner ด้วยการเทียบชื่อแบบตรงตัวทุกอักขระ และชื่อที่ลงท้ายด้วยช่องว่างมีอยู่จริง
  * ในระบบ (ฝั่ง master เจอ 17,666 แถวในชื่อผู้ติดต่อ) พอ clean() .trim() ทิ้ง ค่าที่ส่งออกจะกลายเป็น
@@ -250,6 +259,61 @@ export function withCompanySuffix(name: string, quotationNo: string): string {
   return `${name}${suffix}`;
 }
 
+/** ช่องว่างหน้าวงเล็บสังกัด — ส่วนเดียวของชื่อที่ยอมให้ต่างกันได้ตอนเทียบกับคลังชื่อฝั่ง Odoo */
+const SALESPERSON_SUFFIX_SPACE_RE = /\s+(\((?:PM|THT)\))$/;
+
+/**
+ * รูปแบบมาตรฐานของชื่อเซลล์ที่ใช้เป็น key ของคลังชื่อ — ยุบช่องว่างหน้าวงเล็บสังกัดทิ้ง
+ *
+ * เทียบเฉพาะจุดนี้จุดเดียว ไม่ normalize ช่องว่างทั้งสตริง เพราะช่องว่างกลางชื่อ
+ * ("คุณวิรุณ ภาคอีสาน" กับ "คุณวิรุณ") แยกคนละคนจริง ๆ ยุบทิ้งแล้วจะจับคู่ผิดคน
+ */
+export function salespersonNameKey(name: string): string {
+  return String(name ?? '').replace(SALESPERSON_SUFFIX_SPACE_RE, '$1');
+}
+
+/**
+ * คลังชื่อเซลล์ฝั่ง Odoo จากรายการค่าดิบ (customers.salesperson)
+ *
+ * ที่มา: Odoo จับคู่ res.users ด้วยชื่อแบบตรงตัวทุกอักขระ และกติกา "ไม่มีเว้นวรรคหน้าวงเล็บ"
+ * ของ COMPANY_SUFFIX ใช้ไม่ได้กับทุกคน — "คุณวิรุณ ภาคอีสาน (PM)" ฝั่ง Odoo มีเว้นวรรค ทำให้
+ * ใบของเซลล์คนนี้นำเข้าไม่ผ่านทั้งใบ ส่วนคนอื่นอีกร้อยกว่าชื่อไม่มีเว้นวรรค
+ *
+ * จึงไม่ hardcode ข้อยกเว้นรายคน แต่ให้ชื่อที่ส่งออก "ลอกการสะกดจริง" จากคลังนี้เสมอ —
+ * วันที่ Odoo แก้ชื่อใครหรือเพิ่มคนใหม่ ไฟล์ export ก็ตามไปเองโดยไม่ต้องแก้โค้ด
+ *
+ * ชื่อที่ยุบช่องว่างแล้วซ้ำกัน (คลังมีทั้งแบบมีและไม่มีเว้นวรรค) เลือกแบบ "ไม่มีเว้นวรรค" ไว้ก่อน
+ * เพราะนั่นคือค่าที่ระบบส่งออกอยู่เดิม — ของที่นำเข้าผ่านอยู่แล้วต้องไม่เปลี่ยนค่าเพราะการแก้นี้
+ */
+export function buildSalespersonNameIndex(values: (string | null | undefined)[]): Map<string, string> {
+  const index = new Map<string, string>();
+  (values || []).forEach(raw => {
+    const value = String(raw ?? '');
+    if (!value.trim()) return;
+    const key = salespersonNameKey(value);
+    if (!index.has(key) || value === key) index.set(key, value);
+  });
+  return index;
+}
+
+/**
+ * ชื่อเซลล์ช่อง H พร้อมสังกัด — ลอกการสะกดจากคลังชื่อฝั่ง Odoo ถ้ามีชื่อนั้นอยู่
+ *
+ * ไม่เจอในคลัง (เซลล์ที่ยังไม่มีลูกค้าในมือสักราย หรือใบที่เดาสังกัดไม่ได้) = ใช้ชื่อที่ต่อเอง
+ * ตามเดิม ไม่ทิ้งค่าเป็นเซลล์ว่าง
+ *
+ * ใช้กับช่อง H เท่านั้น ช่อง J (employee_quotation_id) เป็นคนละคลังชื่อ (ชื่อพนักงาน ไม่ใช่ชื่อ user)
+ */
+export function resolveOdooSalespersonName(
+  name: string,
+  quotationNo: string,
+  index?: Map<string, string>
+): string {
+  const withSuffix = withCompanySuffix(name, quotationNo);
+  if (!withSuffix || !index) return withSuffix;
+  return index.get(salespersonNameKey(withSuffix)) ?? withSuffix;
+}
+
 /**
  * คัดเฉพาะใบที่จะปรากฏในไฟล์จริง — ข้ามใบที่ไม่มีรายการสินค้า (นำเข้า Odoo ไม่ได้)
  * และใบที่ไม่ใช่บริษัทที่กำลังส่งออก (รวมถึงใบที่เดาบริษัทจากเลขที่ใบไม่ได้)
@@ -317,9 +381,12 @@ export function buildOdooSaleOrderRows(
     const contactDisplay = company && contact ? `${company}, ${contact}` : (company || contact);
     // ช่อง Salesperson ต้องมีสังกัดห้อยท้าย เพราะเซลล์คนเดียวกันเป็นคนละ user ใน Odoo ของ PM กับ THT
     const quotationNo = clean(quote.quotation_no);
-    const salesperson = withCompanySuffix(
-      clean(quote.employee_details?.saleperson) || clean(quote.salesperson_name),
-      quotationNo
+    // ชื่อเซลล์ใช้ cleanName() ไม่ใช่ clean() — salesperson.name ตั้งใจเก็บช่องว่างท้ายไว้ให้ตรงกับ
+    // ที่ Odoo สะกด ("คุณวิรุณ ภาคอีสาน " → "คุณวิรุณ ภาคอีสาน (PM)") trim ทิ้งคือทำต้นเหตุพังอีกรอบ
+    const salesperson = resolveOdooSalespersonName(
+      cleanName(quote.employee_details?.saleperson) || cleanName(quote.salesperson_name),
+      quotationNo,
+      config.salespersonNamesByKey
     );
     // J: ชื่อจริงของเซลล์ที่แอดมินกรอกไว้ในตาราง salesperson — ห้อยสังกัดด้วยกติกาเดียวกับช่อง H
     // ยังไม่กรอก = เซลล์ว่าง ไม่ถอยไปใช้ชื่อจากช่อง H เพราะสองช่องนี้เป็นคนละความหมาย

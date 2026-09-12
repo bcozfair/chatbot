@@ -488,6 +488,27 @@ export const ODOO_EXPORT_RAW_NAME_JOINS = `
 export const ODOO_EXPORT_RAW_NAME_COLS =
   'raw_company.customer_name AS raw_customer_name, raw_contact.contact_name AS raw_contact_name';
 
+/**
+ * ชื่อเซลล์ทุกแบบที่ Odoo สะกดไว้จริง — คลังชื่อสำหรับช่อง H ของไฟล์ export
+ *
+ * customers.salesperson sync มาจาก Odoo ตรง ๆ จึงเป็นที่เดียวที่รู้ว่าชื่อ res.users ฝั่งโน้น
+ * สะกดอย่างไร (บางชื่อมีเว้นวรรคหน้าวงเล็บสังกัด บางชื่อไม่มี) — ดู buildSalespersonNameIndex()
+ *
+ * ~110 ค่า/78k แถว seq scan ~65ms ซึ่งรับได้เพราะ export เป็นงานที่แอดมินสั่งเป็นครั้ง ๆ
+ * ไม่ใช่ path ที่ยิงถี่ · คืน [] เมื่อพัง → export ถอยไปใช้ชื่อที่ต่อสังกัดเองตามเดิม
+ */
+export async function getOdooSalespersonNameVocabulary(executor: DbExecutor = pool): Promise<string[]> {
+  try {
+    const { rows } = await executor.query(
+      `SELECT DISTINCT salesperson FROM customers WHERE salesperson IS NOT NULL AND salesperson <> ''`
+    );
+    return rows.map((r: any) => r.salesperson as string);
+  } catch (err) {
+    logErr('getOdooSalespersonNameVocabulary', err);
+    return [];
+  }
+}
+
 // ────────────── ติดตามการส่งออกไป Odoo (กันส่งออกซ้ำ) ──────────────
 //
 // ⚠️ กลุ่มนี้ "โยน error ออกไป" ต่างจากกติกาหัวไฟล์ที่ให้ log แล้วคืน []/null โดยเจตนา
@@ -711,7 +732,10 @@ export async function listSalespeopleFromOrders(): Promise<any[]> {
     `);
     const seen = new Map<string, any>();
     for (const row of result.rows) {
-      const cleanName = row.name.replace(/\s*\([^)]*\)\s*$/gi, '').trim();
+      // ตัดแค่วงเล็บสังกัดท้ายชื่อ ห้ามกินช่องว่างหน้าวงเล็บหรือ trim หัวท้ายทิ้ง — Odoo สะกดบางคน
+      // โดยมีช่องว่างท้ายชื่อจริง ("คุณวิรุณ ภาคอีสาน (PM)") ตัดทิ้งแล้วชื่อที่ลงทะเบียนจะไม่ตรงกับ
+      // res.users ทำให้ไฟล์ export ของคนนั้น import เข้า Odoo ไม่ผ่านทั้งใบ
+      const cleanName = row.name.replace(/\([^)]*\)\s*$/gi, '');
       let cleanPhone = null;
       if (row.phone && row.phone !== 'null') cleanPhone = row.phone.trim();
       if (!seen.has(cleanName)) {
