@@ -355,9 +355,25 @@ docker compose exec -T db psql -U "$PG_USER" -d "$PG_DATABASE" -c "SELECT …"  
 | `npm run db:restore` | **เขียนทับทั้งฐาน** — ท่าที่อันตรายที่สุดในรีโปนี้ |
 | `npm run db:dump` | ปลอดภัยต่อข้อมูล แต่ได้ไฟล์ที่มี PII ลูกค้า + password hash ⇒ ห้ามให้ออกนอกเครื่อง |
 
-**`scripts/diag/*` ส่วนใหญ่ไม่ใช่ read-only** — ตัวที่ลงท้าย `Smoke.ts` เขียนจริงแล้วปิดท้ายด้วย
-`ROLLBACK` (ซึ่งเป็นเหตุผลที่กฎเหล็กห้ามเปลี่ยนเป็น `COMMIT`) ตัวที่ระบุว่า read-only ในตาราง B5
-เท่านั้นที่รันบน PMSV ได้โดยไม่ต้องถาม **ไม่แน่ใจว่าตัวไหนเขียน = ยังไม่ใช่ตัวที่รันบนนี้ได้**
+**`scripts/diag/*` ไม่ได้ read-only ทั้งหมด และชื่อไฟล์ไม่ใช่เครื่องบอก** — วัดครบทั้ง 46 ไฟล์
+เมื่อ 2026-09-12 ได้สี่กลุ่ม:
+
+| กลุ่ม | จำนวน | บน PMSV |
+| --- | --- | --- |
+| ไม่แตะ DB เลย | 11 | รันได้ |
+| แตะ DB แต่ SELECT อย่างเดียว | 26 | รันได้ |
+| เขียนจริงแล้ว **ROLLBACK** ทุกกรณี — `apiLogSmoke` (เฉพาะ `--write`) · `dateFilterSmoke` · `exportTrackingSmoke` | 3 | รันได้ · **ห้ามแก้เป็น `COMMIT`** (กฎเหล็ก) |
+| **เขียนจริง commit ลงฐาน แล้วลบทิ้งใน `finally`** — `companyNameConsistencySmoke` · `confirmRaceDiag` · `lineFlexParity` · `pdfIssuerSmoke` · `shippingFeeSmoke` · `webQuoteSmoke` | 6 | **ต้องขอเจ้าของก่อน** |
+
+หกไฟล์กลุ่มสุดท้าย **ไม่ได้อยู่ในทรานแซกชัน** — มันสร้างแถวจริงใน `quotations` / `salesperson` /
+`admin_users` / `messages` / `quotation_counters` แล้วค่อย `DELETE` ตอนจบ ⇒ **ฆ่ากลางคัน
+(Ctrl-C, timeout, เครื่องดับ) = แถวทดสอบค้างอยู่ในฐานของร้าน** และ `npm run diag:line-parity`
+ซึ่งเป็นด่านประจำของงาน prompt/Flex ก็อยู่ในกลุ่มนี้
+
+ชื่อไม่ช่วย: `stockRuleSmoke` ลงท้าย `Smoke` แต่ไม่แตะ DB เลย ส่วน `confirmRaceDiag` กับ
+`lineFlexParity` ไม่ได้ลงท้าย `Smoke` แต่เขียนจริง — วัดใหม่เมื่อสงสัยด้วย
+`grep -ciE "INSERT INTO|UPDATE [a-z_]+ SET|DELETE FROM" scripts/diag/<ไฟล์>.ts`
+**ไม่แน่ใจว่าตัวไหนเขียน = ยังไม่ใช่ตัวที่รันบนนี้ได้**
 
 **ก่อนทำอะไรที่เขียน DB บน PMSV: `npm run db:dump` ก่อนเสมอ** และบอกเจ้าของว่า dump อยู่ไหน
 
@@ -472,3 +488,4 @@ npm --prefix frontend run build    # typecheck + build admin
 รีโปนี้มีสี่พื้นผิวที่มีกติกาคนละชุด (**Admin SPA · LIFF · LINE Flex · PDF**) และการเผลอเอา
 กติกาของพื้นผิวหนึ่งไปใช้กับอีกพื้นผิวคือบั๊กที่เกิดซ้ำที่สุด — ลำดับห้าขั้นก่อนแตะโค้ด
 เช็กลิสต์ก่อนบอกว่าจอเสร็จ และรายการความกว้างที่ต้องเปิดดูจริง อยู่ใน `docs/design.md` ทั้งหมด
+
