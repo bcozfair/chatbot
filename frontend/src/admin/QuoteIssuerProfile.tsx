@@ -242,8 +242,8 @@ export const QuoteIssuerProfile: React.FC<Props> = ({ spUserId, onSpUserIdChange
     <div className="bg-card border border-slate-200 rounded-2xl shadow-sm">
       {/*
         แถบสรุปตัวตนของใบ — ค้างไว้ตลอดขณะพิมพ์ เพื่อไม่ให้ออกใบผิดชื่อโดยไม่รู้ตัว
-        เรียง "ผู้เสนอราคา → ออกในนาม" ลำดับเดียวกับสองคอลัมน์ข้างล่าง และลายเซ็นย่อ
-        เกาะอยู่กับเจ้าของมัน · ปุ่มขวาสุดเป็นปุ่มเดียวที่ย่อ/กางแถบนี้ (ไม่มีปุ่มย่อซ้ำที่อื่น)
+        เรียง "ผู้เสนอราคา → ออกในนาม" ลำดับเดียวกับสองคอลัมน์ข้างล่าง · เอาแต่ชื่อ/เบอร์
+        ไม่มีรูปลายเซ็นย่อ (ดูของจริงได้ในกรอบข้างล่างตอนกาง) · ปุ่มขวาสุดเป็นปุ่มเดียวที่ย่อ/กางแถบนี้
       */}
       <div className="flex items-center gap-3 px-4 py-3">
         <div className="flex flex-1 flex-wrap items-center gap-x-4 gap-y-2 min-w-0">
@@ -254,13 +254,6 @@ export const QuoteIssuerProfile: React.FC<Props> = ({ spUserId, onSpUserIdChange
               {issuerName ?? 'ยังไม่ตั้ง'}
             </span>
             {issuerPhone && <span className="text-sm text-slate-500 shrink-0">{issuerPhone}</span>}
-            {profile?.signature_url && (
-              <img
-                src={profile.signature_url}
-                alt="ลายเซ็นผู้เสนอราคา"
-                className="h-6 max-w-[76px] object-contain shrink-0"
-              />
-            )}
           </div>
 
           <span className="hidden sm:block w-px h-5 bg-slate-200 shrink-0" aria-hidden="true" />
