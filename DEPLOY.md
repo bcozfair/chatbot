@@ -3,7 +3,7 @@
 Deploy LINE chatbot นี้ลง server บริษัท (Ubuntu, รันหลายโปรเจครวมกัน) ด้วย Docker
 โครงสร้าง: 1 กล่องแอป (Express + React ที่ build แล้ว + Chromium สำหรับ PDF) + 1 กล่อง PostgreSQL
 
-**ยืนยันสภาพ server แล้ว**: Docker 29 + Compose v2, user `app_sales` อยู่กลุ่ม `docker` (ไม่ต้อง sudo), path = `/home/app_sales/salechatbot`
+**ยืนยันสภาพ server แล้ว**: Docker 29 + Compose v2, user `app_sales` อยู่กลุ่ม `docker` (ไม่ต้อง sudo), path = `/home/app_sales/salechatbot/chatbot`
 **IT จัดการให้**: subdomain + HTTPS (reverse proxy กลาง) — เราแค่บอกพอร์ตที่เปิดไว้
 
 ---
@@ -35,7 +35,7 @@ $env:PGPASSWORD = "database"
 
 ### 1.3 ส่งไฟล์ dump ไป server
 ```powershell
-scp "$HOME\chatbot_primus.dump" app_sales@<server-ip>:/home/app_sales/salechatbot/
+scp "$HOME\chatbot_primus.dump" app_sales@<server-ip>:/home/app_sales/salechatbot/chatbot/
 ```
 > `<server-ip>` = IP ของ server (ตัวเดียวกับที่ SSH เข้า)
 
@@ -45,8 +45,8 @@ scp "$HOME\chatbot_primus.dump" app_sales@<server-ip>:/home/app_sales/salechatbo
 
 ### 2.1 ดึงโค้ดล่าสุด
 ```bash
-cd /home/app_sales/salechatbot
-git pull origin main          # ถ้ายังไม่เคย clone: cd /home/app_sales && git clone https://github.com/bcozfair/sales-chatbot.git salechatbot
+cd /home/app_sales/salechatbot/chatbot
+git pull origin main          # ถ้ายังไม่เคย clone: mkdir -p /home/app_sales/salechatbot && cd /home/app_sales/salechatbot && git clone https://github.com/bcozfair/sales-chatbot.git chatbot
 ```
 > **repo เปลี่ยนชื่อจาก `chatbot` เป็น `sales-chatbot` เมื่อ 2026-09-12** — GitHub redirect URL เก่าให้
 > อัตโนมัติ checkout เดิมบน server จึง `git pull` ได้ต่อโดยไม่ต้องทำอะไร แต่ redirect ไม่ใช่สัญญาถาวร
@@ -176,7 +176,7 @@ LINE user id **ผูกกับ provider ไม่ใช่บัญชีผ�
 
 ### ขั้น 1 — ดูว่า server ค้างอยู่ commit ไหน + มีอะไรค้าง
 ```bash
-cd /home/app_sales/salechatbot
+cd /home/app_sales/salechatbot/chatbot
 git log --oneline -1                        # commit ปัจจุบัน (สมมติเรียกว่า <OLD>)
 git status -sb                              # ต้องสะอาด ไม่งั้น pull ชน
 git fetch origin
@@ -651,7 +651,7 @@ docker compose exec app npx tsx scripts/diag/appUrlSmoke.ts
 
 สั่งแบบนี้ (ต้องให้ `git pull` มาก่อน ไม่งั้นมันอ่าน DEPLOY.md ฉบับเก่า):
 ```
-cd /home/app_sales/salechatbot
+cd /home/app_sales/salechatbot/chatbot
 git pull --ff-only origin main แล้วอัปเดต deployment ตาม DEPLOY.md
 หัวข้อ "อัปเดต server ที่ deploy ไปแล้ว" ทำตามลำดับในนั้นเป๊ะ ๆ ห้ามข้ามขั้น
 ห้ามแก้ไฟล์ใน migrations/ และห้ามคิดคำสั่ง migration เอง
