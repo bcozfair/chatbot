@@ -52,6 +52,10 @@ interface ActingSalesperson {
   phone: string | null;
   has_sale_sig: boolean;
   sig_url: string | null;
+  /** จำนวนบัญชี LINE ซ้ำที่ถูกยุบเข้าแถวนี้ (0 = ไม่มีซ้ำ) — ฝั่ง server ยุบมาให้แล้ว */
+  merged_count?: number;
+  /** ใช้งานล่าสุด (ISO) — เกณฑ์ที่ server ใช้เลือกบัญชีตัวแทน */
+  last_active_at?: string | null;
 }
 
 interface Props {
@@ -137,6 +141,8 @@ export const QuoteIssuerProfile: React.FC<Props> = ({ spUserId, onSpUserIdChange
   }, [makerOpen]);
 
   const selectedSp = salespersons.find((s) => s.user_id === spUserId) ?? null;
+  /** รวมจำนวนบัญชีซ้ำที่ถูกยุบทิ้ง — ใช้บอกใต้ dropdown ว่าทำไมรายชื่อสั้นกว่าที่เคยเห็น */
+  const mergedTotal = salespersons.reduce((sum, s) => sum + (s.merged_count ?? 0), 0);
   const filteredMakers = makerQuery.trim()
     ? makers.filter((m) => m.name.toLowerCase().includes(makerQuery.trim().toLowerCase()))
     : makers;
@@ -398,6 +404,12 @@ export const QuoteIssuerProfile: React.FC<Props> = ({ spUserId, onSpUserIdChange
                 </option>
               ))}
             </select>
+
+            {mergedTotal > 0 && (
+              <p className="text-[11px] text-slate-400">
+                ยุบบัญชี LINE ที่ชื่อ/รหัสซ้ำกันออกแล้ว {mergedTotal} บัญชี — เลือกบัญชีที่ใช้งานล่าสุดให้อัตโนมัติ
+              </p>
+            )}
 
             {selectedSp && (
               <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 space-y-1">

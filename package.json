@@ -51,6 +51,7 @@
     "diag:block-rule": "tsx scripts/diag/blockRuleSmoke.ts",
     "diag:line-parity": "tsx scripts/diag/lineFlexParity.ts",
     "diag:web-quote": "tsx scripts/diag/webQuoteSmoke.ts",
+    "diag:sp-dedupe": "tsx scripts/diag/salespersonDedupeSmoke.ts",
     "backfill:contacts": "tsx scripts/backfillContactsFromSaleOrders.ts",
     "backfill:delivery-terms": "tsx scripts/backfillDeliveryTerms.ts",
     "backfill:print-snapshot": "tsx scripts/backfillPrintSnapshot.ts",

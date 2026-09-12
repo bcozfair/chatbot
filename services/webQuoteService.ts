@@ -35,8 +35,8 @@ import {
   ensureWebProxy,
   getAdminIssuerProfile,
   listActingSalespersons,
-  type ActingSalesperson,
 } from './webIdentity.js';
+import { dedupeActingSalespersons, type PickedSalesperson } from './salespersonPicker.js';
 
 /**
  * งบเวลาต่อ 1 คำขอของหน้าเว็บ
@@ -461,9 +461,13 @@ export async function reviseQuotation(params: {
  * รายชื่อเซลส์ที่เลือกเป็น "ออกในนาม" ได้ — ตัวเดียวกับที่เฟส B เขียนไว้ (พก sig_url มาด้วย
  * ตั้งแต่เฟส D เพื่อให้หน้าเว็บพรีวิวลายเซ็นได้ก่อนออกใบ) · ห่อไว้ที่นี่เพื่อให้ route ของ
  * กลุ่ม webquote อ่านจากไฟล์เดียวกันทั้งเฟส
+ *
+ * ต่อชั้น "ยุบชื่อ/รหัสซ้ำ" ของ services/salespersonPicker.ts ไว้ที่นี่ (ไม่ใช่ใน
+ * listActingSalespersons) เพื่อให้เส้น LINE และด่าน diag:pdf-issuer เห็นแถวดิบเหมือนเดิม
+ * — คนเดียวที่เห็นรายชื่อยุบแล้วคือ dropdown ของหน้าเว็บ
  */
-export async function listSalespersonsForWeb(): Promise<ActingSalesperson[]> {
-  return listActingSalespersons();
+export async function listSalespersonsForWeb(): Promise<PickedSalesperson[]> {
+  return dedupeActingSalespersons(await listActingSalespersons());
 }
 
 export type { Violation };
