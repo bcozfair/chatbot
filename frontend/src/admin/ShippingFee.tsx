@@ -1,13 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { SettingToggle } from './SettingToggle';
+import { SettingsStatus, SettingsSaveBar } from './SettingsSaveBar';
 import {
   Loader2,
-  CheckCircle2,
   AlertTriangle,
   Truck,
-  Save,
-  RotateCcw,
   ChevronRight,
 } from 'lucide-react';
 
@@ -263,45 +261,16 @@ export const ShippingFee: React.FC = () => {
           </details>
         )}
 
-        {error && (
-          <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-            <span>{error}</span>
-          </div>
-        )}
-        {savedAt && !isDirty && (
-          <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
-            <CheckCircle2 className="w-4 h-4 shrink-0" />
-            <span>บันทึกแล้วเมื่อ {savedAt} — มีผลกับใบที่บันทึก/ยืนยันหลังจากนี้ทันที</span>
-          </div>
-        )}
+        <SettingsStatus error={error} savedAt={savedAt} isDirty={isDirty} />
       </div>
 
       {/* แถบปุ่มติดขอบล่างการ์ด */}
-      <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/60 px-3.5 py-3">
-        {isDirty && (
-          <span className="mr-auto text-xs font-bold text-amber-600">⚠️ ยังไม่ได้บันทึก</span>
-        )}
-        <button
-          type="button"
-          onClick={handleSave}
-          disabled={!isDirty || isSaving}
-          className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-40"
-          style={{ backgroundColor: 'var(--brand)' }}
-        >
-          {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-          บันทึก
-        </button>
-        <button
-          type="button"
-          onClick={() => setForm(toForm(config))}
-          disabled={!isDirty || isSaving}
-          className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2 text-sm font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          <RotateCcw className="w-4 h-4" />
-          ย้อนกลับ
-        </button>
-      </div>
+      <SettingsSaveBar
+        isDirty={isDirty}
+        isSaving={isSaving}
+        onSave={handleSave}
+        onReset={() => setForm(toForm(config))}
+      />
     </div>
   );
 };
