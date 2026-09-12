@@ -489,3 +489,19 @@ npm --prefix frontend run build    # typecheck + build admin
 กติกาของพื้นผิวหนึ่งไปใช้กับอีกพื้นผิวคือบั๊กที่เกิดซ้ำที่สุด — ลำดับห้าขั้นก่อนแตะโค้ด
 เช็กลิสต์ก่อนบอกว่าจอเสร็จ และรายการความกว้างที่ต้องเปิดดูจริง อยู่ใน `docs/design.md` ทั้งหมด
 
+---
+
+## B7. ทีม agent — `.claude/agents/` และ `docs/agent-team.md`
+
+รีโปนี้มี agent 7 ตัวนิยามไว้ใน `.claude/agents/*.md` (`architect` · `data-analyst` ·
+`fullstack-dev` · `qa-tester` · `ai-engineer` · `ux-designer` · `devops`) โดย **PM คือ
+session หลัก ไม่ใช่ subagent**
+
+**`effort` และ `isolation` อยู่ใน frontmatter ของแต่ละไฟล์ ไม่ใช่สิ่งที่ผู้เรียกต้องจำ** —
+สายเขียนทั้งสี่ (`fullstack-dev` `qa-tester` `ai-engineer` `ux-designer`) ตั้ง
+`isolation: worktree` ไว้แล้ว ซึ่งคือที่ที่กฎ worktree ของ A5 ถูกบังคับจริง
+ส่วนสายอ่านจงใจไม่ใส่ เพราะ `.env` ไม่เดินทางไป worktree ใหม่
+
+ใครทำอะไร · เกณฑ์ `effort` · loop ของงานหนึ่งชิ้น · เช็คลิสต์ก่อน merge อยู่ใน
+`docs/agent-team.md` — และมันบันทึกไว้ด้วยว่า **`AGENTS.md` กับ `docs/design.md`
+ไม่ถูกโหลดเข้า context ให้อัตโนมัติ** ต่างจาก `CLAUDE.md` ⇒ ไฟล์ agent ทุกตัวจึงสั่งให้เปิดเอง

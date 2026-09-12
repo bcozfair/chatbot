@@ -302,6 +302,7 @@ chatbot/
 
 - **`AGENTS.md`** — กฎ git · หลาย session ในทรีเดียว · ขอบเขตการอนุมัติ · ด่าน verify
 - **`docs/design.md`** — กติกาหน้าตาของสี่พื้นผิว (Admin · LIFF · Flex · PDF)
+- **`docs/agent-team.md`** — ทีม agent 7 ตัวใน `.claude/agents/` · เกณฑ์ `effort`/`isolation` · loop ของงาน
 - **`DEPLOY.md`** — Docker, LINE webhook, กฎ LIFF ต้องอยู่ provider เดียวกับ Messaging API channel,
   กู้รหัสผ่านแอดมิน, พ.ร.บ.คอมพิวเตอร์ ม.26, แก้ปัญหาเบื้องต้น
 - **`README.md`** — โครงสร้างละเอียด: endpoint ทั้งหมด, schema, business logic รายบริการ
