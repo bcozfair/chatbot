@@ -16,10 +16,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from '../context/AuthContext';
 import {
   AlertTriangle,
-  Check,
   ChevronDown,
+  Hash,
   Loader2,
-  PenLine,
+  Phone,
   Search,
   Trash2,
   Upload,
@@ -222,18 +222,28 @@ export const QuoteIssuerProfile: React.FC<Props> = ({ spUserId, onSpUserIdChange
     );
   }
 
-  /** กรอบลายเซ็นของทั้งสองฝั่งต้องขนาดเท่ากันเป๊ะ — เป็นเส้นที่ทำให้สองคอลัมน์อ่านคู่กันได้ */
+  /**
+   * แถวเนื้อหาของทั้งสองฝั่งสูงเท่ากันแบบตายตัว — ไม่ผูกกับว่ามีลายเซ็นไหม มีปุ่มลบไหม
+   * มีเบอร์ไหม ⇒ การ์ดสองใบไม่ขยับตามข้อมูล และเส้นแบ่งกลางไม่มีวันเหลื่อม
+   */
+  const ROW_H = 'h-[74px]';
+  /**
+   * กรอบลายเซ็นซ้าย–ขวาต้องเท่ากันเป๊ะ เพราะมันคือจุดที่ตาใช้เทียบสองฝั่ง
+   * กว้าง 190 = กว้างกว่า SIG_BOX (180) เล็กน้อย ⇒ ลายเซ็นที่เต็มขนาดจริงบน PDF ยังอยู่ในกรอบพอดี
+   * ไม่ถูก overflow-hidden ครอบตัดจนดูเหมือนรูปเสีย
+   */
   const SIG_FRAME =
-    'h-[58px] w-full max-w-[240px] rounded-xl border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center overflow-hidden';
+    'relative w-[190px] h-[58px] shrink-0 rounded-xl border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center overflow-hidden';
   const issuerName = profile?.employee_quotation_id ?? null;
   const issuerPhone = profile?.employee_quotation_phone ?? null;
 
   return (
-    <div className="bg-card border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+    // ห้ามใส่ overflow-hidden — dropdown 70 ชื่อสูงกว่าการ์ด ถ้าคลิปจะเลือกชื่อท้าย ๆ ไม่ได้
+    <div className="bg-card border border-slate-200 rounded-2xl shadow-sm">
       {/*
         แถบสรุปตัวตนของใบ — ค้างไว้ตลอดขณะพิมพ์ เพื่อไม่ให้ออกใบผิดชื่อโดยไม่รู้ตัว
-        เรียง "ผู้เสนอราคา → ออกในนาม" **ลำดับเดียวกับสองคอลัมน์ข้างล่าง** ตาจะได้ไม่ต้อง
-        จับคู่ใหม่ทุกครั้งที่กางแถบ · ลายเซ็นเกาะอยู่กับเจ้าของมัน ไม่ลอยเป็นรูปเดี่ยวกลางแถบ
+        เรียง "ผู้เสนอราคา → ออกในนาม" ลำดับเดียวกับสองคอลัมน์ข้างล่าง และลายเซ็นย่อ
+        เกาะอยู่กับเจ้าของมัน · ปุ่มขวาสุดเป็นปุ่มเดียวที่ย่อ/กางแถบนี้ (ไม่มีปุ่มย่อซ้ำที่อื่น)
       */}
       <div className="flex items-center gap-3 px-4 py-3">
         <div className="flex flex-1 flex-wrap items-center gap-x-4 gap-y-2 min-w-0">
@@ -276,16 +286,11 @@ export const QuoteIssuerProfile: React.FC<Props> = ({ spUserId, onSpUserIdChange
         </button>
       </div>
 
+      {/* เตือนเฉพาะเรื่องที่ "ออกใบไม่ได้" — ส่วนที่ดูเอาได้จากกรอบลายเซ็นไม่ต้องมีป้ายซ้ำ */}
       {!profile?.is_ready && (
         <div className="mx-4 mb-3 flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs text-amber-800">
           <AlertTriangle className="w-4 h-4 shrink-0 mt-px" />
           <span>ยังไม่ได้ตั้งชื่อผู้เสนอราคา/ผู้จัดทำ — ต้องตั้งก่อนจึงจะออกใบได้</span>
-        </div>
-      )}
-      {profile?.is_ready && !profile.has_signature && (
-        <div className="mx-4 mb-3 flex items-start gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-600">
-          <PenLine className="w-4 h-4 shrink-0 mt-px" />
-          <span>ยังไม่มีลายเซ็น — ออกใบได้ตามปกติ แต่ช่อง “ผู้เสนอราคา” บนใบจะไม่มีลายเซ็น</span>
         </div>
       )}
       {error && (
@@ -296,103 +301,92 @@ export const QuoteIssuerProfile: React.FC<Props> = ({ spUserId, onSpUserIdChange
       )}
 
       {/*
-        กาง = สองคอลัมน์ = **คนสองคนที่จะขึ้นกระดาษใบเดียวกัน** ไม่ใช่สามช่องตั้งค่า
-        ทั้งสองฝั่งมีจังหวะภายในเหมือนกันเป๊ะ: ชื่อ → เบอร์/รหัส → กรอบลายเซ็นขนาดเท่ากัน → หมายเหตุ
-        ⇒ ตากวาดลงซ้ายแล้วลงขวาด้วยจังหวะเดิม และกรอบลายเซ็นสองอันอยู่ระดับเดียวกันเสมอ
+        กาง = สองคอลัมน์ = คนสองคนที่จะขึ้นกระดาษใบเดียวกัน (ล้อกับ PDF ที่มีช่องเซ็น 2 ช่องคู่กัน)
+        แต่ละฝั่ง = แถวเดียว: [ช่องเลือกชื่อ + เบอร์/รหัส] | [กรอบลายเซ็น]
+        ⇒ ชื่อกับลายเซ็นของคนเดียวกันอยู่ระดับสายตาเดียวกัน และสองฝั่งสูงเท่ากันตายตัว
       */}
       {expanded && (
         <div className="border-t border-slate-100 grid grid-cols-1 lg:grid-cols-2">
-          {/* ── ซ้าย: ผู้เสนอราคา = ตัวแอดมินเอง (ชื่อ + เบอร์ + ลายเซ็นที่อัปเองได้) ── */}
-          <section className="px-4 py-4 space-y-3">
-            <header className="flex items-baseline gap-2">
-              <h3 className="text-sm font-semibold text-slate-800">ผู้เสนอราคา / ผู้จัดทำ</h3>
-              <span className="text-xs text-slate-400">คุณเอง · จำไว้ให้ ไม่ต้องตั้งใหม่ทุกใบ</span>
-            </header>
+          {/* ── ซ้าย: ผู้เสนอราคา = ตัวแอดมินเอง (แก้ชื่อและลายเซ็นได้ที่นี่) ── */}
+          <section className="px-4 py-4 space-y-2.5">
+            <h3 className="text-sm font-semibold text-slate-800">ผู้เสนอราคา / ผู้จัดทำ</h3>
 
-            <div className="relative" ref={makerBoxRef}>
-              <div
-                role="button"
-                tabIndex={0}
-                onClick={() => setMakerOpen(true)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    setMakerOpen(true);
-                  }
-                }}
-                className={`flex items-center gap-2 w-full h-11 px-3.5 rounded-xl border text-sm cursor-pointer transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-fg)]/30 ${
-                  makerOpen
-                    ? 'border-[var(--brand-fg)] ring-2 ring-[var(--brand-fg)]/10 bg-card'
-                    : 'border-slate-200 bg-slate-50 hover:border-slate-300'
-                }`}
-              >
-                <Search className="w-4 h-4 text-slate-400 shrink-0" />
-                {makerOpen ? (
-                  <input
-                    autoFocus
-                    value={makerQuery}
-                    onChange={(e) => setMakerQuery(e.target.value)}
-                    placeholder="พิมพ์ชื่อเพื่อค้นหา..."
-                    className="flex-1 bg-transparent outline-none text-sm text-slate-800 placeholder:text-slate-400"
-                  />
-                ) : (
-                  <span className={`flex-1 truncate ${issuerName ? 'text-slate-800 font-semibold' : 'text-slate-400'}`}>
-                    {issuerName ?? 'เลือกชื่อจากรายการ'}
-                  </span>
-                )}
-                {saving ? (
-                  <Loader2 className="w-4 h-4 animate-spin text-slate-400 shrink-0" />
-                ) : (
-                  <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
-                )}
-              </div>
+            <div className={`flex items-start gap-3 ${ROW_H}`}>
+              <div className="flex-1 min-w-0 space-y-1.5">
+                <div className="relative" ref={makerBoxRef}>
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setMakerOpen(true)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        setMakerOpen(true);
+                      }
+                    }}
+                    className={`flex items-center gap-2 w-full h-11 px-3.5 rounded-xl border text-sm cursor-pointer transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-fg)]/30 ${
+                      makerOpen
+                        ? 'border-[var(--brand-fg)] ring-2 ring-[var(--brand-fg)]/10 bg-card'
+                        : 'border-slate-200 bg-slate-50 hover:border-slate-300'
+                    }`}
+                  >
+                    <Search className="w-4 h-4 text-slate-400 shrink-0" />
+                    {makerOpen ? (
+                      <input
+                        autoFocus
+                        value={makerQuery}
+                        onChange={(e) => setMakerQuery(e.target.value)}
+                        placeholder="พิมพ์ชื่อเพื่อค้นหา..."
+                        className="flex-1 bg-transparent outline-none text-sm text-slate-800 placeholder:text-slate-400"
+                      />
+                    ) : (
+                      <span className={`flex-1 truncate ${issuerName ? 'text-slate-800 font-semibold' : 'text-slate-400'}`}>
+                        {issuerName ?? 'เลือกชื่อจากรายการ'}
+                      </span>
+                    )}
+                    {saving ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-slate-400 shrink-0" />
+                    ) : (
+                      <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
+                    )}
+                  </div>
 
-              {makerOpen && (
-                <div className="absolute z-50 mt-1.5 w-full bg-card border border-slate-200 rounded-xl shadow-xl max-h-60 overflow-y-auto divide-y divide-slate-100">
-                  {filteredMakers.length === 0 ? (
-                    <div className="p-4 text-center text-xs text-slate-400">ไม่พบชื่อนี้ในรายการจาก Odoo</div>
-                  ) : (
-                    filteredMakers.map((m) => (
-                      <button
-                        key={m.name}
-                        type="button"
-                        onClick={() => saveMaker(m.name)}
-                        className="w-full text-left px-4 py-2.5 text-sm hover:bg-slate-50 flex items-center justify-between gap-2"
-                      >
-                        <span className="font-medium text-slate-800 truncate">{m.name}</span>
-                        <span className="text-xs text-slate-400 shrink-0">{m.phone ?? 'ไม่มีเบอร์'}</span>
-                      </button>
-                    ))
+                  {makerOpen && (
+                    <div className="absolute z-50 mt-1.5 w-full bg-card border border-slate-200 rounded-xl shadow-xl max-h-60 overflow-y-auto divide-y divide-slate-100">
+                      {filteredMakers.length === 0 ? (
+                        <div className="p-4 text-center text-xs text-slate-400">ไม่พบชื่อนี้ในรายการจาก Odoo</div>
+                      ) : (
+                        filteredMakers.map((m) => (
+                          <button
+                            key={m.name}
+                            type="button"
+                            onClick={() => saveMaker(m.name)}
+                            className="w-full text-left px-4 py-2.5 text-sm hover:bg-slate-50 flex items-center justify-between gap-2"
+                          >
+                            <span className="font-medium text-slate-800 truncate">{m.name}</span>
+                            <span className="text-xs text-slate-400 shrink-0">{m.phone ?? 'ไม่มีเบอร์'}</span>
+                          </button>
+                        ))
+                      )}
+                    </div>
                   )}
                 </div>
-              )}
-            </div>
 
-            {/* เบอร์ — แสดงอย่างเดียว ไม่มีช่องพิมพ์ ไม่มีตัวเลือก (§2.5b) */}
-            <p className="text-xs text-slate-500">
-              เบอร์บนใบ{' '}
-              {issuerPhone ? (
-                <span className="font-semibold text-slate-700">{issuerPhone}</span>
-              ) : issuerName ? (
-                <span className="text-amber-700">ชื่อนี้ไม่มีเบอร์ในระบบ ใบจะไม่มีบรรทัดเบอร์</span>
-              ) : (
-                <span className="text-slate-400">—</span>
-              )}
-            </p>
-
-            <div className="space-y-2">
-              <div className="flex items-baseline justify-between gap-2">
-                <span className="text-xs text-slate-500">ลายเซ็นบนใบ</span>
-                <span className="text-[11px] text-slate-400">ไม่บังคับ · PNG/JPG</span>
+                {/* เบอร์ — อ่านอย่างเดียวเสมอ (§2.5b) · ไอคอนแทนคำว่า "เบอร์บนใบ" */}
+                <p className="flex items-center gap-1.5 text-xs">
+                  <Phone className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                  {issuerPhone ? (
+                    <span className="font-semibold text-slate-700">{issuerPhone}</span>
+                  ) : issuerName ? (
+                    <span className="text-amber-700">ชื่อนี้ไม่มีเบอร์ในระบบ</span>
+                  ) : (
+                    <span className="text-slate-400">—</span>
+                  )}
+                </p>
               </div>
+
+              {/* ลายเซ็น: กรอบคือปุ่มอัปโหลดในตัว ⇒ ไม่ต้องมีปุ่มข้อความและคำอธิบายใต้กรอบ */}
               <div className={SIG_FRAME}>
-                {profile?.signature_url ? (
-                  <img src={profile.signature_url} alt="ลายเซ็นของฉัน" className={SIG_BOX} />
-                ) : (
-                  <span className="text-[11px] text-slate-400">ยังไม่มีลายเซ็น</span>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
                 <input
                   ref={fileRef}
                   type="file"
@@ -407,99 +401,96 @@ export const QuoteIssuerProfile: React.FC<Props> = ({ spUserId, onSpUserIdChange
                   type="button"
                   onClick={() => fileRef.current?.click()}
                   disabled={saving}
-                  className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                  title={profile?.has_signature ? 'เปลี่ยนลายเซ็น (PNG/JPG)' : 'อัปโหลดลายเซ็น (PNG/JPG)'}
+                  aria-label={profile?.has_signature ? 'เปลี่ยนลายเซ็น' : 'อัปโหลดลายเซ็น'}
+                  className="w-full h-full flex items-center justify-center rounded-xl hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-fg)]/30 disabled:opacity-50"
                 >
-                  <Upload className="w-3.5 h-3.5" />
-                  {profile?.has_signature ? 'อัปโหลดทับ' : 'อัปโหลดลายเซ็น'}
+                  {profile?.signature_url ? (
+                    <img src={profile.signature_url} alt="ลายเซ็นของฉัน" className={SIG_BOX} />
+                  ) : (
+                    <span className="flex items-center gap-1.5 text-[11px] text-slate-400">
+                      <Upload className="w-3.5 h-3.5" />
+                      อัปโหลดลายเซ็น
+                    </span>
+                  )}
                 </button>
                 {profile?.has_signature && (
                   <button
                     type="button"
                     onClick={deleteSignature}
                     disabled={saving}
-                    className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-slate-200 text-slate-500 hover:border-red-200 hover:text-red-600 hover:bg-red-50 disabled:opacity-50"
+                    title="ลบลายเซ็น"
+                    aria-label="ลบลายเซ็น"
+                    className="absolute top-1 right-1 w-6 h-6 rounded-lg flex items-center justify-center text-slate-400 bg-card/80 hover:text-red-600 hover:bg-red-50 disabled:opacity-50"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
-                    ลบ
                   </button>
                 )}
               </div>
-              <p className="text-[11px] text-slate-400">กรอบนี้เท่ากับขนาดจริงบน PDF</p>
             </div>
           </section>
 
-          {/* ── ขวา: พนักงานขายที่ออกในนาม (เลือกใหม่ได้ทุกใบ · ลายเซ็นของเขาแก้ที่นี่ไม่ได้) ── */}
-          <section className="px-4 py-4 space-y-3 border-t lg:border-t-0 lg:border-l border-slate-100">
-            <header className="flex items-baseline gap-2">
-              <h3 className="text-sm font-semibold text-slate-800">ออกใบในนาม (พนักงานขาย)</h3>
-              <span className="text-xs text-slate-400">เลือกใหม่ได้ทุกใบ</span>
-            </header>
-
-            <select
-              value={spUserId}
-              onChange={(e) => onSpUserIdChange(e.target.value)}
-              aria-label="พนักงานขายที่จะออกใบในนาม"
-              className="w-full h-11 px-3 rounded-xl border border-slate-200 bg-slate-50 text-sm text-slate-800 outline-none focus:border-[var(--brand-fg)] focus:bg-card"
-            >
-              <option value="">— เลือกพนักงานขาย —</option>
-              {salespersons.map((s) => (
-                <option key={s.user_id} value={s.user_id}>
-                  {s.name}
-                  {s.salesperson_id ? ` (${s.salesperson_id})` : ''}
-                </option>
-              ))}
-            </select>
-
-            <p className="text-xs text-slate-500">
-              {selectedSp ? (
-                <>
-                  เบอร์บนใบ{' '}
-                  <span className="font-semibold text-slate-700">{selectedSp.phone ?? '—'}</span>
-                  {selectedSp.salesperson_id && (
-                    <span className="text-slate-400"> · รหัส {selectedSp.salesperson_id}</span>
-                  )}
-                </>
-              ) : (
-                <span className="text-slate-400">เบอร์บนใบ —</span>
+          {/* ── ขวา: พนักงานขายที่ออกในนาม (ลายเซ็นของเขาแก้ที่นี่ไม่ได้ จึงเป็นกรอบอ่านอย่างเดียว) ── */}
+          <section className="px-4 py-4 space-y-2.5 border-t lg:border-t-0 lg:border-l border-slate-100">
+            <h3 className="flex items-baseline gap-2 text-sm font-semibold text-slate-800">
+              ออกใบในนาม (พนักงานขาย)
+              {mergedTotal > 0 && (
+                <span
+                  className="text-[11px] font-medium text-slate-400"
+                  title={`ยุบบัญชี LINE ที่ชื่อ/รหัสซ้ำกันออก ${mergedTotal} บัญชี — ใช้บัญชีที่ใช้งานล่าสุด`}
+                >
+                  ยุบบัญชีซ้ำ {mergedTotal}
+                </span>
               )}
-            </p>
+            </h3>
 
-            <div className="space-y-2">
-              <div className="flex items-baseline justify-between gap-2">
-                <span className="text-xs text-slate-500">ลายเซ็นบนใบ</span>
-                {selectedSp && !selectedSp.sig_url && (
-                  <span className="text-[11px] text-amber-700">ช่องนี้บนใบจะว่าง</span>
-                )}
+            <div className={`flex items-start gap-3 ${ROW_H}`}>
+              <div className="flex-1 min-w-0 space-y-1.5">
+                <select
+                  value={spUserId}
+                  onChange={(e) => onSpUserIdChange(e.target.value)}
+                  aria-label="พนักงานขายที่จะออกใบในนาม"
+                  className="w-full h-11 px-3 rounded-xl border border-slate-200 bg-slate-50 text-sm text-slate-800 outline-none focus:border-[var(--brand-fg)] focus:bg-card"
+                >
+                  <option value="">— เลือกพนักงานขาย —</option>
+                  {salespersons.map((s) => (
+                    <option key={s.user_id} value={s.user_id}>
+                      {s.name}
+                      {s.salesperson_id ? ` (${s.salesperson_id})` : ''}
+                    </option>
+                  ))}
+                </select>
+
+                <p className="flex items-center gap-3 text-xs">
+                  <span className="flex items-center gap-1.5 min-w-0">
+                    <Phone className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                    <span className={selectedSp?.phone ? 'font-semibold text-slate-700 truncate' : 'text-slate-400'}>
+                      {selectedSp?.phone ?? '—'}
+                    </span>
+                  </span>
+                  {selectedSp?.salesperson_id && (
+                    <span className="flex items-center gap-1 text-slate-400 shrink-0">
+                      <Hash className="w-3.5 h-3.5" />
+                      {selectedSp.salesperson_id}
+                    </span>
+                  )}
+                </p>
               </div>
+
               <div className={SIG_FRAME}>
                 {selectedSp?.sig_url ? (
                   <img src={selectedSp.sig_url} alt="ลายเซ็นพนักงานขาย" className={SIG_BOX} />
                 ) : (
-                  <span className="text-[11px] text-slate-400">
-                    {selectedSp ? 'พนักงานขายคนนี้ยังไม่มีลายเซ็น' : 'เลือกพนักงานขายก่อน'}
+                  <span
+                    className={`px-2 text-center text-[11px] ${selectedSp ? 'text-amber-700' : 'text-slate-400'}`}
+                    title={selectedSp ? 'ใบที่ออกจะไม่มีลายเซ็นช่อง “พนักงานขาย”' : undefined}
+                  >
+                    {selectedSp ? 'ไม่มีลายเซ็น' : 'เลือกพนักงานขายก่อน'}
                   </span>
                 )}
               </div>
-              <p className="text-[11px] text-slate-400">
-                {mergedTotal > 0
-                  ? `ยุบบัญชี LINE ที่ชื่อ/รหัสซ้ำกันออกแล้ว ${mergedTotal} บัญชี — ใช้บัญชีที่ใช้งานล่าสุด`
-                  : 'ลายเซ็นของพนักงานขายแก้ที่หน้าจัดการข้อมูลพนักงาน'}
-              </p>
             </div>
           </section>
-        </div>
-      )}
-
-      {expanded && profile?.is_ready && (
-        <div className="border-t border-slate-100 px-4 py-2.5 flex items-center gap-2">
-          <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-          <span className="text-xs text-emerald-700">ตั้งค่าครบแล้ว</span>
-          <button
-            onClick={() => setExpanded(false)}
-            className="ml-auto text-xs font-semibold px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
-          >
-            ย่อแถบแล้วเริ่มวางข้อความ
-          </button>
         </div>
       )}
     </div>
