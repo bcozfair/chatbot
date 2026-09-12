@@ -4,6 +4,7 @@ import { DateInput } from './DateInput';
 import { PageHeader } from './PageHeader';
 import { RequestTimeline } from './logs/RequestTimeline';
 import { useHashState } from './logs/useHashState';
+import { TAB_SLUG } from './navHash';
 import {
   errMsg, formatBytes, formatDateTime, formatMs, formatNumber,
   inputCls, monoChipCls, numCls, tdCls, thCls,
@@ -192,7 +193,7 @@ const TEXT_COLS = new Set(['route', 'path', 'caller', 'method']);
 
 export function ApiLogs() {
   const { token } = useAuth();
-  const { state, set, reset } = useHashState('apilogs', DEFAULTS);
+  const { state, set, reset } = useHashState(TAB_SLUG.apilogs, DEFAULTS);
   const searchRef = useRef<HTMLInputElement>(null);
 
   const page = Math.max(1, parseInt(state.page) || 1);

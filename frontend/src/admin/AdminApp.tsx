@@ -21,6 +21,7 @@ import { ShippingFee } from './ShippingFee';
 import { SyncPanel } from './SyncPanel';
 import { LogsShell } from './logs/LogsShell';
 import type { LogTab } from './logs/LogsShell';
+import { useAdminRoute, type MainTab, type SubTab } from './navHash';
 import {
   LogOut,
   User as UserIcon,
@@ -44,12 +45,7 @@ import {
   FilePlus2,
 } from 'lucide-react';
 
-type MainTab =
-  | 'dashboard' | 'quoterequest' | 'quotations' | 'salespersons' | 'promotions' | 'users' | 'blacklist'
-  // กลุ่ม "บันทึกและรายงาน" — 4 หน้าที่อยู่ใต้หัวข้อพับได้อันเดียวกัน
-  | 'traffic' | 'apilogs' | 'auditlogs' | 'systemlogs'
-  | 'settings';
-type SubTab = 'quotation' | 'optional' | 'stock' | 'moq' | 'block' | 'shipping';
+// MainTab / SubTab ย้ายไป navHash.ts แล้ว เพราะชื่อแท็บกลายเป็นส่วนหนึ่งของ URL (ดูเหตุผลในไฟล์นั้น)
 
 interface AdminStats {
   quotations: number;
@@ -116,14 +112,18 @@ const PAGE_TITLES: Record<MainTab, string> = {
 
 function AdminContent() {
   const { isAuthenticated, isLoading, user, token, logout } = useAuth();
-  const [activeTab, setActiveTab] = useState<MainTab>('dashboard');
-  const [subTab, setSubTab] = useState<SubTab>('quotation');
+  // แท็บที่เปิดอยู่มาจาก URL hash — refresh แล้วต้องอยู่หน้าเดิม ไม่เด้งกลับแผงควบคุม
+  const { route, navigate } = useAdminRoute();
+  const activeTab = route.tab;
+  const subTab = route.sub;
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [settingsExpanded, setSettingsExpanded] = useState(true);
   // แท็บล่าสุดในกลุ่ม Activity Log — ออกไปหน้าอื่นแล้วกดเมนูกลับมา ต้องได้แท็บเดิม
   // ไม่ใช่เด้งกลับหน้าแรกทุกครั้ง (คนที่ตามเรื่องอยู่มักวนกลับมาที่หน้าเดิมซ้ำ ๆ)
-  const [lastLogTab, setLastLogTab] = useState<MainTab>(LOG_TAB_DEFAULT);
+  const [lastLogTab, setLastLogTab] = useState<MainTab>(() =>
+    LOG_TABS.has(route.tab) ? route.tab : LOG_TAB_DEFAULT,
+  );
   // ตอน sidebar ย่อ: กดไอคอนตั้งค่า → เปิด flyout เลือก sub-tab (nav มี overflow-y-auto จึงต้องลอยแบบ fixed)
   const [settingsFlyoutTop, setSettingsFlyoutTop] = useState<number | null>(null);
   const settingsBtnRef = useRef<HTMLButtonElement>(null);
@@ -207,7 +207,7 @@ function AdminContent() {
   }
 
   const goTo = (tab: MainTab) => {
-    setActiveTab(tab);
+    navigate({ tab, sub: subTab });
     setMobileOpen(false);
     closeSettingsFlyout();
     if (tab === 'settings') setSettingsExpanded(true);
@@ -215,8 +215,7 @@ function AdminContent() {
   };
 
   const goToSubTab = (tab: SubTab) => {
-    setActiveTab('settings');
-    setSubTab(tab);
+    navigate({ tab: 'settings', sub: tab });
     setMobileOpen(false);
     closeSettingsFlyout();
   };

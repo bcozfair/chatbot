@@ -7,6 +7,7 @@ import {
   ChevronDown, ChevronRight as ChevronRightSmall, Link2,
 } from 'lucide-react';
 import { useHashState } from './useHashState';
+import { TAB_SLUG } from '../navHash';
 import {
   errMsg, formatDateTime, relativeTime, formatNumber, levelStyle,
   downloadCsv, inputCls,
@@ -151,7 +152,7 @@ export const SystemLogs: React.FC = () => {
   const { token } = useAuth();
   const today = todayThai();
 
-  const { state, set, reset } = useHashState('system', {
+  const { state, set, reset } = useHashState(TAB_SLUG.systemlogs, {
     dateFrom: shiftDay(today, -6),
     dateTo: today,
     minLevel: '',

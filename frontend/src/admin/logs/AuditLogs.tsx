@@ -7,6 +7,7 @@ import {
   ChevronDown, ChevronRight as ChevronRightSmall, ArrowRight, Link2, Layers,
 } from 'lucide-react';
 import { useHashState } from './useHashState';
+import { TAB_SLUG } from '../navHash';
 import {
   errMsg, formatDateTime, relativeTime, formatNumber, actorStyle, entityLabel,
   actionLabel, displayValue, downloadCsv, inputCls, isBulk,
@@ -160,7 +161,7 @@ export const AuditLogs: React.FC = () => {
   const { token } = useAuth();
   const today = todayThai();
 
-  const { state, set, reset } = useHashState('audit', {
+  const { state, set, reset } = useHashState(TAB_SLUG.auditlogs, {
     dateFrom: shiftDay(today, -29),
     dateTo: today,
     entityType: '',

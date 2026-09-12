@@ -6,6 +6,7 @@ import {
   BarChart3, Download, Loader2, TrendingUp, TrendingDown, Minus, Info, RefreshCw,
 } from 'lucide-react';
 import { useHashState } from './useHashState';
+import { TAB_SLUG } from '../navHash';
 import {
   errMsg, formatDate, formatMs, formatNumber, formatBytes, delta, downloadCsv, inputCls,
 } from './format';
@@ -248,7 +249,7 @@ export const Traffic: React.FC = () => {
   const { token } = useAuth();
   const today = todayThai();
 
-  const { state, set } = useHashState('traffic', {
+  const { state, set } = useHashState(TAB_SLUG.traffic, {
     granularity: 'day',
     dateFrom: shiftDay(today, -29),
     dateTo: today,
