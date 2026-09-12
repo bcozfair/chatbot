@@ -46,8 +46,12 @@ scp "$HOME\chatbot_primus.dump" app_sales@<server-ip>:/home/app_sales/salechatbo
 ### 2.1 ดึงโค้ดล่าสุด
 ```bash
 cd /home/app_sales/salechatbot
-git pull origin main          # ถ้ายังไม่เคย clone: cd /home/app_sales && git clone https://github.com/bcozfair/chatbot.git salechatbot
+git pull origin main          # ถ้ายังไม่เคย clone: cd /home/app_sales && git clone https://github.com/bcozfair/sales-chatbot.git salechatbot
 ```
+> **repo เปลี่ยนชื่อจาก `chatbot` เป็น `sales-chatbot` เมื่อ 2026-09-12** — GitHub redirect URL เก่าให้
+> อัตโนมัติ checkout เดิมบน server จึง `git pull` ได้ต่อโดยไม่ต้องทำอะไร แต่ redirect ไม่ใช่สัญญาถาวร
+> (ถ้ามีใครสร้าง repo ชื่อ `chatbot` ขึ้นมาใหม่ redirect จะหายทันที) ⇒ บน server ให้แก้ให้ตรงด้วย:
+> `git remote set-url origin https://github.com/bcozfair/sales-chatbot.git` แล้วตรวจด้วย `git remote -v`
 > ถ้า repo เป็น **private** จะโดนถาม username/password → ใช้ GitHub **Personal Access Token** แทน password (หรือถาม IT เรื่อง deploy key)
 
 ### 2.2 สร้างไฟล์ `.env` แล้วเติมค่าจริง
