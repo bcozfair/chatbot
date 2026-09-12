@@ -1,2 +1,10 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# build output ของ admin SPA — สร้างใหม่จาก frontend/ ได้เสมอ จึงไม่มีอะไรต้องอ่าน/กู้
+#   linguist-generated → GitHub ยุบ diff ให้ ไม่ถ่ม bundle 700 KB ใส่หน้า review
+#   binary (= -diff -merge -text) → เวลา merge ชน git ไม่พยายามรวมข้อความให้
+#     สำคัญกว่าความสวยงาม: การรวมสองบิลด์แบบข้อความ "สำเร็จ" ได้โดย bundle พังเงียบ ๆ
+#     ท่าที่ถูกคือ build ใหม่ทับ (AGENTS.md A4.5)
+public/** linguist-generated=true
+public/assets/** binary
